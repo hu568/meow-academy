@@ -1,0 +1,23 @@
+{
+  "name": "meow-academy-backend",
+  "version": "0.1.0",
+  "description": "喵学堂 MeowAcademy - Pi Agent 智能后端 (RAG + Agent + LLM 统一网关)",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "latest",
+    "@earendil-works/pi-agent-core": "latest",
+    "dotenv": "^16.4.5",
+    "fastify": "^5.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
