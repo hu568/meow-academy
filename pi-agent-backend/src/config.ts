@@ -11,7 +11,7 @@ export const config = {
   /** 聊天默认模型 (provider, model) */
   chatModel: {
     provider: process.env.CHAT_PROVIDER ?? 'deepseek',
-    model: process.env.CHAT_MODEL ?? 'deepseek-chat',
+    model: process.env.CHAT_MODEL ?? 'deepseek-v4-flash',
   },
 
   /** Embedding (硅基流动 bge-m3, 免费) */
