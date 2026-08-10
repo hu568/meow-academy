@@ -28,13 +28,15 @@
 
 ## 二、环境准备（本机实测）
 
+> ✅ 2026-08-10 M2.0/M2.1 后全部就绪：SDK/Gradle/adb 本机已装，真机 Termux 已跑通。
+
 | 依赖 | 状态 | 说明 |
 |---|---|---|
 | JDK 17 | ✅ 已有（Temurin 17.0.20） | Gradle 构建需要 |
-| Android SDK | ❌ 未装 | 需 `ANDROID_HOME` + platform + build-tools |
-| Gradle | ❌ 未装 | 用 gradle wrapper（随仓库提交）最稳 |
-| adb | ❌ 未装 | 真机调试需要 |
-| 真机 | ⏳ 待主人 | Termux 原型验证需 Android 手机 |
+| Android SDK | ✅ 已装（cmdline-tools + platform-tools + platforms;android-34 + build-tools;34.0.0） | 路径 `C:/Users/Administrator/AppData/Local/Android/Sdk` |
+| Gradle | ✅ 已装（wrapper 8.9 随仓库提交） | `./gradlew assembleDebug` 构建通过 |
+| adb | ✅ 已装（37.0.1） | 真机调试可用 |
+| 真机 | ✅ 已有（Termux 就绪） | node 26.4 + pi 0.84.1 + API key 已配，SSH 192.168.0.173:8022 |
 
 > 📌 本机构建安卓工程前，先装 Android SDK（cmdline-tools + platform-tools + platforms;android-34 + build-tools），或用 Android Studio 一把装齐。
 

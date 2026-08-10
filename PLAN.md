@@ -191,12 +191,14 @@ meow-academy/
 
 ## 八、环境依赖
 
+> ✅ 2026-08-10 M2.0/M2.1 后：开发环境已从 Codespace 迁移到本机 Windows + 真机，API key 与 SDK 均已就绪。
+
 | 配置 | 状态 |
 |---|---|
-| DEEPSEEK_API_KEY | ⏳ 待主人提供 |
-| SILICONFLOW_API_KEY | ⏳ 待主人提供 |
-| Android SDK | ⏳ Codespace 待安装 |
-| 开发环境 | ✅ Codespace laughing-memory |
+| DEEPSEEK_API_KEY | ✅ 已提供（真机 `~/.profile` + 本机 `.env`，git 已忽略） |
+| SILICONFLOW_API_KEY | ⏳ 待主人提供（M3/M4 embedding 才需要） |
+| Android SDK | ✅ 本机已装（platforms;android-34 + build-tools;34.0.0 + adb 37.0.1） |
+| 开发环境 | ✅ 本机 Windows（JDK 17 + Gradle 8.9 wrapper）+ 真机 Termux（node 26.4 + pi 0.84.1） |
 
 ---
 
