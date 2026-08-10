@@ -92,7 +92,10 @@ pi --mode rpc --no-session
 **交付物**：验证记录（能收到 `text_delta` 流式事件、`agent_end` 正常结束、API Key 配置生效）
 **验证**：RPC 客户端收到完整事件流 ✅
 
-### M2.1 安卓工程骨架
+### M2.1 安卓工程骨架 ✅ 已完成（2026-08-10）
+
+> 交付物已达成：`android-app/` Compose 工程 + 三板块导航 + 主题系统 + 设置雏形。
+> 验证：`./gradlew assembleDebug` 构建成功 ✅；真机安装打开 ⏳（待 M2.7 一并验收）。
 
 **做什么**：
 - 建 `android-app/` Gradle 工程（Kotlin + Compose + Material You，gradle wrapper 提交进仓库）
