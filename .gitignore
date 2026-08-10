@@ -1,0 +1,5 @@
+# 本地生成的 agent 记忆文件，不入库
+AGENTS.md
+
+# Reasonix 本地配置
+.reasonix/
