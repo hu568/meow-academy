@@ -78,19 +78,39 @@
 
 ## 四、任务分解（M2.0 → M2.7）
 
-### M2.0 原型验证：真机 Termux 跑通 pi RPC ⭐第一步
+### M2.0 原型验证：真机 Termux 跑通 pi RPC ⭐ ✅ 已完成（2026-08-10）
 
-**做什么**：手机 Termux 手工装 pi，验证 `pi --mode rpc` 可用
+**验证环境**：真机 Android aarch64（Termux），SSH `192.168.0.173:8022`
+
+**安装结果（实测）**：
 ```bash
-pkg update && pkg upgrade
-pkg install nodejs git
+pkg update && pkg upgrade        # ✅ 南科大镜像，20 包可升级
+pkg install nodejs git           # ✅ node v26.4.0 / npm 11.19.0 / git 2.55.0
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+                                 # ✅ pi 0.84.1（144 packages，20s）
 mkdir -p ~/.pi/agent
-pi --mode rpc --no-session
-# 另开终端: echo '{"type":"prompt","message":"你好"}' | pi --mode rpc ...
 ```
-**交付物**：验证记录（能收到 `text_delta` 流式事件、`agent_end` 正常结束、API Key 配置生效）
-**验证**：RPC 客户端收到完整事件流 ✅
+
+**体积实测（未裁剪）**：
+| 项 | 大小 |
+|---|---|
+| node 二进制 | 48M |
+| pi-coding-agent 依赖 | **182M**（裁剪空间大） |
+| Termux usr 总计 | 421M |
+
+**协议验证（RPC mode）**：
+- ✅ `prompt` 命令：`response` → `agent_start` → `turn_start` → `message_update`（`thinking_delta` / `text_delta` 流式）→ `turn_end`（含 usage/cost）→ `agent_end`
+- ✅ `bash` 命令：`bash_execution_update`（流式增量，`id` 关联）→ `response`（`output`/`exitCode`/`cancelled`/`truncated`）
+- ✅ 模型链路：`--provider deepseek --model deepseek-v4-flash`，DeepSeek API 流式回复「OK」
+- ⚠️ **管道 EOF 后 pi 会退出**：bash/prompt 需要保持 stdin 打开（App 端天然满足——进程常驻）
+
+**API Key 配置（实测）**：
+- pi 读取环境变量 `DEEPSEEK_API_KEY`（`--api-key` 参数也可）
+- **持久化位置**：`~/.profile`（Termux **login shell 不加载 `~/.bashrc`**，写 `.bashrc` 无效）✅ 已验证
+- App 端（M2.2+）：RuntimeManager 拉起 pi 时通过环境变量注入 key，不依赖 Termux 配置文件
+
+**交付物**：验证记录（完整事件流 ✅）+ 手机 Termux 已就绪（node+pi+key）
+**验证**：RPC 客户端收到完整事件流 ✅ | bash 执行返回 ✅ | 聊天流式回复 ✅
 
 ### M2.1 安卓工程骨架 ✅ 已完成（2026-08-10）
 
@@ -190,18 +210,24 @@ M2.0 原型验证（真机 Termux 跑 pi）
 
 | # | 风险/问题 | 对策 |
 |---|---|---|
-| 1 | **真机未定**：M2.0/M2.2/M2.4 都需要 Android 真机 | 先确认主人手头设备；没有就先做 M2.1 骨架 + M2.3 客户端（可用本机 node 起 pi 验证） |
-| 2 | Android SDK / Gradle 本机未装 | 规划第一步先装环境（或用 Android Studio） |
-| 3 | `pi-coding-agent` 在 Android arm64 的实际体积未知（文档说 ~169MB 含 git） | M2.0 真机实测；裁剪 node_modules 用 node-prune |
-| 4 | RPC `bash` 命令能否满足终端体验（无真 PTY，交互式程序如 vim 不支持） | 本阶段接受「命令式终端」定位；真 PTY 留作远期增强 |
+| 1 | ~~真机未定~~ ✅ 已解决（2026-08-10） | 真机 Termux（SSH 192.168.0.173:8022）已就绪，node+pi+key 配好 |
+| 2 | Android SDK / Gradle 本机未装 | M2.1 已用 Gradle wrapper 构建通过；SDK 由 wrapper 自动下载 |
+| 3 | pi 体积：实测依赖 182M（未裁剪） | M2.2 打包时用 `--omit=dev` + node-prune 裁剪，目标 ~100M |
+| 4 | RPC `bash` 无真 PTY（vim 等交互程序不支持） | 本阶段接受「命令式终端」定位；真 PTY 留作远期增强 |
 | 5 | 前台服务在国产 ROM 保活效果 | 三档开关已给用户选择权；M2.7 实测记录 |
-| 6 | API Key 配置方式 | M2.0 先手工写 `~/.pi/agent/settings.json`；App 内配置 UI 后续补 |
+| 6 | API Key 配置方式 | ✅ M2.0 已实测：`~/.profile` export `DEEPSEEK_API_KEY`；App 端由 RuntimeManager 注入 |
 
-## 七、下一步（主人确认后开工）
+## 七、当前进度与下一步
 
-1. 主人确认本规划（或提出调整）
-2. 确认真机设备 / 是否本机装 Android SDK
-3. 从 **M2.0 原型验证**（手机 Termux 装 pi 跑 RPC）或 **M2.1 安卓骨架** 开工
+**已完成**：
+- ✅ M2.0 原型验证（真机 Termux：node 26.4 + pi 0.84.1 + RPC prompt/bash 全通 + key 持久化）
+- ✅ M2.1 安卓骨架（android-app/ Compose 工程 + 三板块导航 + 主题 + 设置雏形）
+
+**下一步**（按依赖顺序）：
+1. **M2.2 Pi 运行时集成**（RuntimeManager + 打包脚本 + PiRuntimeService 前台服务）
+2. **M2.3 RPC 协议客户端**（Kotlin JSONL 帧解析 + 命令/事件模型 + extension_ui 子协议）
+3. **M2.4 聊天页** / **M2.5 终端页**（共用 RPC 进程）
+4. **M2.6 三档常驻开关** → **M2.7 全链路验收**
 
 ---
 
