@@ -4,6 +4,7 @@
 > 计划制定：樱茈猫娘助手 | 2026-08-10
 > 方案决策（Pi 本地化 + 终端驻留 + 推敲 v2）：见 [docs/decision-local-pi-agent.md](docs/decision-local-pi-agent.md)
 > GUI 设计（信息架构 v1）：见 [docs/design-gui.md](docs/design-gui.md)
+> 第一阶段（M2 给 Pi 套壳）细化规划：见 [docs/plan-phase1.md](docs/plan-phase1.md)
 
 ---
 
@@ -151,6 +152,7 @@ meow-academy/
 ├── docs/
 │   ├── decision-local-pi-agent.md # 🐧 方案决策：Pi 本地化 + 终端驻留 + 推敲 v2
 │   ├── design-gui.md              # 🎨 GUI 设计：信息架构 v1
+│   ├── plan-phase1.md             # 📝 第一阶段（M2 套壳）细化规划
 │   └── reference/                 # 📚 参考实现文档
 ├── pi-agent-backend/          # 🤖 后端（已完成 ✅ → 迁移进本地运行时）
 │   ├── src/
@@ -181,7 +183,7 @@ meow-academy/
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | M1 | 仓库 + 后端开发 + 云端部署 | ✅ 完成 |
-| M2 | 给 Pi 套壳：安卓骨架 + 聊天 + 终端 + Pi 本地运行 | ⏳ 进行中（首个目标） |
+| M2 | 给 Pi 套壳：安卓骨架 + 聊天 + 终端 + Pi 本地运行（[细化规划](docs/plan-phase1.md)） | ⏳ 进行中（首个目标） |
 | M3 | 文件管理（数据中心）+ 知识库导入 + Wiki + Markdown | 🔜 待开始 |
 | M4 | RAG 检索 + 聊天强化 + 双模型配置 | 🔜 待开始 |
 | M5 | 联调测试 + 打包 APK（≤200MB） | 🔜 待开始 |
