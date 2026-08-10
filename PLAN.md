@@ -2,7 +2,8 @@
 
 > 安卓辅助学习软件 | Pi Agent 智能后端 | md 知识库 + SQLite Wiki + RAG 向量检索
 > 计划制定：樱茈猫娘助手 | 2026-08-10
-> 方案决策（Pi 本地化 + 终端驻留）：见 [docs/decision-local-pi-agent.md](docs/decision-local-pi-agent.md)
+> 方案决策（Pi 本地化 + 终端驻留 + 推敲 v2）：见 [docs/decision-local-pi-agent.md](docs/decision-local-pi-agent.md)
+> GUI 设计（信息架构 v1）：见 [docs/design-gui.md](docs/design-gui.md)
 
 ---
 
@@ -18,26 +19,32 @@
 
 ## 二、功能清单
 
-### 第一阶段 · MVP（当前目标）
-- [ ] 安卓 App 骨架（Compose + Material You + 深色模式）
+### 第一阶段 · 给 Pi 套壳（当前目标，验证架构）
+- [ ] 安卓 App 骨架（Compose + Material You + 浅色/深色/主题修改）
+- [ ] 底部导航（聊天 / 文件管理 / 我的）+ 默认首页设置
+- [ ] 聊天问答界面（流式回复 + Markdown 渲染 + 引用来源）
+- [ ] 内置 Termux runtime + Pi Agent 本地运行（模型走 API）
+- [ ] 终端模拟页（设置入口=home；文件管理入口=知识库）
+- [ ] 三档常驻开关（关闭 / 有限时间保活 / 一直常驻）
+
+### 第二阶段 · 文件管理与知识库
+- [ ] 文件管理（数据中心：知识库文件 / 全部文件 / 三种搜索）
 - [ ] md 知识库导入（文件选择 / 文件夹扫描）
 - [ ] SQLite Wiki（Room：文档表、标题、标签、全文检索）
-- [ ] RAG 管道（分块 → 向量化 → 余弦检索）
-- [ ] 聊天问答界面（流式回复 + Markdown 渲染 + 引用来源）
-- [ ] 后端部署脚本（.env 一键配置）
+- [ ] Markdown 完整渲染 + 编辑模式（当前重点）
 
-### 第二阶段 · 增强
+### 第三阶段 · RAG 与增强
+- [ ] RAG 管道（Kotlin 端分块 → 向量化 → 余弦检索；是否复用 pi 待定）
+- [ ] 双模型配置（通用 + Agent 自有）同步管理
 - [ ] 知识库管理界面（增删改查、重新索引）
 - [ ] Pi Agent 工具调用（rag_search / 计算器 / 翻译）
-- [ ] 学习计划 / 复习提醒（闪卡模式）
-- [ ] 多知识库隔离
 - [ ] 重排序模型（Rerank，提升检索精度）
 
-### 第三阶段 · 进阶
-- [ ] 内置轻量 Linux 跑 Pi Agent（Termux runtime，模型走 API）✅ 方案已定 [issue #1](https://github.com/hu568/meow-academy/issues/1)
-- [ ] 终端驻留：打开 App 后台静默拉起终端运行时，前台服务长驻后台（附加设计）
+### 第四阶段 · 远期
 - [ ] MCP 服务器接入
 - [ ] 语音输入 / TTS 朗读
+- [ ] 闪卡模式 / 学习进度追踪（主人：先不搞，重点在 Markdown）
+- [ ] 多知识库隔离
 - [ ] 云同步（知识库 + 对话记录）
 
 ## 三、技术架构
@@ -45,19 +52,27 @@
 ```mermaid
 flowchart TD
     subgraph 安卓端[📱 安卓App · Kotlin + Compose]
-        UI[🎨 UI界面]
-        TERM[🖥️ 终端页]
+        NAV[🧭 底部导航 · 默认首页可设]
+        CHAT[💬 聊天页]
+        FILES[📁 文件管理 · 数据中心]
+        SETTINGS[⚙️ 我的/设置]
+        TERM[🖥️ 终端页 · 双入口]
         MD[📁 Markdown 知识库]
         WIKI[🗄️ SQLite Wiki Room]
         VEC[(🧮 向量 SQLite JSON)]
-        RAG[🔍 RAG检索器]
+        RAG[🔍 RAG检索器 · Kotlin端]
         subgraph RUNTIME[🐧 内置轻量 Linux 环境 · Termux runtime]
             PI[🤖 pi-ai + pi-agent-core]
             API[🌐 HTTP API / RPC]
-            FGS[⚙️ 前台服务驻留]
+            FGS[⚙️ 三档常驻开关]
         end
-        UI --> RAG
-        TERM --> API
+        NAV --> CHAT
+        NAV --> FILES
+        NAV --> SETTINGS
+        SETTINGS --> TERM
+        FILES --> TERM
+        CHAT --> RAG
+        FILES --> MD
         MD --> WIKI
         MD --> RAG
         RAG --> VEC
@@ -66,28 +81,29 @@ flowchart TD
     end
 
     subgraph LLM[🧠 大模型 · 云端 API]
-        CHAT[DeepSeek v4-flash]
+        CHATMODEL[DeepSeek v4-flash]
         EMB[BAAI/bge-m3]
     end
 
     API --> PI
-    PI --> CHAT
+    PI --> CHATMODEL
     API --> EMB
-    CHAT -->|SSE流式| UI
+    CHATMODEL -->|SSE流式| CHAT
 ```
 
 ### 分层说明
 
 | 层 | 技术 | 职责 |
 |---|---|---|
-| UI | Jetpack Compose | 学习/聊天/Wiki 界面 + 终端页 |
+| UI | Jetpack Compose | 底部导航三板块 + 终端页 + 主题切换 |
 | 数据 | Room (SQLite) | Wiki 索引 + 向量 JSON 存储 |
-| RAG | Kotlin 实现 | 分块(300字) → 调 embedding → 余弦检索 top-k |
+| RAG | Kotlin 实现（暂定） | 分块(300字) → 调 embedding → 余弦检索 top-k |
 | 网络 | OkHttp + SSE | 调用本地 Pi API |
 | 本地运行时 | Termux runtime + Node.js + pi-agent-core | Agent 编排本地运行，模型走云端 API |
-| 驻留 | 前台服务 + WorkManager 心跳 | Pi 运行时长时间驻留后台 |
+| 驻留 | 三档常驻开关 + 前台服务 + WorkManager | 关闭 / 有限保活 / 一直常驻 |
 | 模型 | DeepSeek v4-flash | 问答（支持 reasoning） |
 | 嵌入 | SiliconFlow bge-m3 | 免费向量化（1024维） |
+| 模型配置 | 双配置（通用 + Agent 自有） | 可同步 |
 
 ## 四、RAG 流程设计（参考 Cherry Studio / rikkahubx）
 
@@ -133,7 +149,8 @@ POST /api/v1/chat（SSE 流式）→ DeepSeek → 回答
 meow-academy/
 ├── PLAN.md                    # 📋 本计划
 ├── docs/
-│   ├── decision-local-pi-agent.md # 🐧 方案决策：Pi 本地化 + 终端驻留
+│   ├── decision-local-pi-agent.md # 🐧 方案决策：Pi 本地化 + 终端驻留 + 推敲 v2
+│   ├── design-gui.md              # 🎨 GUI 设计：信息架构 v1
 │   └── reference/                 # 📚 参考实现文档
 ├── pi-agent-backend/          # 🤖 后端（已完成 ✅ → 迁移进本地运行时）
 │   ├── src/
@@ -164,11 +181,11 @@ meow-academy/
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | M1 | 仓库 + 后端开发 + 云端部署 | ✅ 完成 |
-| M2 | 安卓端骨架 + 知识库导入 + Wiki | ⏳ 进行中 |
-| M3 | RAG 检索 + 聊天问答 | 🔜 待开始 |
-| M3.5 | Pi 本地化（内置 Termux runtime + 终端驻留） | 🔜 待开始 |
-| M4 | 联调测试 + 打包 APK | 🔜 待开始 |
-| M5 | 增强功能（复习/闪卡/多库） | 🔜 待开始 |
+| M2 | 给 Pi 套壳：安卓骨架 + 聊天 + 终端 + Pi 本地运行 | ⏳ 进行中（首个目标） |
+| M3 | 文件管理（数据中心）+ 知识库导入 + Wiki + Markdown | 🔜 待开始 |
+| M4 | RAG 检索 + 聊天强化 + 双模型配置 | 🔜 待开始 |
+| M5 | 联调测试 + 打包 APK（≤200MB） | 🔜 待开始 |
+| M6 | 增强功能（闪卡/进度/MCP/云同步） | 🔜 待开始 |
 
 ## 八、环境依赖
 
