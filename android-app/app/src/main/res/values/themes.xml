@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose 全权接管界面绘制，这里只提供无 ActionBar 的基础主题 -->
+    <style name="Theme.MeowAcademy" parent="android:Theme.Material.NoActionBar" />
+</resources>

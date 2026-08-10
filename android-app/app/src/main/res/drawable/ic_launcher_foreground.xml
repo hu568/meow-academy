@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 图标前景：打开的书 + 猫耳剪影 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="66dp"
+    android:height="66dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 左猫耳 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M34,50 L38,32 L50,48 Z" />
+    <!-- 右猫耳 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M74,50 L70,32 L58,48 Z" />
+    <!-- 打开的书 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M32,50 C38,44 48,44 54,50 C60,44 70,44 76,50 L76,74 C70,68 60,68 54,74 C48,68 38,68 32,74 Z" />
+    <!-- 书脊 -->
+    <path
+        android:strokeColor="#FFB48CE0"
+        android:strokeWidth="1.5"
+        android:pathData="M54,50 L54,74" />
+</vector>

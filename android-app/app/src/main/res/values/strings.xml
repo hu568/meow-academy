@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">喵学堂</string>
+
+    <!-- 底部导航 -->
+    <string name="tab_chat">聊天</string>
+    <string name="tab_files">文件管理</string>
+    <string name="tab_settings">我的</string>
+
+    <!-- 设置项 -->
+    <string name="settings_default_home">默认首页</string>
+    <string name="settings_theme">主题</string>
+    <string name="settings_resident">常驻开关</string>
+    <string name="settings_terminal">终端</string>
+    <string name="settings_model">模型管理</string>
+    <string name="settings_stop_service">停止后台服务</string>
+
+    <!-- 主题选项 -->
+    <string name="theme_system">跟随系统</string>
+    <string name="theme_light">浅色</string>
+    <string name="theme_dark">深色</string>
+    <string name="theme_custom">自定义</string>
+
+    <!-- 常驻档位 -->
+    <string name="resident_off">关闭</string>
+    <string name="resident_timed">有限保活</string>
+    <string name="resident_always">一直常驻</string>
+</resources>
