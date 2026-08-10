@@ -3,6 +3,7 @@ AGENTS.md
 
 # Reasonix 本地配置
 .reasonix/
+reasonix.toml
 
 .env
 
