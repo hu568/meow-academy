@@ -27,6 +27,7 @@ import com.meow.academy.data.settings.SettingsRepository
 import com.meow.academy.ui.chat.ChatScreen
 import com.meow.academy.ui.files.FilesScreen
 import com.meow.academy.ui.settings.SettingsScreen
+import com.meow.academy.ui.terminal.TerminalScreen
 
 /** 底部导航板块的展示信息 */
 private data class TabInfo(
@@ -42,8 +43,9 @@ private val TABS = listOf(
 )
 
 /**
- * 主界面骨架：底部导航三板块（💬聊天 / 📁文件管理 / ⚙️我的）。
+ * 主界面骨架：底部导航三板块（💬聊天 / 📁文件管理 / ⚙️我的）+ 终端页（全屏覆盖）。
  *
+ * 终端页双入口：设置 → 终端（home 路径）；文件管理 → 终端按钮（知识库目录，M3 前落 home）。
  * 默认首页取自 DataStore；用户手动切换后以手动选择为准（进程重建时
  * 由 rememberSaveable 恢复，若从未手动切换则回到设置里的默认首页）。
  */
@@ -56,6 +58,14 @@ fun MainScreen(repository: SettingsRepository) {
     val selectedTab = selectedTabName?.let { name ->
         HomeTab.entries.firstOrNull { it.name == name }
     } ?: defaultHome
+
+    // 终端页覆盖（从设置/文件管理进入）
+    var terminalOpen by rememberSaveable { mutableStateOf(false) }
+
+    if (terminalOpen) {
+        TerminalScreen(onBack = { terminalOpen = false })
+        return
+    }
 
     Scaffold(
         bottomBar = {
@@ -78,8 +88,8 @@ fun MainScreen(repository: SettingsRepository) {
         ) {
             when (selectedTab) {
                 HomeTab.CHAT -> ChatScreen()
-                HomeTab.FILES -> FilesScreen()
-                HomeTab.SETTINGS -> SettingsScreen(repository)
+                HomeTab.FILES -> FilesScreen(onOpenTerminal = { terminalOpen = true })
+                HomeTab.SETTINGS -> SettingsScreen(repository, onOpenTerminal = { terminalOpen = true })
             }
         }
     }

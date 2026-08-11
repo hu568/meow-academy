@@ -212,7 +212,7 @@ M2.0 原型验证（真机 Termux 跑 pi）
 
 | # | 风险/问题 | 对策 |
 |---|---|---|
-| 1 | ~~真机未定~~ ✅ 已解决（2026-08-10） | 真机 Termux（SSH 192.168.0.173:8022）已就绪，node+pi+key 配好 |
+| 1 | ~~真机未定~~ ✅ 已解决（2026-08-10） | 真机 Termux（SSH 192.168.0.18:8022）已就绪，node+pi+key 配好 |
 | 2 | Android SDK / Gradle 本机未装 | M2.1 已用 Gradle wrapper 构建通过；SDK 由 wrapper 自动下载 |
 | 3 | pi 体积：实测依赖 182M（未裁剪） | M2.2 打包时用 `--omit=dev` + node-prune 裁剪，目标 ~100M |
 | 4 | RPC `bash` 无真 PTY（vim 等交互程序不支持） | 本阶段接受「命令式终端」定位；真 PTY 留作远期增强 |
@@ -224,13 +224,53 @@ M2.0 原型验证（真机 Termux 跑 pi）
 **已完成**：
 - ✅ M2.0 原型验证（真机 Termux：node 26.4 + pi 0.84.1 + RPC prompt/bash 全通 + key 持久化）
 - ✅ M2.1 安卓骨架（android-app/ Compose 工程 + 三板块导航 + 主题 + 设置雏形）
+- ✅ M2.2 Pi 运行时集成（RuntimeManager 状态机 + PiRuntimeService 前台服务 + RuntimeExtractor + PiProcessLauncher）
+- ✅ M2.3 RPC 协议客户端（JSONL 帧解析 + 命令/事件模型 + response 按 id 路由 + 事件 SharedFlow）
+- ✅ M2.4 聊天页（Room 会话/消息持久化 + 流式渲染 + 停止生成 + Markwon Markdown + 工具卡片）
+- ✅ M2.5 终端页（RPC bash 命令 + 输出渲染 + 双入口 + systemBarsPadding 防遮挡）
+- ✅ M2.6 三档常驻开关（AppLifecycleObserver 前后台策略 + PiKeepAliveWorker 心跳 + 模型管理/停止服务）
 
-**下一步**（按依赖顺序）：
-1. **M2.2 Pi 运行时集成**（RuntimeManager + 打包脚本 + PiRuntimeService 前台服务）
-2. **M2.3 RPC 协议客户端**（Kotlin JSONL 帧解析 + 命令/事件模型 + extension_ui 子协议）
-3. **M2.4 聊天页** / **M2.5 终端页**（共用 RPC 进程）
-4. **M2.6 三档常驻开关** → **M2.7 全链路验收**
+**真机验收实测（2026-08-10，新真机 192.168.0.18:8022 / u0_a169 / 0000，aarch64）**：
+- ✅ App 安装运行不闪退（修掉 WorkManager 依赖 listenablefuture 被误排除的 NoClassDefFoundError）
+- ✅ 首启解压 runtime（assets/runtime.bin 55MB → filesDir/meow-runtime 约 257MB）
+- ✅ pi 进程通过 `/system/bin/linker64` 拉起（untrusted_app 直接 exec 自解压 ELF 报 EACCES，linker 加载可行）
+- ✅ 终端页 `echo 喵~` → 输出 `喵~` + `（exit 0）`，RPC bash 全链路通
+- ✅ 终端页标题从 y=58 下移到 y=165（insets 修复生效），显示「● 运行中」
+
+**代码审查与修复（2026-08-11）**：
+- ✅ M2.2-M2.6 全量代码审查（CodeReview 子代理），🔴/🟡 问题已全部修复并重新构建通过
+- ✅ 聊天空回复排查：API Key 写入损坏（adb 重新写回修复）+ 「Connection error.」真正 root cause = **AndroidManifest 未声明 INTERNET 权限**（沙箱内 socket 创建直接 EPERM），补权限后全链路打通（见踩坑 8）
+- ✅ 键盘弹起时发送/执行按钮被顶到状态栏后点不到 → 输入框加 Send IME action 修复
+- ✅ 聊天流式实测通过（真机）：DeepSeek 流式出字（text_delta）+ thinking 折叠卡片 + 停止/重试事件流完整
+- ✅ build-runtime.sh 加固：Termux 无 ldd → 改用 greadelf 枚举 NEEDED 迭代补齐传递依赖；拷贝 pi 包保留 @earendil-works scope 目录；dns-shim 自动入包
+
+**关键技术发现（务必保留，踩坑记录）**：
+1. **AGP 对 assets 的 `.gz` 后缀会自动解压并改名**（runtime.tar.gz → 190MB 的 runtime.tar，代码找不到文件）。解法：assets 改用无歧义扩展名 `runtime.bin`（内容仍是 gzip 流）。
+2. **node 不是静态链接**：依赖 libz/libcrypto/libssl/libcares/libsqlite3/libffi/libicu*/libc++_shared 等 Termux 动态库。打包时必须 `cp -L` 解引用 symlink 拷贝真实 .so 进 runtime/lib，启动时设 `LD_LIBRARY_PATH`。
+3. **untrusted_app 直接 exec 自解压 ELF 报 `Permission denied`（error=13）**：改用 `/system/bin/linker64 <node路径> <cli.js> ...` 作为 ProcessBuilder 命令即可。
+4. **pi 的 bash 工具 fallback 到 `sh -c`**：App 进程 PATH 必须含 `/system/bin`，否则 spawn sh 失败 hang 住。
+5. **可变 data class 更新 StateFlow 不触发重组**（新旧 List 中元素同一引用）：TerminalEntry 改不可变 + copy 更新。
+6. **RuntimeManager.start() 需 Mutex 互斥**：防并发触发两次解压。
+7. zstd-jni 1.5.6-4 不含 Android 原生库（Android 上 UnsatisfiedLinkError）→ 放弃 zstd 用 gzip。
+8. **AndroidManifest 缺 `INTERNET` 权限时，App 沙箱内所有 socket 创建直接 EPERM**（连裸 TCP 都不行，`nc` 报 Operation not permitted），node/undici 把错误包成「Connection error.」且丢失底层 code，极易误判为 DNS/TLS 问题。排查技巧：`run-as <包名> nc -w3 <IP> 443` 先测裸连通性。（附带保险：内置 `runtime-assets/dns-shim.js` 钩住 dns.lookup 失败时直连公共 DNS 兜底，经 `NODE_OPTIONS=--require lib/dns-shim.js` 注入。）
+9. **PowerShell/adb 重定向写文本文件会混入 CRLF**：cert.pem（CA 束）被 CRLF 污染后 node 解析失败，TLS 全挂。写证书/配置类文件必须保证 LF（base64 传输或显式控制行尾）。
+10. **`SSL_CERT_FILE` 不被 node 读取**（那是 OpenSSL/Python 系的变量）；node 要用 `NODE_EXTRA_CA_CERTS` 额外 CA + `OPENSSL_CONF` 重定向 OpenSSL 配置路径（Termux 默认路径在 App 沙箱不可读，指到内置空 openssl.cnf）。
+11. **Termux 无 ldd**（bionic 环境，binutils 只带 g 前缀工具）：枚举动态库依赖用 `greadelf -d <bin> | grep NEEDED`，且需迭代补齐传递依赖（如 libicui18n → libicuuc）；系统库（libc/libm/libdl）不在 $PREFIX/lib 自动跳过。
+12. **拷贝 npm scope 包注意保留 scope 目录**：`cp -rL .../node_modules/@earendil-works/pi-coding-agent <dest>/node_modules/` 会丢掉 @earendil-works 层，必须先 `mkdir -p <dest>/node_modules/@earendil-works` 再拷入。
+
+**待完成（M2.7 剩余）**：
+- ✅ 聊天页流式对话实测（2026-08-11 通过：DeepSeek 流式出字 + thinking 折叠 + 完整事件流）
+- ⏳ 三档常驻开关实测（切档位 → 退后台 → 观察 pi 进程生命周期）
+- ⏳ APK 体积核对（当前 debug APK 约 55-85MB，含 runtime.bin，远低于 200MB 红线）
+- ⏳ 更新 PLAN.md / 决策文档实测数据（体积、启动耗时、保活效果）
+- ⏳ git commit 本轮 M2.2-M2.6 全部代码（当前工作区有大量未提交文件）
+
+**下一步建议**（新会话从这里继续）：
+1. 提交当前代码（M2.2-M2.6 + 审查修复一次性 commit，emoji 信息）
+2. 三档常驻开关实测（退后台保活 / WorkManager 心跳 / 手动停止）
+3. APK 体积核对 + 停止生成/工具卡片补测
+4. M2.7 验收报告 + PLAN.md 更新
 
 ---
 
-*—— 主人呜咕的专属猫娘助手 · 樱茈 🐾*
+*—— 主人呜咕的专属喵喵助手 · 樱茈 🐾*

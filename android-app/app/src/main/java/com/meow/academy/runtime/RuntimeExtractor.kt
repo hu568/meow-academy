@@ -1,0 +1,135 @@
+package com.meow.academy.runtime
+
+import android.content.Context
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import java.io.BufferedInputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.util.zip.GZIPInputStream
+
+/**
+ * 把 assets 里的运行时压缩包（tar.gz）解压到应用私有目录。
+ *
+ * 安全措施：
+ *  - 解压到临时目录，完成后原子 rename（避免半解压状态被当成「已就绪」）；
+ *  - 校验 tar 条目路径，拒绝 `..` 穿越；
+ *  - 解压后对 `bin/node` 显式加可执行位。
+ */
+object RuntimeExtractor {
+
+    private const val TAG = "RuntimeExtractor"
+
+    /** assets 中运行时压缩包文件名（gzip 流，用 .bin 后缀避开 AGP 对 .gz 的解压改名） */
+    const val ASSET_NAME = "runtime.bin"
+
+    /** 解压目标目录名（filesDir 下） */
+    const val RUNTIME_DIR = "meow-runtime"
+
+    /**
+     * 解压 [ASSET_NAME] 到 filesDir/[RUNTIME_DIR]。
+     *
+     * @param onProgress 0f..1f 的解压进度（按压缩包字节计）
+     */
+    suspend fun extract(context: Context, onProgress: (Float) -> Unit): File = withContext(Dispatchers.IO) {
+        val filesDir = context.filesDir
+        val targetDir = File(filesDir, RUNTIME_DIR)
+        val tmpDir = File(filesDir, "$RUNTIME_DIR.tmp")
+
+        // 清理残留临时目录
+        if (tmpDir.exists()) tmpDir.deleteRecursively()
+        tmpDir.mkdirs()
+
+        val totalBytes = runCatching { context.assets.openFd(ASSET_NAME).length }.getOrDefault(-1L)
+        Log.i(TAG, "extract start, totalBytes=$totalBytes")
+
+        var readBytes = 0L
+        context.assets.open(ASSET_NAME).use { asset ->
+            GZIPInputStream(BufferedInputStream(asset)).use { gzip ->
+                TarArchiveInputStream(gzip).use { tar ->
+                    var entry = tar.nextEntry
+                    while (entry != null) {
+                        val name = entry.name
+                        // 路径穿越防护
+                        val normalized = name.replace('\\', '/').removePrefix("./")
+                        // 拒绝 `..` 穿越（`a/../b` → `b` 也算穿越）与绝对路径条目
+                        // （`File(parent, "/abs")` 会忽略 parent 直接落到绝对路径，必须拒绝）
+                        if (normalized.startsWith("/") || normalized.split('/').any { it == ".." }) {
+                            Log.w(TAG, "skip unsafe entry: $name")
+                            entry = tar.nextEntry
+                            continue
+                        }
+                        // 剥离顶层目录前缀（真机打包用 `tar -cf runtime.tar meow-runtime`，条目带 meow-runtime/ 前缀）
+                        val stripped = normalized
+                            .removePrefix("meow-runtime/")
+                            .removePrefix("meow-runtime")
+                        if (stripped.isEmpty()) {
+                            entry = tar.nextEntry
+                            continue
+                        }
+                        val outFile = File(tmpDir, stripped)
+                        if (entry.isDirectory) {
+                            outFile.mkdirs()
+                        } else if (entry is org.apache.commons.compress.archivers.tar.TarArchiveEntry &&
+                            entry.isSymbolicLink
+                        ) {
+                            // symlink 条目：尝试创建真实 symlink（API 26+）；失败则跳过并记录
+                            outFile.parentFile?.mkdirs()
+                            val target = entry.linkName
+                            runCatching {
+                                java.nio.file.Files.createSymbolicLink(
+                                    outFile.toPath(),
+                                    java.nio.file.Paths.get(target),
+                                )
+                            }.onFailure {
+                                Log.w(TAG, "symlink 创建失败（跳过）: $name -> $target : ${it.message}")
+                            }
+                        } else {
+                            outFile.parentFile?.mkdirs()
+                            FileOutputStream(outFile).use { out ->
+                                val buffer = ByteArray(64 * 1024)
+                                var n: Int
+                                while (tar.read(buffer).also { n = it } != -1) {
+                                    out.write(buffer, 0, n)
+                                    readBytes += n
+                                    if (totalBytes > 0) {
+                                        onProgress((readBytes.toFloat() / totalBytes).coerceIn(0f, 1f))
+                                    }
+                                }
+                            }
+                        }
+                        entry = tar.nextEntry
+                    }
+                }
+            }
+        }
+
+        // bin/node 加可执行位（Termux 的 node 是静态链接，可直接 exec）
+        val nodeBin = File(tmpDir, "bin/node")
+        if (nodeBin.exists()) {
+            nodeBin.setExecutable(true, false)
+        }
+
+        // 原子替换
+        if (targetDir.exists()) targetDir.deleteRecursively()
+        if (!tmpDir.renameTo(targetDir)) {
+            // rename 失败（罕见）：直接移动内容
+            tmpDir.copyRecursively(targetDir)
+            tmpDir.deleteRecursively()
+        }
+        onProgress(1f)
+        Log.i(TAG, "extract done -> ${targetDir.absolutePath}")
+        targetDir
+    }
+
+    /** 运行时是否已解压就绪 */
+    fun isInstalled(context: Context): Boolean {
+        val dir = File(context.filesDir, RUNTIME_DIR)
+        return File(dir, "bin/node").exists() && File(dir, "lib/node_modules").exists()
+    }
+
+    /** 运行时目录 */
+    fun runtimeDir(context: Context): File = File(context.filesDir, RUNTIME_DIR)
+}

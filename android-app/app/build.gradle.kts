@@ -3,6 +3,8 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -15,6 +17,11 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
+
+        // Room 导出 schema 到本地（用于后续迁移）
+        ksp {
+            arg("room.schemaLocation", "$projectDir/schemas")
+        }
     }
 
     buildTypes {
@@ -33,6 +40,15 @@ android {
     buildFeatures {
         compose = true
     }
+    packaging {
+        // 排除重复的 META-INF 许可文件（Room/commons-compress 等依赖引入）
+        resources.excludes += setOf(
+            "META-INF/LICENSE*",
+            "META-INF/NOTICE*",
+            "META-INF/AL2.0",
+            "META-INF/LGPL2.1",
+        )
+    }
 }
 
 kotlin {
@@ -41,10 +57,16 @@ kotlin {
     }
 }
 
+configurations.all {
+    // prism4j 依赖链引入旧版 annotations-java5，与 org.jetbrains:annotations 冲突
+    exclude(group = "org.jetbrains", module = "annotations-java5")
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.activity.compose)
 
     // Compose
@@ -55,8 +77,27 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
 
-    // 数据持久化（设置）
+    // 协程 + 序列化
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.json)
+
+    // 数据持久化（设置 + 会话）
     implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
+
+    // 运行时解压（tar.gz：GZIP 内置 + commons-compress 解 tar）
+    implementation(libs.commons.compress)
+
+    // Markdown 渲染（Markwon，View 体系经 AndroidView 接入 Compose）
+    implementation(libs.markwon.core)
+    implementation(libs.markwon.ext.tables)
+    implementation(libs.markwon.image)
+    implementation(libs.markwon.linkify)
+
+    // 保活心跳（M2.6）
+    implementation(libs.androidx.work.runtime.ktx)
 
     debugImplementation(libs.androidx.ui.tooling)
 }

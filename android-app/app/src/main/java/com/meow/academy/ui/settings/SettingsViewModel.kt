@@ -29,6 +29,16 @@ class SettingsViewModel(private val repository: SettingsRepository) : ViewModel(
     val residentMinutes: StateFlow<Int> = repository.residentMinutes
         .stateIn(viewModelScope, SharingStarted.Eagerly, 15)
 
+    // ── 模型配置（M2.6 雏形） ──
+    val llmProvider: StateFlow<String> = repository.llmProvider
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "deepseek")
+
+    val llmModel: StateFlow<String> = repository.llmModel
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "deepseek-v4-flash")
+
+    val llmApiKey: StateFlow<String> = repository.llmApiKey
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
+
     fun setThemeMode(mode: ThemeMode) = viewModelScope.launch {
         repository.setThemeMode(mode)
     }
@@ -43,6 +53,18 @@ class SettingsViewModel(private val repository: SettingsRepository) : ViewModel(
 
     fun setResidentMinutes(minutes: Int) = viewModelScope.launch {
         repository.setResidentMinutes(minutes)
+    }
+
+    fun setLlmProvider(provider: String) = viewModelScope.launch {
+        repository.setLlmProvider(provider)
+    }
+
+    fun setLlmModel(model: String) = viewModelScope.launch {
+        repository.setLlmModel(model)
+    }
+
+    fun setLlmApiKey(key: String) = viewModelScope.launch {
+        repository.setLlmApiKey(key)
     }
 
     companion object {

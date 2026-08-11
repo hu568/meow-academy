@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
     <include domain="file" path="." />
+    <!-- API Key 存于 DataStore，不随备份导出 -->
+    <exclude domain="file" path="datastore" />
+    <!-- 运行时目录（~257MB），备份无意义 -->
+    <exclude domain="file" path="meow-runtime" />
 </full-backup-content>

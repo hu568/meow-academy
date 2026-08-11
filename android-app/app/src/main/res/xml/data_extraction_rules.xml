@@ -2,5 +2,9 @@
 <data-extraction-rules>
     <cloud-backup>
         <include domain="file" path="." />
+        <!-- API Key 存于 DataStore，不随备份导出 -->
+        <exclude domain="file" path="datastore" />
+        <!-- 运行时目录（~257MB），备份无意义 -->
+        <exclude domain="file" path="meow-runtime" />
     </cloud-backup>
 </data-extraction-rules>

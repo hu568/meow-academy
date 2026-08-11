@@ -11,7 +11,13 @@ local.properties
 *.iml
 .DS_Store
 
+# Kotlin daemon 缓存
+.kotlin/
+
 # Android 原生构建产物
 /captures
 .externalNativeBuild
 .cxx
+
+# Pi 运行时压缩包（55MB，由 runtime-assets/build-runtime.sh 生成后放回）
+app/src/main/assets/runtime.bin

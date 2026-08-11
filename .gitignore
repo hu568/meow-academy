@@ -8,3 +8,7 @@ reasonix.toml
 .env
 
 release/
+
+.tmp/
+
+.agents/
