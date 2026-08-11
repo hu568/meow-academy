@@ -7,6 +7,25 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+// ── APK 同步到 release/（与 AGENTS.md 约定一致）──
+// assembleDebug 完成后把 APK 复制到仓库根 release/meow-academy-<version>-debug.apk，
+// 每次编译后自动更新，无需手动复制。
+// release/ 中 APK 被 .gitignore 忽略（~105MB 不入库），RELEASE_NOTES_*.md 才入库。
+val syncApkToRelease = tasks.register<Copy>("syncApkToRelease") {
+    group = "build"
+    description = "复制 debug APK 到仓库根 release/"
+    from(layout.buildDirectory.dir("outputs/apk/debug"))
+    include("app-debug.apk")
+    into(File(rootProject.projectDir.parentFile ?: rootProject.projectDir, "release"))
+    rename { "meow-academy-${android.defaultConfig.versionName}-debug.apk" }
+}
+// AGP 任务延迟注册，需 afterEvaluate 后才能挂 assembleDebug
+afterEvaluate {
+    tasks.named("assembleDebug") {
+        finalizedBy(syncApkToRelease)
+    }
+}
+
 android {
     namespace = "com.meow.academy"
     compileSdk = 34
