@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
@@ -61,9 +62,16 @@ fun MainScreen(repository: SettingsRepository) {
 
     // 终端页覆盖（从设置/文件管理进入）
     var terminalOpen by rememberSaveable { mutableStateOf(false) }
+    // 入口语境：文件管理=知识库目录；设置=null（home）。打开时传给终端页重置 cwd
+    var terminalInitialCwd by rememberSaveable { mutableStateOf<String?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // 知识库目录（M3 前的落点）：文件管理入口的终端从这里开始
+    val knowledgeDir = remember {
+        java.io.File(context.filesDir, "meow-knowledge").apply { mkdirs() }.absolutePath
+    }
 
     if (terminalOpen) {
-        TerminalScreen(onBack = { terminalOpen = false })
+        TerminalScreen(initialCwd = terminalInitialCwd, onBack = { terminalOpen = false })
         return
     }
 
@@ -88,8 +96,14 @@ fun MainScreen(repository: SettingsRepository) {
         ) {
             when (selectedTab) {
                 HomeTab.CHAT -> ChatScreen()
-                HomeTab.FILES -> FilesScreen(onOpenTerminal = { terminalOpen = true })
-                HomeTab.SETTINGS -> SettingsScreen(repository, onOpenTerminal = { terminalOpen = true })
+                HomeTab.FILES -> FilesScreen(onOpenTerminal = {
+                    terminalInitialCwd = knowledgeDir
+                    terminalOpen = true
+                })
+                HomeTab.SETTINGS -> SettingsScreen(repository, onOpenTerminal = {
+                    terminalInitialCwd = null // home
+                    terminalOpen = true
+                })
             }
         }
     }

@@ -7,7 +7,9 @@ reasonix.toml
 
 .env
 
-release/
+# release/ 只放安装包与版本更新记录；仅 RELEASE_NOTES_*.md 入库
+release/*
+!release/RELEASE_NOTES_*.md
 
 .tmp/
 

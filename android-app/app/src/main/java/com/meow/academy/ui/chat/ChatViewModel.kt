@@ -188,50 +188,58 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 //    agent_end 到达时 takeWhile 立即终止，无需等待下一个事件
                 val collector = launch {
                     rpc.events.takeWhile { it.type != PiEventTypes.AGENT_END }.collect { ev ->
-                        when (ev.type) {
-                            PiEventTypes.MESSAGE_UPDATE -> {
-                                val msgEvent = ev.assistantMessageEvent ?: return@collect
-                                when (msgEvent.str("type")) {
-                                    PiEventTypes.ASSISTANT_THINKING_DELTA ->
-                                        state = state.copy(thinking = state.thinking + (msgEvent.str("delta") ?: ""))
-                                    PiEventTypes.ASSISTANT_TEXT_DELTA ->
-                                        state = state.copy(content = state.content + (msgEvent.str("delta") ?: ""))
+                        // 单事件处理异常不中断整个收集（Bug2 修复：partialResult/result 解析失败只丢该事件）
+                        runCatching {
+                            when (ev.type) {
+                                PiEventTypes.MESSAGE_UPDATE -> {
+                                    val msgEvent = ev.assistantMessageEvent ?: return@runCatching
+                                    when (msgEvent.str("type")) {
+                                        PiEventTypes.ASSISTANT_THINKING_DELTA ->
+                                            state = state.copy(thinking = state.thinking + (msgEvent.str("delta") ?: ""))
+                                        PiEventTypes.ASSISTANT_TEXT_DELTA ->
+                                            state = state.copy(content = state.content + (msgEvent.str("delta") ?: ""))
+                                    }
+                                    _streaming.value = state
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastPersist > 250) {
+                                        persist(state, MessageStatus.STREAMING)
+                                        lastPersist = now
+                                    }
                                 }
-                                _streaming.value = state
-                                val now = System.currentTimeMillis()
-                                if (now - lastPersist > 250) {
-                                    persist(state, MessageStatus.STREAMING)
-                                    lastPersist = now
+                                PiEventTypes.TOOL_EXECUTION_START -> {
+                                    val id = ev.raw.str("toolCallId") ?: "tool-${System.currentTimeMillis()}"
+                                    val name = ev.raw.str("toolName") ?: "unknown"
+                                    val args = ev.raw["arguments"]?.toString() ?: ""
+                                    state = state.copy(toolCalls = state.toolCalls + ToolCallInfo(id = id, name = name, arguments = args))
+                                    _streaming.value = state
+                                }
+                                PiEventTypes.TOOL_EXECUTION_UPDATE -> {
+                                    val id = ev.raw.str("toolCallId")
+                                    state = state.copy(toolCalls = state.toolCalls.map {
+                                        if (it.id == id) it.copy(result = ev.raw.str("partialResult") ?: it.result) else it
+                                    })
+                                    _streaming.value = state
+                                }
+                                PiEventTypes.TOOL_EXECUTION_END -> {
+                                    val id = ev.raw.str("toolCallId")
+                                    state = state.copy(toolCalls = state.toolCalls.map { old ->
+                                        if (old.id != id) return@map old
+                                        // result 结构：{"content":[{"type":"text","text":"..."},...],"details":{...}}
+                                        val result = (ev.raw["result"] as? JsonObject)
+                                            ?.let { r -> (r["content"] as? JsonArray)?.firstOrNull() as? JsonObject }
+                                            ?.str("text")
+                                            ?: ev.raw.str("result") // 兜底：字符串 result / 序列化展示
+                                            ?: old.result
+                                        val isError = ev.raw["isError"]?.let {
+                                            (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.toBoolean()
+                                        } ?: false
+                                        old.copy(result = result, isError = isError)
+                                    })
+                                    _streaming.value = state
                                 }
                             }
-                            PiEventTypes.TOOL_EXECUTION_START -> {
-                                val id = ev.raw.str("toolCallId") ?: "tool-${System.currentTimeMillis()}"
-                                val name = ev.raw.str("toolName") ?: "unknown"
-                                val args = ev.raw["arguments"]?.toString() ?: ""
-                                state = state.copy(toolCalls = state.toolCalls + ToolCallInfo(id = id, name = name, arguments = args))
-                                _streaming.value = state
-                            }
-                            PiEventTypes.TOOL_EXECUTION_UPDATE -> {
-                                val id = ev.raw.str("toolCallId")
-                                state = state.copy(toolCalls = state.toolCalls.map {
-                                    if (it.id == id) it.copy(result = ev.raw.str("partialResult") ?: it.result) else it
-                                })
-                                _streaming.value = state
-                            }
-                            PiEventTypes.TOOL_EXECUTION_END -> {
-                                val id = ev.raw.str("toolCallId")
-                                state = state.copy(toolCalls = state.toolCalls.map { old ->
-                                    if (old.id != id) return@map old
-                                    val result = (ev.raw["result"] as? JsonObject)?.str("text")
-                                        ?: ev.raw.str("result")
-                                        ?: old.result
-                                    val isError = ev.raw["isError"]?.let {
-                                        (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull?.toBoolean()
-                                    } ?: false
-                                    old.copy(result = result, isError = isError)
-                                })
-                                _streaming.value = state
-                            }
+                        }.onFailure { e ->
+                            Log.w("ChatViewModel", "event handling failed: ${ev.type}", e)
                         }
                     }
                 }

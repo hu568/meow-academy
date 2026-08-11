@@ -47,17 +47,27 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 private val QUICK_COMMANDS = listOf("ls", "pwd", "echo 喵~", "uname -a", "node -v")
 
 /**
- * 🖥️ 终端页（M2.5）：命令输入 + 输出渲染（等宽字体），走 RPC bash。
+ * 🖥️ 终端页（M2.5 + Bug1 修复）：命令输入 + 输出渲染（等宽字体），走 RPC bash。
+ *
+ * @param initialCwd 入口语境初始目录：文件管理=知识库目录；设置=null（home）。
+ *                   cwd 变化时重置（两个入口复用同一 VM 实例，需在打开时重置语境）。
  */
 @Composable
 fun TerminalScreen(
     vm: TerminalViewModel = viewModel(),
+    initialCwd: String? = null,
     onBack: (() -> Unit)? = null,
 ) {
     val entries by vm.entries.collectAsState()
     val runtimeState by vm.runtimeState.collectAsState()
+    val cwd by vm.cwd.collectAsState()
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+
+    // 入口语境变化 → 重置工作目录（每次打开终端都按入口设定初始 cwd）
+    LaunchedEffect(initialCwd) {
+        vm.setCwd(initialCwd)
+    }
 
     LaunchedEffect(entries.size, entries.lastOrNull()?.output?.length) {
         if (entries.isNotEmpty()) listState.animateScrollToItem(Int.MAX_VALUE)
@@ -91,7 +101,16 @@ fun TerminalScreen(
                 style = MaterialTheme.typography.titleLarge,
                 color = Color(0xFFE6EDF3),
             )
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = cwd,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFF8B949E),
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
             val (runtimeLabel, runtimeColor) = when (val rs = runtimeState) {
                 is com.meow.academy.runtime.RuntimeState.Running -> "● 运行中" to Color(0xFF3FB950)
                 is com.meow.academy.runtime.RuntimeState.Error -> "⚠ ${rs.message.take(12)}" to Color(0xFFF85149)
@@ -125,7 +144,7 @@ fun TerminalScreen(
             if (entries.isEmpty()) {
                 item {
                     Text(
-                        text = "喵～ 这里是终端\n输入命令后回车执行（pi RPC bash）\n\n快捷命令：${QUICK_COMMANDS.joinToString("  ")}",
+                        text = "喵～ 这里是终端\n输入命令后回车执行（pi RPC bash）\n当前目录：$cwd\n\n快捷命令：${QUICK_COMMANDS.joinToString("  ")}",
                         style = MaterialTheme.typography.bodySmall,
                         color = Color(0xFF8B949E),
                         fontFamily = FontFamily.Monospace,
