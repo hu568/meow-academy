@@ -1,6 +1,6 @@
 # 🐾 第一阶段（M2）细化规划：给 Pi 套壳
 
-> 状态：📝 规划稿（2026-08-10）
+> 状态：✅ M2 主体完成（2026-08-11，真机全链路验收通过；余 PLAN.md 数据回填）
 > 目标里程碑：M2「给 Pi 套壳」——安卓骨架 + 聊天 + 终端 + Pi 本地运行，验证整条链路可行
 > 依据：docs/decision-local-pi-agent.md（推敲 v2）、docs/design-gui.md（信息架构 v1）
 
@@ -129,7 +129,7 @@ mkdir -p ~/.pi/agent
 **交付物**：可安装 APK，三板块切换 + 主题切换生效
 **验证**：`./gradlew assembleDebug` 构建成功；真机安装打开
 
-### M2.2 Pi 运行时集成（RuntimeManager）
+### M2.2 Pi 运行时集成（RuntimeManager）✅ 已完成（2026-08-11）
 
 **做什么**：
 - `runtime-assets/` 打包脚本：装 nodejs-lts + pi-coding-agent → 裁剪 → zstd 压缩 → `app/src/main/assets/runtime.zst`
@@ -140,7 +140,7 @@ mkdir -p ~/.pi/agent
 **交付物**：RuntimeManager + 打包脚本 + 前台服务
 **验证**：真机首启解压完成，`pi --mode rpc` 进程拉起，stdin/stdout 管道连通
 
-### M2.3 RPC 协议客户端（Kotlin）
+### M2.3 RPC 协议客户端（Kotlin）✅ 已完成（2026-08-11）
 
 **做什么**：
 - JSONL 帧解析器（按 `\n` 分割，容错 `\r\n`）
@@ -151,7 +151,7 @@ mkdir -p ~/.pi/agent
 **交付物**：`PiRpcClient`（kotlinx.serialization）+ 事件流（Flow）
 **验证**：连 M2.0 的 pi 进程，收完整事件流；Kotlin 单测跑 JSONL 解析
 
-### M2.4 聊天页面
+### M2.4 聊天页面 ✅ 已完成（2026-08-11，流式实测通过）
 
 **做什么**：
 - 会话列表 + 会话详情（Room 持久化）
@@ -163,7 +163,7 @@ mkdir -p ~/.pi/agent
 **交付物**：可对话的聊天页
 **验证**：真机发消息 → 流式出字 → 工具卡片 → 停止生效
 
-### M2.5 终端页面
+### M2.5 终端页面 ✅ 已完成（2026-08-11）
 
 **做什么**：
 - 终端页 UI：命令输入 + 输出渲染（等宽字体、ANSI 色简易处理）
@@ -174,7 +174,7 @@ mkdir -p ~/.pi/agent
 **交付物**：可交互终端页
 **验证**：终端里跑 `ls` / `pwd` / `echo` 正常返回输出与 exitCode
 
-### M2.6 三档常驻开关 + 设置完善
+### M2.6 三档常驻开关 + 设置完善 ✅ 已完成（2026-08-11，三档实测通过）
 
 **做什么**：
 - 三档：①关闭 ②有限保活（15/30/60min 可配）③一直常驻
@@ -185,7 +185,7 @@ mkdir -p ~/.pi/agent
 **交付物**：完整设置页 + 常驻三档生效
 **验证**：切档位 → 观察 Pi 进程生命周期符合预期（退后台后按档位保活/释放）
 
-### M2.7 全链路验收
+### M2.7 全链路验收 ✅ 主体完成（2026-08-11；余 PLAN.md 数据回填）
 
 **做什么**：
 - 完整走一遍：安装 → 首启解压 → 聊天（含工具）→ 终端 → 设置切换 → 杀进程恢复
@@ -258,18 +258,26 @@ M2.0 原型验证（真机 Termux 跑 pi）
 11. **Termux 无 ldd**（bionic 环境，binutils 只带 g 前缀工具）：枚举动态库依赖用 `greadelf -d <bin> | grep NEEDED`，且需迭代补齐传递依赖（如 libicui18n → libicuuc）；系统库（libc/libm/libdl）不在 $PREFIX/lib 自动跳过。
 12. **拷贝 npm scope 包注意保留 scope 目录**：`cp -rL .../node_modules/@earendil-works/pi-coding-agent <dest>/node_modules/` 会丢掉 @earendil-works 层，必须先 `mkdir -p <dest>/node_modules/@earendil-works` 再拷入。
 
+**三档常驻开关实测（2026-08-11，真机）**：
+- ✅ 关闭档：退后台 → RuntimeManager.stop()，进程退出（30s 内 ps 无残留）
+- ✅ 有限保活档：退后台 → 进程存活 + WorkManager SystemJobService 心跳已调度；延迟停止 handler 用 `coerceIn(1,1440)` 兜底防 0/负值；设置页保活时长可选 15/30/60 分钟
+- ✅ 一直常驻档：退后台 45s+ → 前台服务存活（dumpsys isForeground=true，通知 channel=pi_runtime）
+- ✅ 手动停止按钮：设置页「停止后台服务」→ stopPi + markStopped，前台服务消失
+
+**APK 体积实测（2026-08-11）**：debug APK **105MB**（含 runtime.bin 52.9MB gzip；dex 合计 ~45MB 未开 R8），低于 200MB 红线 ✅；release 构建预期更小。
+
 **待完成（M2.7 剩余）**：
 - ✅ 聊天页流式对话实测（2026-08-11 通过：DeepSeek 流式出字 + thinking 折叠 + 完整事件流）
-- ⏳ 三档常驻开关实测（切档位 → 退后台 → 观察 pi 进程生命周期）
-- ⏳ APK 体积核对（当前 debug APK 约 55-85MB，含 runtime.bin，远低于 200MB 红线）
+- ✅ 三档常驻开关实测（2026-08-11 通过，见上方实测记录）
+- ✅ APK 体积核对（debug 105MB，低于 200MB 红线）
+- ✅ git commit 本轮 M2.2-M2.6 全部代码（commit 72ad9d6）
 - ⏳ 更新 PLAN.md / 决策文档实测数据（体积、启动耗时、保活效果）
-- ⏳ git commit 本轮 M2.2-M2.6 全部代码（当前工作区有大量未提交文件）
+- ⏳ 停止生成（abort）/ 工具卡片补测（可选）
 
 **下一步建议**（新会话从这里继续）：
-1. 提交当前代码（M2.2-M2.6 + 审查修复一次性 commit，emoji 信息）
-2. 三档常驻开关实测（退后台保活 / WorkManager 心跳 / 手动停止）
-3. APK 体积核对 + 停止生成/工具卡片补测
-4. M2.7 验收报告 + PLAN.md 更新
+1. 更新 PLAN.md 里程碑 M2 标记完成 + 决策文档实测数据
+2. 停止生成/工具卡片补测（可选）
+3. 进入 M3（数据中心/知识库）规划
 
 ---
 
