@@ -79,6 +79,17 @@ tar -C "$RUNTIME" -xzf "$CLOSURE_TGZ"
 [ -f "$RUNTIME/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js" ] || \
   { echo "✗ 闭包缺 jsonrpc-demo/lib/packaged-bin.js" >&2; exit 1; }
 
+# ── 3.5 真终端：node-pty Android fork + terminal-host ──
+# 官方 node-pty 在 Android 编译失败，用预编译 arm64 fork（无需编译工具链）
+echo "» 安装 node-pty Android fork…"
+PTY_STAGE="$STAGE/pty"
+mkdir -p "$PTY_STAGE" "$RUNTIME/node_modules/@mmmbuto"
+( cd "$PTY_STAGE" && npm install @mmmbuto/node-pty-android-arm64 --no-save --omit=dev >/dev/null 2>&1 ) || \
+  { echo "✗ node-pty fork 安装失败" >&2; exit 1; }
+cp -rL "$PTY_STAGE/node_modules/@mmmbuto/node-pty-android-arm64" "$RUNTIME/node_modules/@mmmbuto/"
+# terminal-host.js 拷到 runtime/bin/（真终端宿主，由 App 经 linker64 用 node 拉起）
+cp "$(cd "$(dirname "$0")" && pwd)/terminal-host.js" "$RUNTIME/bin/terminal-host.js"
+
 # ── 4. TLS 证书（Termux 版 node 的 OpenSSL 默认 CA 路径在 Termux 私有目录，
 #       App 沙箱读不到，必须内置 CA 束；App 端用 OPENSSL_CONF/NODE_EXTRA_CA_CERTS 指过来）──
 echo "» 拷贝 CA 证书束（etc/tls/cert.pem）…"

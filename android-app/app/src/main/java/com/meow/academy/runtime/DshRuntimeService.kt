@@ -8,6 +8,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.LocalSocket
+import android.net.LocalSocketAddress
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -20,6 +22,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -34,6 +37,7 @@ class DshRuntimeService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var process: Process? = null
     private var client: DshRpcClient? = null
+    private var socket: LocalSocket? = null
 
     /** 启动互斥：startDsh 异步（先读配置），onStartCommand 并发时防止双进程 */
     private val launching = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -80,24 +84,31 @@ class DshRuntimeService : Service() {
                 // 设置里的 "deepseek" 映射到 DSH 的 provider 路由名 deepseek-official
                 val provider = if (providerRaw == "deepseek") "deepseek-official" else providerRaw
 
-                val proc = DshProcessLauncher.launch(this@DshRuntimeService, apiKey)
+                // 真终端 + 聊天 socket 路径（terminal-host 与 DSH 各自监听）
+                val terminalSocket = java.io.File(app.filesDir, "dsh-terminal.sock").absolutePath
+                val jsonRpcSocket = java.io.File(app.filesDir, "dsh-jsonrpc.sock").absolutePath
+                // 清理旧 socket 文件（进程上次退出可能残留）
+                java.io.File(terminalSocket).delete()
+                java.io.File(jsonRpcSocket).delete()
+
+                val proc = DshProcessLauncher.launch(this@DshRuntimeService, apiKey, terminalSocket, jsonRpcSocket)
                 Log.i("DshRuntimeService", "launched proc alive=" + proc.isAlive)
                 if (process != null) {
-                    // 竞态兜底：本服务不应有第二个存活进程（launching 已互斥，防御性检查）
                     proc.destroyForcibly()
                     launching.set(false)
                     return@launch
                 }
                 process = proc
-                val rpc = DshRpcClient(
-                    input = proc.inputStream,
-                    output = proc.outputStream,
-                    stderr = proc.errorStream,
-                )
+
+                // 等 DSH 聊天 socket 就绪后连接（terminal-host 拉起 bash → bash 内启动 DSH 需要时间）
+                val rpc = connectToDsh(jsonRpcSocket)
+                if (rpc == null) {
+                    proc.destroyForcibly()
+                    throw IllegalStateException("DSH 聊天 socket 连接失败")
+                }
                 client = rpc
-                // 暴露给 RuntimeManager（App 持有）
                 app.runtimeManager.rpcClient = rpc
-                Log.i("DshRuntimeService", "rpc client created, starting read loop")
+                Log.i("DshRuntimeService", "dsh socket connected, starting read loop")
                 rpc.start()
 
                 // JSON-RPC 握手：initialize 完成前会话请求会用错 model，必须先等它成功
@@ -141,6 +152,28 @@ class DshRuntimeService : Service() {
                 launching.set(false)
             }
         }
+    }
+
+    /** 轮询连接 DSH 聊天 unix socket（terminal-host 拉起 bash 后启动 DSH 需要时间） */
+    private suspend fun connectToDsh(jsonRpcSocket: String): DshRpcClient? {
+        repeat(40) { attempt ->
+            try {
+                val s = LocalSocket()
+                s.connect(LocalSocketAddress(jsonRpcSocket, LocalSocketAddress.Namespace.FILESYSTEM))
+                s.soTimeout = 0
+                socket = s
+                Log.i("DshRuntimeService", "dsh socket connected on attempt " + attempt)
+                return DshRpcClient(
+                    input = s.inputStream,
+                    output = s.outputStream,
+                    stderr = null,
+                )
+            } catch (e: Exception) {
+                // 未就绪，稍后重试
+            }
+            delay(500)
+        }
+        return null
     }
 
     private fun startForegroundCompat() {
@@ -195,6 +228,8 @@ class DshRuntimeService : Service() {
         Log.i("DshRuntimeService", "onDestroy")
         client?.close()
         client = null
+        socket?.close()
+        socket = null
         process?.destroyForcibly()
         process = null
         (application as? MeowAcademyApp)?.runtimeManager?.rpcClient = null
@@ -208,6 +243,8 @@ class DshRuntimeService : Service() {
         val rm = (application as MeowAcademyApp).runtimeManager
         client?.close()
         client = null
+        socket?.close()
+        socket = null
         process?.destroyForcibly()
         process = null
         rm.rpcClient = null
