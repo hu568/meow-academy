@@ -28,6 +28,9 @@ object RuntimeExtractor {
     /** 解压目标目录名（filesDir 下） */
     const val RUNTIME_DIR = "meow-runtime"
 
+    /** 版本标记文件（存 assets runtime.bin 的字节数，用于检测是否需要重新解压） */
+    const val VERSION_FILE = ".runtime-version"
+
     /**
      * 解压 [ASSET_NAME] 到 filesDir/[RUNTIME_DIR]。
      *
@@ -42,7 +45,7 @@ object RuntimeExtractor {
         if (tmpDir.exists()) tmpDir.deleteRecursively()
         tmpDir.mkdirs()
 
-        val totalBytes = runCatching { context.assets.openFd(ASSET_NAME).length }.getOrDefault(-1L)
+        val totalBytes = assetByteSize(context)
         Log.i(TAG, "extract start, totalBytes=$totalBytes")
 
         var readBytes = 0L
@@ -120,17 +123,31 @@ object RuntimeExtractor {
             tmpDir.deleteRecursively()
         }
         onProgress(1f)
+        // 写版本标记（assets 字节数），供 isInstalled 检测 runtime.bin 变化
+        runCatching { File(targetDir, VERSION_FILE).writeText(totalBytes.toString()) }
         Log.i(TAG, "extract done -> ${targetDir.absolutePath}")
         targetDir
     }
 
-    /** 运行时是否已解压就绪（DSH 版：node + closure + cordis.yml） */
+    /** 运行时是否已解压就绪，且与当前 assets 的 runtime.bin 版本一致 */
     fun isInstalled(context: Context): Boolean {
         val dir = File(context.filesDir, RUNTIME_DIR)
-        return File(dir, "bin/node").exists()
-            && File(dir, "node_modules").exists()
-            && File(dir, "dsh/cordis.yml").exists()
+        if (!File(dir, "bin/node").exists()
+            || !File(dir, "node_modules").exists()
+            || !File(dir, "dsh/cordis.yml").exists()
+        ) return false
+        // 版本标记：解压时写入 assets 的字节数；runtime.bin 变了就触发重新解压
+        val versionFile = File(dir, VERSION_FILE)
+        if (!versionFile.exists()) return false
+        val stored = versionFile.readText().trim().toLongOrNull() ?: return false
+        return stored == assetsSize(context)
     }
+
+    /** assets 里 runtime.bin 的字节数（openFd().length 对 gzip 流返回 -1，用 available()） */
+    private fun assetByteSize(context: Context): Long =
+        runCatching { context.assets.open(ASSET_NAME).use { it.available().toLong() } }.getOrDefault(-1L)
+
+    private fun assetsSize(context: Context): Long = assetByteSize(context)
 
     /** 运行时目录 */
     fun runtimeDir(context: Context): File = File(context.filesDir, RUNTIME_DIR)

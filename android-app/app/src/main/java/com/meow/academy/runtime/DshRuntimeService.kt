@@ -100,6 +100,16 @@ class DshRuntimeService : Service() {
                 }
                 process = proc
 
+                // terminal-host 的 stderr 转发到 Logcat（DshStderr tag，排障）
+                Thread {
+                    try {
+                        proc.errorStream.bufferedReader().forEachLine { line ->
+                            Log.e("DshStderr", line)
+                        }
+                    } catch (_: Exception) {
+                    }
+                }.start()
+
                 // 等 DSH 聊天 socket 就绪后连接（terminal-host 拉起 bash → bash 内启动 DSH 需要时间）
                 val rpc = connectToDsh(jsonRpcSocket)
                 if (rpc == null) {

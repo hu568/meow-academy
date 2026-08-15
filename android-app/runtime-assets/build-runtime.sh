@@ -87,6 +87,14 @@ mkdir -p "$PTY_STAGE" "$RUNTIME/node_modules/@mmmbuto"
 ( cd "$PTY_STAGE" && npm install @mmmbuto/node-pty-android-arm64 --no-save --omit=dev >/dev/null 2>&1 ) || \
   { echo "✗ node-pty fork 安装失败" >&2; exit 1; }
 cp -rL "$PTY_STAGE/node_modules/@mmmbuto/node-pty-android-arm64" "$RUNTIME/node_modules/@mmmbuto/"
+# DSH 的 subprocess 插件依赖「官方 node-pty」，但它没有 Android arm64 预编译；
+# 把 fork 的 pty.node 复制到官方 node-pty 的 prebuilds/android-arm64/，让官方 node-pty 也能加载
+NODE_PTY_DIR=$(find "$RUNTIME/node_modules/.pnpm" -maxdepth 4 -type d -path "*/node_modules/node-pty" 2>/dev/null | head -1)
+if [ -n "$NODE_PTY_DIR" ]; then
+  mkdir -p "$NODE_PTY_DIR/prebuilds/android-arm64"
+  cp "$RUNTIME/node_modules/@mmmbuto/node-pty-android-arm64/prebuilds/android-arm64/pty.node" "$NODE_PTY_DIR/prebuilds/android-arm64/pty.node"
+  echo "  ✓ 官方 node-pty 已接入 Android pty.node"
+fi
 # terminal-host.js 拷到 runtime/bin/（真终端宿主，由 App 经 linker64 用 node 拉起）
 cp "$(cd "$(dirname "$0")" && pwd)/terminal-host.js" "$RUNTIME/bin/terminal-host.js"
 

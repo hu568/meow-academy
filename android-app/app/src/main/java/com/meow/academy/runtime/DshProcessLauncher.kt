@@ -71,6 +71,10 @@ object DshProcessLauncher {
             put("DSH_TERMINAL_SOCKET", terminalSocket)
             put("DSH_JSONRPC_SOCKET", jsonRpcSocket)
             put("DSH_RUNTIME_DIR", runtimeDir.absolutePath)
+            // node 绝对路径（terminal-host 的 launchDsh 用它启动 DSH；linker64 下 process.execPath 会指向 linker64）
+            put("DSH_NODE_BIN", node.absolutePath)
+            // bash 绝对路径（terminal-host 用 linker64 加载 bash）
+            put("DSH_BASH_BIN", runtimeDir.absolutePath + "/bin/bash")
             // DSH 会话持久化（JSONL）与默认 cwd（cordis.yml 里经 DSH_SESSION_ROOT / DSH_CWD 读取）
             put("DSH_SESSION_ROOT", context.filesDir.absolutePath + "/.dsh-sessions")
             put("DSH_CWD", context.filesDir.absolutePath)
