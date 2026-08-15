@@ -1,6 +1,7 @@
 package com.meow.academy.data.settings
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -27,6 +28,8 @@ class SettingsRepository(private val context: Context) {
         val LLM_PROVIDER = stringPreferencesKey("llm_provider")
         val LLM_MODEL = stringPreferencesKey("llm_model")
         val LLM_API_KEY = stringPreferencesKey("llm_api_key")
+        val REASONING_EFFORT = stringPreferencesKey("reasoning_effort")
+        val WEB_SEARCH_ENABLED = booleanPreferencesKey("web_search_enabled")
     }
 
     val themeMode: Flow<ThemeMode> = context.settingsDataStore.data.map { prefs ->
@@ -92,5 +95,25 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setLlmApiKey(apiKey: String) {
         context.settingsDataStore.edit { it[Keys.LLM_API_KEY] = apiKey.trim() }
+    }
+
+    // ── 思考强度 + 网络搜索（M3.1 聊天工具栏） ──
+
+    /** 思考强度（off/high/max；默认 high，与 llm-deepseek 一致） */
+    val reasoningEffort: Flow<String> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.REASONING_EFFORT] ?: "high"
+    }
+
+    /** 网络搜索开关（默认关闭） */
+    val webSearchEnabled: Flow<Boolean> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.WEB_SEARCH_ENABLED] ?: false
+    }
+
+    suspend fun setReasoningEffort(effort: String) {
+        context.settingsDataStore.edit { it[Keys.REASONING_EFFORT] = effort }
+    }
+
+    suspend fun setWebSearchEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { it[Keys.WEB_SEARCH_ENABLED] = enabled }
     }
 }

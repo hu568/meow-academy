@@ -108,12 +108,25 @@ class RuntimeManager(
     /** 停止：通知服务停进程、回收客户端 */
     fun stop() {
         val intent = Intent(context, DshRuntimeService::class.java).setAction(DshRuntimeService.ACTION_STOP)
-        context.startService(intent)
+        try {
+            context.startService(intent)
+        } catch (e: Exception) {
+            // 后台禁止 startService（Android 8+）会抛 BackgroundServiceStartNotAllowedException；
+            // onStop 兜底路径里不能因此崩溃 App，吞掉即可（进程随 App 存活，前台 start 时重建）
+            Log.w("RuntimeManager", "stop service failed (background?), ignore", e)
+        }
         rpcClient?.close()
         rpcClient = null
         if (_state.value is RuntimeState.Running) {
             _state.value = RuntimeState.Ready
         }
+    }
+
+    /** 重启：停进程后重新拉起（配置变更生效，如网络搜索开关）；调用方需在协程内调用 */
+    suspend fun restart() {
+        stop()
+        kotlinx.coroutines.delay(600)
+        start()
     }
 
     /** 运行时根目录 */

@@ -39,6 +39,12 @@ class SettingsViewModel(private val repository: SettingsRepository) : ViewModel(
     val llmApiKey: StateFlow<String> = repository.llmApiKey
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
+    val reasoningEffort: StateFlow<String> = repository.reasoningEffort
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "high")
+
+    val webSearchEnabled: StateFlow<Boolean> = repository.webSearchEnabled
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
     fun setThemeMode(mode: ThemeMode) = viewModelScope.launch {
         repository.setThemeMode(mode)
     }
@@ -65,6 +71,14 @@ class SettingsViewModel(private val repository: SettingsRepository) : ViewModel(
 
     fun setLlmApiKey(key: String) = viewModelScope.launch {
         repository.setLlmApiKey(key)
+    }
+
+    fun setReasoningEffort(effort: String) = viewModelScope.launch {
+        repository.setReasoningEffort(effort)
+    }
+
+    fun setWebSearchEnabled(enabled: Boolean) = viewModelScope.launch {
+        repository.setWebSearchEnabled(enabled)
     }
 
     companion object {

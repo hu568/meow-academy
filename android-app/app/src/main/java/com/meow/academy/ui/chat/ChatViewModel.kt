@@ -48,6 +48,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private val dao = ChatDatabase.get(app).chatDao()
     private val runtimeManager = (app as MeowAcademyApp).runtimeManager
+    private val settingsRepository = (app as MeowAcademyApp).settingsRepository
     private val json = Json { ignoreUnknownKeys = true }
 
     // ── 会话列表 ──
@@ -68,6 +69,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     val isGenerating: StateFlow<Boolean> = _streaming
         .map { it != null }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    // ── 工具栏设置（模型 / 思考强度 / 网络搜索） ──
+    val llmModel: StateFlow<String> = settingsRepository.llmModel
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "deepseek-v4-flash")
+    val reasoningEffort: StateFlow<String> = settingsRepository.reasoningEffort
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "high")
+    val webSearchEnabled: StateFlow<Boolean> = settingsRepository.webSearchEnabled
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     private var client = runtimeManager.rpcClient
@@ -165,6 +174,42 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             client?.cancelSession(sessionId)
         }
+    }
+
+    /** 切换模型：更新全局默认 + 当前会话立即生效（session/setModel） */
+    fun selectModel(model: String) {
+        viewModelScope.launch {
+            settingsRepository.setLlmModel(model)
+            val sessionId = _currentSessionId.value
+            if (sessionId != null) {
+                (runtimeManager.rpcClient ?: client)?.setModel(dshSessionIdOf(sessionId), model = model)
+            }
+        }
+    }
+
+    /** 切换思考强度：更新全局默认 + 当前会话立即生效（session/setModel） */
+    fun selectReasoningEffort(effort: String) {
+        viewModelScope.launch {
+            settingsRepository.setReasoningEffort(effort)
+            val sessionId = _currentSessionId.value
+            if (sessionId != null) {
+                (runtimeManager.rpcClient ?: client)?.setModel(dshSessionIdOf(sessionId), reasoningEffort = effort)
+            }
+        }
+    }
+
+    /** 切换网络搜索：写设置 + 重启 DSH（SQLite 持久化后会话自动 resume） */
+    fun toggleWebSearch(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setWebSearchEnabled(enabled)
+            runtimeManager.restart()
+        }
+    }
+
+    /** 重命名会话（抽屉） */
+    fun renameSession(sessionId: Long, title: String) {
+        val t = title.trim()
+        if (t.isNotEmpty()) viewModelScope.launch { dao.updateSessionTitle(sessionId, t) }
     }
 
     /**

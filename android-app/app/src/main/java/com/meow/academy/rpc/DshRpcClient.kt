@@ -145,8 +145,13 @@ class DshRpcClient(
     // ── 协议方法的便捷封装 ──
 
     /** initialize：进程级握手。必须在会话请求前完成（server 默认 model 非合法模型） */
-    suspend fun initialize(cwd: String, provider: String, model: String, timeoutMs: Long = 20_000): Boolean =
-        requestOk("initialize", DshParams.initialize(cwd, provider, model), timeoutMs)
+    suspend fun initialize(
+        cwd: String,
+        provider: String,
+        model: String,
+        reasoningEffort: String? = null,
+        timeoutMs: Long = 20_000,
+    ): Boolean = requestOk("initialize", DshParams.initialize(cwd, provider, model, reasoningEffort = reasoningEffort), timeoutMs)
 
     /** session/prompt：入队一条消息（响应是受理确认，事件走 session.event） */
     suspend fun prompt(sessionId: String, text: String, timeoutMs: Long = 15_000): Boolean =
@@ -155,6 +160,15 @@ class DshRpcClient(
     /** session/cancel：停止生成 */
     suspend fun cancelSession(sessionId: String, timeoutMs: Long = 10_000): Boolean =
         requestOk("session/cancel", DshParams.cancel(sessionId), timeoutMs)
+
+    /** session/setModel：运行时切换某会话的模型/思考强度（只更新传入字段） */
+    suspend fun setModel(
+        sessionId: String,
+        provider: String? = null,
+        model: String? = null,
+        reasoningEffort: String? = null,
+        timeoutMs: Long = 10_000,
+    ): Boolean = requestOk("session/setModel", DshParams.setModel(sessionId, provider, model, reasoningEffort), timeoutMs)
 
     /** session/bash：执行终端命令；返回最终结果（status/exitCode/timedOut/cancelled） */
     suspend fun bash(

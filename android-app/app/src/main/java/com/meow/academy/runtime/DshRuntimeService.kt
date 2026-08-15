@@ -73,6 +73,8 @@ class DshRuntimeService : Service() {
                 val providerRaw = settings.llmProvider.first()
                 val model = settings.llmModel.first()
                 val apiKey = settings.llmApiKey.first()
+                val reasoningEffort = settings.reasoningEffort.first()
+                val webSearchEnabled = settings.webSearchEnabled.first()
 
                 if (apiKey.isBlank()) {
                     updateNotification("缺少 API Key")
@@ -91,7 +93,7 @@ class DshRuntimeService : Service() {
                 java.io.File(terminalSocket).delete()
                 java.io.File(jsonRpcSocket).delete()
 
-                val proc = DshProcessLauncher.launch(this@DshRuntimeService, apiKey, terminalSocket, jsonRpcSocket)
+                val proc = DshProcessLauncher.launch(this@DshRuntimeService, apiKey, terminalSocket, jsonRpcSocket, webSearchEnabled)
                 Log.i("DshRuntimeService", "launched proc alive=" + proc.isAlive)
                 if (process != null) {
                     proc.destroyForcibly()
@@ -126,6 +128,7 @@ class DshRuntimeService : Service() {
                     cwd = app.filesDir.absolutePath,
                     provider = provider,
                     model = model,
+                    reasoningEffort = reasoningEffort,
                 )
                 if (!initialized) {
                     Log.e("DshRuntimeService", "initialize failed, kill proc")

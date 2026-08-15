@@ -97,12 +97,19 @@ object DshTurnEndKinds {
 object DshParams {
 
     /** initialize：进程级握手（cwd=filesDir；provider/model 决定后续所有会话的路由） */
-    fun initialize(cwd: String, provider: String, model: String, maxTokens: Int? = null): JsonObject =
+    fun initialize(
+        cwd: String,
+        provider: String,
+        model: String,
+        maxTokens: Int? = null,
+        reasoningEffort: String? = null,
+    ): JsonObject =
         buildJsonObject {
             put("cwd", cwd)
             put("provider", provider)
             put("model", model)
             if (maxTokens != null) put("maxTokens", maxTokens)
+            if (reasoningEffort != null) put("reasoningEffort", reasoningEffort)
         }
 
     /** session/prompt：入队一条用户消息（contentBlocks 只发 text 块） */
@@ -118,6 +125,19 @@ object DshParams {
 
     /** session/cancel：停止该会话正在生成的回合 */
     fun cancel(sessionId: String): JsonObject = buildJsonObject { put("sessionId", sessionId) }
+
+    /** session/setModel：运行时切换某会话的模型/思考强度（只更新传入的字段） */
+    fun setModel(
+        sessionId: String,
+        provider: String? = null,
+        model: String? = null,
+        reasoningEffort: String? = null,
+    ): JsonObject = buildJsonObject {
+        put("sessionId", sessionId)
+        if (provider != null) put("provider", provider)
+        if (model != null) put("model", model)
+        if (reasoningEffort != null) put("reasoningEffort", reasoningEffort)
+    }
 
     /** session/bash：执行终端命令（workdir 为空时由服务端按 DSH_CWD 默认） */
     fun bash(requestId: String, command: String, workdir: String? = null, timeoutMs: Long? = null): JsonObject =

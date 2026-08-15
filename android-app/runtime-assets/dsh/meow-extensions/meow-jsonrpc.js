@@ -18,6 +18,7 @@ import { createServer } from 'node:net'
 import { JsonRpcLineTransport } from '@deepseek-ai/dsh-sdk-protocol'
 import { HarnessSdkJsonRpcServer } from '@deepseek-ai/dsh-sdk-jsonrpc-server'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import z from '@deepseek-ai/schemastery'
 
 export const name = 'meow-jsonrpc'
@@ -50,12 +51,41 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     this.runningBash = new Map()
     /** sessionId → 进行中的 resume（与官方 sessionCreations 同理的去重） */
     this.resumeCreations = new Map()
+    /** sessionId → 运行时模型选择（provider/model/reasoningEffort 可变，installModelSelection 用） */
+    this.selections = new Map()
+    /** initialize 时设置的思考强度（off/high/max），作为新会话默认 */
+    this.reasoningEffort = undefined
+  }
+
+  /** 覆盖 initialize：额外接收 reasoningEffort（off/high/max）作为新会话默认 */
+  async initialize(params) {
+    const result = await super.initialize(params)
+    if (params?.reasoningEffort !== undefined) this.reasoningEffort = params.reasoningEffort
+    return result
+  }
+
+  /** 构建 agentOptions（provider/model/maxTokens；reasoningEffort 经 installModelSelection 传） */
+  agentOptionsFor() {
+    return {
+      ...(this.provider === undefined ? {} : { provider: this.provider }),
+      ...(this.model === undefined ? {} : { model: this.model }),
+      ...(this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens }),
+    }
+  }
+
+  /** 当前默认模型选择（provider/model/reasoningEffort），新会话与 setModel 的初始值 */
+  currentSelection() {
+    return {
+      provider: this.provider,
+      model: this.model,
+      ...(this.reasoningEffort === undefined ? {} : { reasoningEffort: this.reasoningEffort }),
+    }
   }
 
   /**
-   * 覆盖官方（TS private）会话获取：同一 sessionId 在磁盘已有持久化日志时
-   * 走 AgentRegistry.resume（加载历史 + 崩溃修复 + 续接回合），而不是
-   * 全新 create（会撞上官方 persistence 的 id-collision 守卫）。
+   * 覆盖官方（TS private）会话获取：统一 create/resume，并在 setup 里安装
+   * installModelSelection（运行时切换 provider/model/reasoningEffort），
+   * 同 sessionId 复用 live agent + selection。磁盘已有持久化日志时走 resume。
    * TS 的 private 只是编译期约束，运行时属性照常存在；本插件锁定 DSH rc.5。
    */
   async getOrCreateSession(sessionId) {
@@ -64,40 +94,80 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     const pending = this.resumeCreations.get(sessionId)
     if (pending) return pending
     const persistence = this.ctx.get('sessionPersistence')
-    if (persistence === undefined) return super.getOrCreateSession(sessionId)
     const creation = (async () => {
-      try {
-        const handle = await this.ctx.agents.resume({
-          resumeSessionId: SessionId(sessionId),
-          agentOptions: {
-            ...(this.provider === undefined ? {} : { provider: this.provider }),
-            ...(this.model === undefined ? {} : { model: this.model }),
-            ...(this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens }),
-          },
-        })
-        const rec = { handle }
-        this.sessions.set(sessionId, rec)
-        return rec
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        if (!message.includes('not found')) {
-          // 并发竞态：别的调用方刚把该会话 resume 成 live → 复用 live agent
-          const live = this.ctx.agents.get(SessionId(sessionId))
-          if (live !== undefined) {
-            const rec = { handle: { agent: live, dispose: async () => {} } }
-            this.sessions.set(sessionId, rec)
-            return rec
-          }
-          throw error
-        }
-        // 磁盘无此会话 → 全新创建（官方路径，含 sessionCreations 去重）
-        return super.getOrCreateSession(sessionId)
-      } finally {
-        this.resumeCreations.delete(sessionId)
+      const selection = { current: this.currentSelection(), assembled: undefined }
+      const setup = (agentCtx) => {
+        installModelSelection(agentCtx, selection)
+        this.selections.set(sessionId, selection)
       }
+      let handle
+      if (persistence !== undefined) {
+        try {
+          handle = await this.ctx.agents.resume({
+            resumeSessionId: SessionId(sessionId),
+            agentOptions: this.agentOptionsFor(),
+            setup,
+          })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          if (!message.includes('not found')) {
+            // 并发竞态：别的调用方刚把该会话 resume 成 live → 复用 live agent
+            const live = this.ctx.agents.get(SessionId(sessionId))
+            if (live !== undefined) {
+              const rec = { handle: { agent: live, dispose: async () => {} } }
+              this.sessions.set(sessionId, rec)
+              return rec
+            }
+            throw error
+          }
+          // 磁盘无此会话 → 全新创建
+          handle = await this.ctx.agents.create({
+            sessionId: SessionId(sessionId),
+            meta: { cwd: this.cwd },
+            agentOptions: this.agentOptionsFor(),
+            setup,
+          })
+        }
+      } else {
+        handle = await this.ctx.agents.create({
+          sessionId: SessionId(sessionId),
+          meta: { cwd: this.cwd },
+          agentOptions: this.agentOptionsFor(),
+          setup,
+        })
+      }
+      const rec = { handle }
+      this.sessions.set(sessionId, rec)
+      return rec
     })()
     this.resumeCreations.set(sessionId, creation)
+    void creation.then(
+      () => { this.resumeCreations.delete(sessionId) },
+      () => { this.resumeCreations.delete(sessionId) },
+    )
     return creation
+  }
+
+  /** 运行时切换某会话的模型/思考强度（影响该会话下一次请求；未建 live agent 时更新默认） */
+  async setModel(params) {
+    const sessionId = String(params.sessionId ?? '')
+    if (sessionId === '') throw new Error('session/setModel: sessionId is required')
+    const ref = this.selections.get(sessionId)
+    if (ref !== undefined) {
+      const cur = ref.current ?? {}
+      ref.current = {
+        provider: params.provider ?? cur.provider,
+        model: params.model ?? cur.model,
+        ...(params.reasoningEffort === undefined && cur.reasoningEffort === undefined
+          ? {}
+          : { reasoningEffort: params.reasoningEffort ?? cur.reasoningEffort }),
+      }
+      return { sessionId, selection: ref.current }
+    }
+    if (params.provider !== undefined) this.provider = params.provider
+    if (params.model !== undefined) this.model = params.model
+    if (params.reasoningEffort !== undefined) this.reasoningEffort = params.reasoningEffort
+    return { sessionId, selection: this.currentSelection() }
   }
 
   /** 扩展方法路由：自定义方法优先，其余交给官方实现 */
@@ -107,6 +177,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
       case 'session/cancel': return this.cancelSession(params ?? {})
       case 'session/bash': return this.runBash(params ?? {})
       case 'session/bashCancel': return this.cancelBash(params ?? {})
+      case 'session/setModel': return this.setModel(params ?? {})
       default: return super.handleRequest(method, params)
     }
   }

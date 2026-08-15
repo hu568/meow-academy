@@ -37,6 +37,7 @@ object DshProcessLauncher {
         apiKey: String,
         terminalSocket: String,
         jsonRpcSocket: String,
+        webSearchEnabled: Boolean = false,
     ): Process {
         val runtimeDir = RuntimeExtractor.runtimeDir(context)
         val node = File(runtimeDir, "bin/node")
@@ -75,9 +76,12 @@ object DshProcessLauncher {
             put("DSH_NODE_BIN", node.absolutePath)
             // bash 绝对路径（terminal-host 用 linker64 加载 bash）
             put("DSH_BASH_BIN", runtimeDir.absolutePath + "/bin/bash")
-            // DSH 会话持久化（JSONL）与默认 cwd（cordis.yml 里经 DSH_SESSION_ROOT / DSH_CWD 读取）
-            put("DSH_SESSION_ROOT", context.filesDir.absolutePath + "/.dsh-sessions")
+            // DSH 会话持久化（SQLite）与默认 cwd（cordis.yml 里经 DSH_SESSION_DB / DSH_CWD 读取）
+            put("DSH_SESSION_DB", context.filesDir.absolutePath + "/.dsh-sessions/chat.db")
+            put("DSH_UPLOAD_DIR", context.filesDir.absolutePath + "/uploads")
             put("DSH_CWD", context.filesDir.absolutePath)
+            // 网络搜索开关（'1' 启用；cordis.yml 里 tool-web.search 据此决定是否注册 web_search）
+            put("DSH_WEB_SEARCH", if (webSearchEnabled) "1" else "0")
             if (apiKey.isNotBlank()) {
                 put("DEEPSEEK_API_KEY", apiKey)
             }
