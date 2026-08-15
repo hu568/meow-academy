@@ -45,7 +45,7 @@ let term
 try {
   term = pty.spawn(linker64, [bashBin, '--norc', '--noprofile'], {
     name: 'xterm-256color', cols, rows, cwd,
-    env: { ...process.env, TERM: 'xterm-256color' },
+    env: { ...process.env, TERM: 'xterm-256color', PS1: '\\w\\$ ' },
   })
 } catch (e) {
   log('[terminal-host] bash spawn FAILED: ' + (e && e.stack || e))
