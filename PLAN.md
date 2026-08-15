@@ -5,7 +5,7 @@
 > 方案决策（Pi 本地化 + 终端驻留 + 推敲 v2）：见 [docs/decision-local-pi-agent.md](docs/decision-local-pi-agent.md)
 > 方案决策（M2.8 Pi Agent → DeepSeek Harness 替换 + 体积实测 + 插件化机制）：见 [docs/decision-dsh-agent.md](docs/decision-dsh-agent.md)
 > GUI 设计（信息架构 v1）：见 [docs/design-gui.md](docs/design-gui.md)
-> 阶段规划（M2 套壳 ✅ / M3 体验优化+文件管理+真终端 🔜）：见 [docs/plan-phase1.md](docs/plan-phase1.md)
+> 阶段规划：M2 套壳 ✅ 见 [docs/plan-phase1.md](docs/plan-phase1.md)；M3 体验优化+文件管理 🔜 见 [docs/plan-phase2.md](docs/plan-phase2.md)
 
 ---
 
@@ -159,6 +159,7 @@ meow-academy/
 │   ├── decision-local-pi-agent.md # 🐧 方案决策：Pi 本地化 + 终端驻留 + 推敲 v2
 │   ├── design-gui.md              # 🎨 GUI 设计：信息架构 v1
 │   ├── plan-phase1.md             # 📝 第一阶段（M2 套壳）细化规划
+│   ├── plan-phase2.md             # 📝 第二阶段（M3 体验优化+文件管理）细化规划
 │   └── reference/                 # 📚 参考实现文档
 ├── dsh/                       # 🧩 DSH 独立 fork（gitignore，源码 92MB，打闭包用）
 ├── docs/reference/rag-algorithm.md  # 📚 RAG 算法参考（原 pi-agent-backend，已归档）
@@ -182,7 +183,7 @@ meow-academy/
 | M1 | 仓库 + 后端开发 + 云端部署 | ✅ 完成 |
 | M2 | 给 Pi 套壳：安卓骨架 + 聊天 + 终端 + Pi 本地运行（[细化规划](docs/plan-phase1.md)） | ✅ 完成（2026-08-11：真机聊天流式/三档保活/终端全通；debug APK 105MB） |
 | M2.8 | 内置 Pi Agent 换成 DeepSeek Harness（jsonrpc 协议 + 保留流式 + 精简体积；[决策与实施计划](docs/decision-dsh-agent.md)）；真终端提前 + 弃用 pi-agent-backend（2026-08-15 主人指示） | 🔄 进行中（Kotlin 层完成；剩：socket 连接层改造 + 真终端 PTY + 真机 runtime.bin 重打与验收） |
-| M3 | 体验优化 + 文件管理（数据中心）（真终端已提前到 M2；[细化规划](docs/plan-phase1.md#八m3-细化规划-体验优化--文件管理--真终端2026-08-11-主人指示)） | 🔜 待开始（当前目标） |
+| M3 | 体验优化 + 文件管理（数据中心）（真终端已提前到 M2；[细化规划](docs/plan-phase2.md)） | 🔜 待开始（当前目标） |
 | M4 | 知识库：md 导入 + SQLite Wiki + Markdown 渲染/编辑 | 🔜 后置（主人：知识库后面再说） |
 | M5 | RAG 检索 + 聊天强化 + 双模型配置 | 🔜 待开始 |
 | M6 | 联调测试 + 打包 APK（≤200MB） | 🔜 待开始 |
