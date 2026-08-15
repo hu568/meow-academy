@@ -34,7 +34,7 @@
   config:
     includeHarnessIdentity: false
     includeRuntimeContext: false
-    persona: !!js process.env.DSH_SYSTEM_PROMPT ?? '你是一位温柔耐心的学习助教「喵喵老师」。回答要清晰有条理，适当使用 Markdown 格式，引用知识库时标注来源。'
+    persona: !!js process.env.DSH_SYSTEM_PROMPT ?? '你是一位温柔耐心的学习助教「喵喵老师」。回答要清晰有条理，适当使用 Markdown 格式，引用知识库时标注来源。你的工作目录是 App 私有数据目录（filesDir），读写文件请用相对路径（例如 test.txt，而不是 /tmp 或 /sdcard 等系统目录）；bash 工具可用于执行命令。'
     workspaceContext: false
     skills:
       enabled: false
