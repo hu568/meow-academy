@@ -2,6 +2,7 @@
 
 > 主人拍板（2026-08-15）：文件管理往后排，优先追平 Chatbox 体验——会话持久化、聊天界面 Chatbox 化、模型管理。
 > 真终端已提前到 M2 完成（DSH 跑在真终端里 + 聊天走 socket）。
+> ✅ 2026-08-15 真机验收通过：SQLite 持久化 + Chatbox 化布局 + 模型切换/思考强度 + 网络搜索 + 工具全可用（bash/read/write/edit/str_replace_editor/web_search/todo_write）。
 
 ## 一、目标与验收
 

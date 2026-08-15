@@ -182,7 +182,7 @@ meow-academy/
 | M1 | 仓库 + 后端开发 + 云端部署 | ✅ 完成 |
 | M2 | 给 Pi 套壳：安卓骨架 + 聊天 + 终端 + Pi 本地运行（[细化规划](docs/plan-phase1.md)） | ✅ 完成（2026-08-11：真机聊天流式/三档保活/终端全通；debug APK 105MB） |
 | M2.8 | 内置 Pi Agent 换成 DeepSeek Harness（jsonrpc 协议 + 保留流式 + 精简体积；[决策与实施计划](docs/decision-dsh-agent.md)）；真终端提前 + 弃用 pi-agent-backend（2026-08-15 主人指示） | 🔄 进行中（Kotlin 层完成；剩：socket 连接层改造 + 真终端 PTY + 真机 runtime.bin 重打与验收） |
-| M3 | 会话持久化 + 聊天体验 Chatbox 化 + 模型管理（真终端已提前到 M2；[细化规划](docs/plan-phase2.md)） | 🔄 进行中（当前目标） |
+| M3 | 会话持久化 + 聊天体验 Chatbox 化 + 模型管理（真终端已提前到 M2；[细化规划](docs/plan-phase2.md)） | ✅ 完成（2026-08-15 真机验证：SQLite 持久化 + 抽屉/工具栏 + 模型切换/思考强度 + 网络搜索 + 工具全可用） |
 | M4 | 知识库：md 导入 + SQLite Wiki + Markdown 渲染/编辑 | 🔜 后置（主人：知识库后面再说） |
 | M5 | RAG 检索 + 聊天强化 + 双模型配置 | 🔜 待开始 |
 | M6 | 联调测试 + 打包 APK（≤200MB） | 🔜 待开始 |
