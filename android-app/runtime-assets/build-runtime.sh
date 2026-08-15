@@ -68,8 +68,15 @@ copy_elf_with_deps() {
 }
 
 copy_elf_with_deps "$NODE_BIN" "$RUNTIME/bin/node" node
-# 终端 bash：DSH 的 bash-local/tool-bash 都 spawn ['bash','-c']，runtime 必须自带 bash
-copy_elf_with_deps "$BASH_BIN" "$RUNTIME/bin/bash" bash
+# bash 二进制放 lib/bash.bin：Termux 编译的私有 ELF 不能直接 exec（untrusted_app EACCES），
+# 真终端（terminal-host）用 linker64 直接加载它；DSH 的 bash-local/tool-bash spawn ['bash','-c']
+# 走 bin/bash wrapper 脚本（exec → linker64 → lib/bash.bin），绕开直接 exec 私有 ELF 的限制。
+copy_elf_with_deps "$BASH_BIN" "$RUNTIME/lib/bash.bin" bash
+cat > "$RUNTIME/bin/bash" <<'EOF'
+#!/system/bin/sh
+exec /system/bin/linker64 "$HOME/meow-runtime/lib/bash.bin" --norc --noprofile "$@"
+EOF
+chmod +x "$RUNTIME/bin/bash"
 echo "  lib/ 现有 $(ls "$RUNTIME/lib" | grep -c '\.so' || true) 个 .so"
 
 # ── 3. DSH 闭包（PC 端 pnpm deploy 产物：node_modules + dsh/）──

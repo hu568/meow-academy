@@ -109,10 +109,16 @@ object RuntimeExtractor {
             }
         }
 
-        // bin/node 加可执行位（Termux 的 node 是静态链接，可直接 exec）
+        // bin/node 加可执行位（Termux 的 node 是动态链接，经 linker64 加载；执行位备用）
         val nodeBin = File(tmpDir, "bin/node")
         if (nodeBin.exists()) {
             nodeBin.setExecutable(true, false)
+        }
+        // bin/bash 是 wrapper 脚本（#!/system/bin/sh），DSH 的 bash 工具 spawn ['bash','-c']
+        // 时 kernel 要 exec 它，必须带可执行位（否则 EACCES）
+        val bashWrapper = File(tmpDir, "bin/bash")
+        if (bashWrapper.exists()) {
+            bashWrapper.setExecutable(true, false)
         }
 
         // 原子替换

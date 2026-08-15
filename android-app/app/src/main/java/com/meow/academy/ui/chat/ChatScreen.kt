@@ -1,6 +1,7 @@
 package com.meow.academy.ui.chat
 
 import android.text.method.LinkMovementMethod
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -80,16 +81,15 @@ import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.linkify.LinkifyPlugin
 import kotlinx.coroutines.launch
 
-/** DeepSeek 可切换模型（输入栏工具栏下拉） */
-private val DEEPSEEK_MODELS = listOf("deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner")
+/** DeepSeek 可切换模型（输入栏工具栏下拉；deepseek-chat/reasoner 已弃用，仅 v4 系列有效） */
+private val DEEPSEEK_MODELS = listOf("deepseek-v4-flash", "deepseek-v4-pro")
 
 /** 思考强度档位（llm-deepseek 合法值域 off/high/max） */
 private val REASONING_EFFORTS = listOf("off", "high", "max")
 
 private fun modelLabel(model: String): String = when (model) {
     "deepseek-v4-flash" -> "v4-flash"
-    "deepseek-chat" -> "chat"
-    "deepseek-reasoner" -> "reasoner"
+    "deepseek-v4-pro" -> "v4-pro"
     else -> model
 }
 
@@ -148,6 +148,11 @@ private fun ChatDetailView(
         if (messages.isNotEmpty() || streaming != null) {
             listState.scrollToItem(Int.MAX_VALUE)
         }
+    }
+
+    // 抽屉打开时，系统返回键关闭抽屉（而不是退出 App）
+    BackHandler(enabled = drawerState.isOpen) {
+        scope.launch { drawerState.close() }
     }
 
     ModalNavigationDrawer(

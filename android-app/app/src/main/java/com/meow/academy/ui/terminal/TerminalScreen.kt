@@ -1,5 +1,6 @@
 package com.meow.academy.ui.terminal
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -58,6 +59,11 @@ fun TerminalScreen(
     val runtimeState by vm.runtimeState.collectAsState()
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+
+    // 系统返回键：回到进入终端前的页面（文件管理/设置），而不是退出 App
+    BackHandler(enabled = onBack != null) {
+        onBack?.invoke()
+    }
 
     LaunchedEffect(Unit) {
         vm.start()

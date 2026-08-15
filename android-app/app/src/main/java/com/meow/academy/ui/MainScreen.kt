@@ -1,7 +1,10 @@
 package com.meow.academy.ui
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
@@ -50,6 +53,7 @@ private val TABS = listOf(
  * 默认首页取自 DataStore；用户手动切换后以手动选择为准（进程重建时
  * 由 rememberSaveable 恢复，若从未手动切换则回到设置里的默认首页）。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MainScreen(repository: SettingsRepository) {
     val defaultHome by repository.defaultHome.collectAsState(initial = HomeTab.CHAT)
@@ -71,14 +75,17 @@ fun MainScreen(repository: SettingsRepository) {
 
     Scaffold(
         bottomBar = {
-            NavigationBar {
-                TABS.forEach { info ->
-                    NavigationBarItem(
-                        selected = info.tab == selectedTab,
-                        onClick = { selectedTabName = info.tab.name },
-                        icon = { Icon(info.icon, contentDescription = null) },
-                        label = { Text(stringResource(info.labelRes)) },
-                    )
+            // 键盘弹出时隐藏底部导航栏，避免与聊天/终端输入栏的 imePadding 冲突（输入框被顶起）
+            if (!WindowInsets.isImeVisible) {
+                NavigationBar {
+                    TABS.forEach { info ->
+                        NavigationBarItem(
+                            selected = info.tab == selectedTab,
+                            onClick = { selectedTabName = info.tab.name },
+                            icon = { Icon(info.icon, contentDescription = null) },
+                            label = { Text(stringResource(info.labelRes)) },
+                        )
+                    }
                 }
             }
         },
