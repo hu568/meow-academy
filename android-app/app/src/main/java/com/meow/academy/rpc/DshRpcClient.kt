@@ -100,7 +100,7 @@ class DshRpcClient(
     private suspend fun dispatch(obj: JsonObject) {
         val method = obj["method"]?.jsonPrimitive?.contentOrNull
         val id = obj["id"]?.jsonPrimitive?.contentOrNull
-        android.util.Log.i("DshRpcClient", "recv: method=$method id=${id?.take(12)} ${obj.toString().take(150)}")
+        android.util.Log.i("DshRpcClient", "recv: method=$method id=${id?.take(12)} ${obj.toString().take(600)}")
 
         if (id != null) {
             // 响应帧（我们不会收到带 method 的请求帧）

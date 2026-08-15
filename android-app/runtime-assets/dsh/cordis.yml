@@ -42,15 +42,8 @@
       enableRunInBackground: false
     toolJobs: false
 
-# JSONL 会话持久化（compression: none 避开 zstd 原生依赖）
-- id: sessions
-  name: '@deepseek-ai/dsh-session-persistence-jsonl'
-  config:
-    root: !!js process.env.DSH_SESSION_ROOT ?? './.dsh-sessions'
-    compression: none
-
-- id: session-checkpoints
-  name: '@deepseek-ai/dsh-session-checkpoint-policy'
+# 会话持久化：JSONL backend 用 link() 做原子发布，Android SELinux 禁 link()（EACCES），
+# 已移除（内存会话，重启不保留历史）；M3 改用 SQLite backend 或 patch link→rename 恢复持久化。
 
 - id: tool-todo
   name: '@deepseek-ai/dsh-tool-todo'
