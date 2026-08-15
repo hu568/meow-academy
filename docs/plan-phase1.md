@@ -302,15 +302,15 @@ M2.0 原型验证（真机 Termux 跑 pi）
 | M3.2 | 文件管理基础：目录树浏览（App 私有目录 + 用户可见目录）、文件列表（名称/大小/时间/类型图标） | 浏览/排序正常 |
 | M3.3 | 文件操作：打开预览（文本/Markdown Markwon 复用）、编辑保存、新建/删除/重命名 | 增删改查闭环 |
 | M3.4 | 搜索：文件名搜索 + 近似匹配搜索（fzy 风格，Kotlin 实现或移植） | 两种搜索命中正确 |
-| M3.5 | 真终端（termux 化）：持久 bash 进程（PTY）+ 转义序列渲染 + 输入交互；独立于 pi RPC（聊天仍走 RPC） | vim/top 可跑、cd 持久、交互程序正常 |
+| M3.5 | ~~真终端（termux 化）：持久 bash 进程（PTY）+ 转义序列渲染 + 输入交互；独立于 pi RPC~~ —— **已提前到 M2**（DSH 跑在真终端里，聊天走本地 socket） | vim/top 可跑、cd 持久、交互程序正常 |
 | M3.6 | 终端与文件管理联动：文件管理「终端」按钮 → 终端 cwd = 当前目录 | 联动正确 |
 | M3.7 | 全链路验收 + 更新文档 | 验收标准 ✅ |
 
-### 8.3 真终端技术方向（M3.5）
+### 8.3 真终端技术方向（M3.5 → 已提前到 M2）
 
 - **PTY 方案**：runtime 内起持久 `bash`（或 `sh`）挂到 PTY（`/dev/ptmx`），App 通过管道读写；
   - 或用终端组件库（`termux-terminal-view`，GPL-3.0，需注意协议；或自绘转义序列渲染）
-- **与 Pi 的关系**：终端页直连 bash PTY；Pi 进程仍走 RPC（聊天/Agent 用）。两者并存互不干扰。
+- **与 DSH 的关系（已提前到 M2）**：DSH 跑在真终端里（bash 子进程），其 stdout/stderr 走 PTY（终端页可见日志）；聊天 JSON-RPC 改走本地 socket（stdio 不再承载协议）。
 - **node exec 限制**：真终端里 `node` 可能仍受 SELinux（untrusted_app 域禁 exec 自己 data 目录二进制）限制，需在方案里验证/规避（如通过 linker64 包装，或把 node 相关操作交给 Pi 的 RPC bash）。
 
 ### 8.4 M3 风险
