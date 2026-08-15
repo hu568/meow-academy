@@ -62,16 +62,10 @@ fun MainScreen(repository: SettingsRepository) {
 
     // 终端页覆盖（从设置/文件管理进入）
     var terminalOpen by rememberSaveable { mutableStateOf(false) }
-    // 入口语境：文件管理=知识库目录；设置=null（home）。打开时传给终端页重置 cwd
-    var terminalInitialCwd by rememberSaveable { mutableStateOf<String?>(null) }
-    val context = androidx.compose.ui.platform.LocalContext.current
-    // 知识库目录（M3 前的落点）：文件管理入口的终端从这里开始
-    val knowledgeDir = remember {
-        java.io.File(context.filesDir, "meow-knowledge").apply { mkdirs() }.absolutePath
-    }
+    // 真终端：bash 维护真实 cwd，入口语境由 bash 自身决定（文件管理的 cd 联动留待 M3）
 
     if (terminalOpen) {
-        TerminalScreen(initialCwd = terminalInitialCwd, onBack = { terminalOpen = false })
+        TerminalScreen(onBack = { terminalOpen = false })
         return
     }
 
@@ -97,11 +91,9 @@ fun MainScreen(repository: SettingsRepository) {
             when (selectedTab) {
                 HomeTab.CHAT -> ChatScreen()
                 HomeTab.FILES -> FilesScreen(onOpenTerminal = {
-                    terminalInitialCwd = knowledgeDir
                     terminalOpen = true
                 })
                 HomeTab.SETTINGS -> SettingsScreen(repository, onOpenTerminal = {
-                    terminalInitialCwd = null // home
                     terminalOpen = true
                 })
             }

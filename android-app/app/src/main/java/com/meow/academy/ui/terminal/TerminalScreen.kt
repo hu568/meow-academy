@@ -3,26 +3,24 @@ package com.meow.academy.ui.terminal
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.DeleteSweep
-import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -38,49 +36,43 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 
-/** 快捷命令 */
+/** 快捷命令（真终端直接发送） */
 private val QUICK_COMMANDS = listOf("ls", "pwd", "echo 喵~", "uname -a", "node -v")
 
 /**
- * 🖥️ 终端页（M2.5 + Bug1 修复）：命令输入 + 输出渲染（等宽字体），走 RPC bash。
- *
- * @param initialCwd 入口语境初始目录：文件管理=知识库目录；设置=null（home）。
- *                   cwd 变化时重置（两个入口复用同一 VM 实例，需在打开时重置语境）。
+ * 终端页（真终端 PTY 版）：直连 terminal-host 的 PTY socket，ANSI 转义序列已解析渲染。
  */
 @Composable
 fun TerminalScreen(
     vm: TerminalViewModel = viewModel(),
-    initialCwd: String? = null,
     onBack: (() -> Unit)? = null,
 ) {
-    val entries by vm.entries.collectAsState()
+    val lines by vm.lines.collectAsState()
+    val connected by vm.connected.collectAsState()
     val runtimeState by vm.runtimeState.collectAsState()
-    val cwd by vm.cwd.collectAsState()
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
-    // 入口语境变化 → 重置工作目录（每次打开终端都按入口设定初始 cwd）
-    LaunchedEffect(initialCwd) {
-        vm.setCwd(initialCwd)
+    LaunchedEffect(Unit) {
+        vm.start()
     }
 
-    LaunchedEffect(entries.size, entries.lastOrNull()?.output?.length) {
-        if (entries.isNotEmpty()) listState.animateScrollToItem(Int.MAX_VALUE)
+    LaunchedEffect(lines) {
+        if (lines.isNotEmpty()) listState.animateScrollToItem(lines.size - 1)
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF0D1117))
-            // 全屏覆盖页需手动避开系统状态栏/导航栏（MainActivity 用了 edge-to-edge）
             .systemBarsPadding(),
     ) {
-        // 标题栏
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -97,40 +89,39 @@ fun TerminalScreen(
                 }
             }
             Text(
-                text = "🖥️ 终端",
+                text = "终端",
                 style = MaterialTheme.typography.titleLarge,
                 color = Color(0xFFE6EDF3),
             )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = cwd,
-                style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFF8B949E),
-                fontFamily = FontFamily.Monospace,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            val (runtimeLabel, runtimeColor) = when (val rs = runtimeState) {
-                is com.meow.academy.runtime.RuntimeState.Running -> "● 运行中" to Color(0xFF3FB950)
-                is com.meow.academy.runtime.RuntimeState.Error -> "⚠ ${rs.message.take(12)}" to Color(0xFFF85149)
+            Spacer(Modifier.weight(1f))
+            val status: Pair<String, Color> = when {
+                connected -> "● PTY" to Color(0xFF3FB950)
+                runtimeState is com.meow.academy.runtime.RuntimeState.Running -> "● 运行中" to Color(0xFFD29922)
                 else -> "○ 未运行" to Color(0xFFF85149)
             }
+            val label = status.first
+            val color = status.second
             Text(
-                text = runtimeLabel,
+                text = label,
                 style = MaterialTheme.typography.labelSmall,
-                color = runtimeColor,
+                color = color,
             )
-            IconButton(onClick = { vm.clear() }) {
+            IconButton(onClick = { vm.sendInterrupt() }) {
+                Icon(
+                    Icons.Filled.KeyboardArrowDown,
+                    contentDescription = "发送 Ctrl-C",
+                    tint = Color(0xFFF85149),
+                )
+            }
+            IconButton(onClick = { vm.clearScreen() }) {
                 Icon(
                     Icons.Filled.DeleteSweep,
-                    contentDescription = "清空",
+                    contentDescription = "清空屏幕",
                     tint = Color(0xFF8B949E),
                 )
             }
         }
 
-        // 输出区
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -138,23 +129,21 @@ fun TerminalScreen(
                 .fillMaxWidth(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp),
         ) {
-            items(entries, key = { it.id }) { entry ->
-                TerminalBlock(entry)
-            }
-            if (entries.isEmpty()) {
-                item {
-                    Text(
-                        text = "喵～ 这里是终端\n输入命令后回车执行（pi RPC bash）\n当前目录：$cwd\n\n快捷命令：${QUICK_COMMANDS.joinToString("  ")}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF8B949E),
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(vertical = 8.dp),
-                    )
+            itemsIndexed(lines) { _, segments ->
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    segments.forEach { seg ->
+                        Text(
+                            text = seg.text,
+                            color = Color(seg.fg.toLong() and 0xFFFFFFFFL),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp,
+                            lineHeight = 16.sp,
+                        )
+                    }
                 }
             }
         }
 
-        // 快捷命令
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -164,13 +153,12 @@ fun TerminalScreen(
         ) {
             QUICK_COMMANDS.forEach { cmd ->
                 androidx.compose.material3.AssistChip(
-                    onClick = { vm.runCommand(cmd) },
+                    onClick = { vm.sendInput(cmd) },
                     label = { Text(cmd, fontSize = 12.sp) },
                 )
             }
         }
 
-        // 输入行
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -185,7 +173,7 @@ fun TerminalScreen(
                 modifier = Modifier.weight(1f),
                 singleLine = true,
                 shape = RoundedCornerShape(20.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(
+                textStyle = TextStyle(
                     fontFamily = FontFamily.Monospace,
                     color = Color(0xFFE6EDF3),
                     fontSize = 14.sp,
@@ -194,53 +182,11 @@ fun TerminalScreen(
             Spacer(Modifier.width(6.dp))
             IconButton(
                 onClick = {
-                    vm.runCommand(input)
-                    input = ""
+                    if (input.isNotBlank()) { vm.sendInput(input); input = "" }
                 },
                 enabled = input.isNotBlank(),
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "执行", tint = Color(0xFF58A6FF))
-            }
-        }
-    }
-}
-
-/** 单条命令 + 输出块 */
-@Composable
-private fun TerminalBlock(entry: TerminalEntry) {
-    Column(modifier = Modifier.padding(vertical = 3.dp)) {
-        Text(
-            text = "❯ ${entry.command}",
-            style = MaterialTheme.typography.bodyMedium,
-            color = Color(0xFF58A6FF),
-            fontFamily = FontFamily.Monospace,
-        )
-        if (entry.error != null) {
-            Text(
-                text = "⚠ ${entry.error}",
-                color = Color(0xFFF85149),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 13.sp,
-            )
-        } else {
-            Text(
-                text = entry.output.ifEmpty { if (entry.isRunning) "…" else "（无输出）" },
-                color = Color(0xFFE6EDF3),
-                fontFamily = FontFamily.Monospace,
-                fontSize = 13.sp,
-            )
-            if (!entry.isRunning) {
-                val suffix = when {
-                    entry.cancelled -> "（已取消）"
-                    entry.exitCode == 0 -> "（exit 0）"
-                    else -> "（exit ${entry.exitCode}）"
-                }
-                Text(
-                    text = suffix,
-                    color = if (entry.exitCode == 0) Color(0xFF3FB950) else Color(0xFFF85149),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                )
             }
         }
     }

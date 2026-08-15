@@ -1,228 +1,277 @@
 package com.meow.academy.ui.terminal
 
 import android.app.Application
+import android.net.LocalSocket
+import android.net.LocalSocketAddress
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.meow.academy.MeowAcademyApp
-import com.meow.academy.rpc.DshNotifMethods
-import com.meow.academy.rpc.bool
-import com.meow.academy.rpc.int
-import com.meow.academy.rpc.str
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
+import java.io.File
 
-/** 终端条目：一条命令 + 其输出（不可变，更新用 copy 保证 StateFlow 触发重组） */
-data class TerminalEntry(
-    val id: String,
-    val command: String,
-    val output: String = "",
-    val exitCode: Int? = null,
-    val cancelled: Boolean = false,
-    val error: String? = null,
-) {
-    val isRunning: Boolean get() = exitCode == null && error == null
-}
+/** 终端渲染段：一段同色文本（ANSI 前景色已解析） */
+data class TerminalSegment(val text: String, val fg: Int)
+
+/** 终端单格：字符 + 前景色 */
+private data class Cell(var ch: Char = ' ', var fg: Int = DEFAULT_FG)
+
+/** 默认前景色（浅灰白） */
+private const val DEFAULT_FG = 0xFFE6EDF3.toInt()
 
 /**
- * 终端页 ViewModel（DSH 版）。
+ * 终端页 ViewModel（真终端 PTY 版）。
  *
- * 走 meow-jsonrpc 插件的 `session/bash` 方法（非真 PTY，体验同现状）：
- *  - 输出经 session.bashOutput 通知按 requestId 流式累积；
- *  - 响应返回最终 exitCode / status / timedOut / cancelled；
- *  - 命令的工作目录用 workdir 参数指定（不再前缀 cd &&）。
+ * 直连 terminal-host 的 PTY unix socket（DSH_TERMINAL_SOCKET），维护一个屏幕缓冲区：
+ *  - PTY 输出流经 ANSI/VT100 转义序列解析（SGR 颜色 / CUP 光标 / ED 清屏 / CR/LF/BS/TAB），
+ *    更新屏幕网格；
+ *  - 输入直接写入 PTY（bash 维护真实 cwd，无需虚拟 cwd）。
  *
- * ### 虚拟 cwd（Bug1 修复的延续）
- * 每条 bash 都是独立 shell，因此 App 端维护 [cwd] 状态：
- *  - `cd` 命令在 App 端解析（更新 [cwd]，不发执行；发 `pwd` 带 workdir 验证存在性）；
- *  - 其余命令带 workdir=[cwd]，让每条独立 shell 都从当前虚拟目录开始。
- * 双入口初始化不同 cwd：文件管理 → 知识库目录；设置 → home（null 时用 homeDir）。
+ * 真终端意味着：cd 持久、vim/top 可跑、交互程序正常。
  */
 class TerminalViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val runtimeManager = (app as MeowAcademyApp).runtimeManager
+    private val application = app as MeowAcademyApp
 
-    /** DSH 视角的 home（= App 私有目录，DshProcessLauncher 里 HOME/filesDir 一致） */
-    val homeDir: String = app.filesDir.absolutePath
+    private var socket: LocalSocket? = null
+    private var readJob: Job? = null
 
-    private val _cwd = MutableStateFlow(homeDir)
-    val cwd: StateFlow<String> = _cwd.asStateFlow()
+    private val COLS = 80
+    private val ROWS = 24
+    private val grid = Array(ROWS) { Array(COLS) { Cell() } }
+    private var curRow = 0
+    private var curCol = 0
 
-    private val _entries = MutableStateFlow<List<TerminalEntry>>(emptyList())
-    val entries: StateFlow<List<TerminalEntry>> = _entries.asStateFlow()
+    /** 渲染输出：每行是若干同色段 */
+    private val _lines = MutableStateFlow<List<List<TerminalSegment>>>(emptyList())
+    val lines: StateFlow<List<List<TerminalSegment>>> = _lines.asStateFlow()
 
-    private var currentCollector: Job? = null
+    private val _connected = MutableStateFlow(false)
+    val connected: StateFlow<Boolean> = _connected.asStateFlow()
 
-    /** 最近一条终端命令的 requestId（abortRunning 用） */
-    private var lastRequestId: String? = null
+    /** 运行时状态（排障） */
+    val runtimeState = application.runtimeManager.state
 
-    /** DSH 运行时状态描述（排障用） */
-    val runtimeState = runtimeManager.state
-
-    /** 设置初始工作目录（入口语境变化时由 UI 调用，如 文件管理=知识库 / 设置=home） */
-    fun setCwd(cwd: String?) {
-        _cwd.value = cwd?.takeIf { it.isNotBlank() } ?: homeDir
+    /** 连接 PTY socket 并开始读循环 */
+    fun start() {
+        if (readJob != null) return
+        readJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val path = File(application.filesDir, "dsh-terminal.sock").absolutePath
+                val s = LocalSocket()
+                s.connect(LocalSocketAddress(path, LocalSocketAddress.Namespace.FILESYSTEM))
+                s.soTimeout = 0
+                socket = s
+                _connected.value = true
+                val buf = ByteArray(4096)
+                while (true) {
+                    val n = s.inputStream.read(buf)
+                    if (n < 0) break
+                    val chunk = String(buf, 0, n, Charsets.UTF_8)
+                    process(chunk)
+                }
+            } catch (e: Exception) {
+                // 断连（runtime 退出 / socket 关闭）
+            } finally {
+                _connected.value = false
+                socket?.close()
+                socket = null
+                readJob = null
+            }
+        }
     }
 
-    /**
-     * 执行命令。`cd` 在 App 端解析并验证；其余命令带 workdir=[cwd] 走 session/bash。
-     */
-    fun runCommand(cmd: String) {
-        val trimmed = cmd.trim()
-        if (trimmed.isEmpty()) return
-
-        // ── cd 解析（虚拟 cwd）──
-        if (trimmed == "cd" || trimmed.startsWith("cd ")) {
-            runCd(trimmed)
-            return
+    /** 发送输入到 PTY（命令 + 回车） */
+    fun sendInput(text: String) {
+        val s = socket ?: return
+        try {
+            s.outputStream.write((text + "\r").toByteArray(Charsets.UTF_8))
+            s.outputStream.flush()
+        } catch (e: Exception) {
+            // 断连
         }
+    }
 
-        val rpc = runtimeManager.rpcClient
-        if (rpc == null) {
-            _entries.value = _entries.value + TerminalEntry(
-                id = "err-" + System.currentTimeMillis(),
-                command = cmd,
-                output = "",
-                error = "DSH 运行时未启动（设置 → 常驻开关 / 检查 API Key）",
-            )
-            return
+    /** 发送 Ctrl-C（中止前台程序，如 vim/top/卡住的命令） */
+    fun sendInterrupt() {
+        val s = socket ?: return
+        try {
+            s.outputStream.write(byteArrayOf(0x03))
+            s.outputStream.flush()
+        } catch (e: Exception) {
         }
+    }
 
-        val id = rpc.newId()
-        val entry = TerminalEntry(id = id, command = trimmed)
-        _entries.value = _entries.value + entry
-        lastRequestId = id
+    fun clearScreen() {
+        for (r in 0 until ROWS) for (c in 0 until COLS) grid[r][c] = Cell()
+        curRow = 0
+        curCol = 0
+        render()
+    }
 
-        viewModelScope.launch {
-            // 事件收集：同 requestId 的 session.bashOutput → 累积 delta（不可变 copy 更新）
-            currentCollector?.cancel()
-            currentCollector = launch {
-                rpc.events
-                    .filter { it.method == DshNotifMethods.BASH_OUTPUT && it.requestId == id }
-                    .collect { ev ->
-                        val delta = ev.delta ?: return@collect
-                        _entries.value = _entries.value.map { e ->
-                            if (e.id == id) e.copy(output = e.output + delta) else e
-                        }
+    fun stop() {
+        readJob?.cancel()
+        readJob = null
+        socket?.close()
+        socket = null
+        _connected.value = false
+    }
+
+    override fun onCleared() {
+        stop()
+        super.onCleared()
+    }
+
+    // ── ANSI 解析 ──
+    private var escBuf = StringBuilder()
+    private var inEsc = false
+    private var csiParams = ""
+    private var inCsi = false
+
+    private fun process(chunk: String) {
+        var i = 0
+        while (i < chunk.length) {
+            val ch = chunk[i]
+            when {
+                inEsc -> {
+                    when (ch) {
+                        '[' -> { inEsc = false; inCsi = true; csiParams = "" }
+                        else -> { inEsc = false }
                     }
-            }
-
-            // 执行：workdir 直接指定虚拟 cwd；超时 300s 与服务端 maxTimeoutMs 对齐
-            val result = rpc.bash(
-                requestId = id,
-                command = trimmed,
-                workdir = _cwd.value,
-                timeoutMs = 300_000,
-                awaitTimeoutMs = 310_000,
-            )
-            currentCollector?.cancel()
-            currentCollector = null
-
-            if (result != null) {
-                val cancelled = result.bool("cancelled") == true || result.bool("timedOut") == true
-                _entries.value = _entries.value.map { e ->
-                    if (e.id == id) {
-                        // 被中止时 exitCode 常为 null（信号杀死），用 -1 兜底结束 running 状态
-                        e.copy(
-                            exitCode = result.int("exitCode") ?: if (cancelled) -1 else null,
-                            cancelled = cancelled,
-                        )
-                    } else e
                 }
-            } else {
-                _entries.value = _entries.value.map { e ->
-                    if (e.id == id) e.copy(error = "bash 执行失败（超时/断连）") else e
-                }
-            }
-        }
-    }
-
-    /** cd 命令：App 端解析目标目录，发 `pwd`（workdir=目标）验证存在性，成功才更新 [cwd] */
-    private fun runCd(cmd: String) {
-        val target = cmd.removePrefix("cd").trim()
-        val resolved = resolveCwd(_cwd.value, target)
-
-        val rpc = runtimeManager.rpcClient
-        if (rpc == null) {
-            // 运行时未启动：至少本地记录（目录存在性无法验证）
-            _cwd.value = resolved
-            _entries.value = _entries.value + TerminalEntry(
-                id = "cd-" + System.currentTimeMillis(),
-                command = cmd,
-                output = "",
-                error = "DSH 运行时未启动，已本地切换目录（未验证）",
-            )
-            return
-        }
-
-        val id = rpc.newId()
-        _entries.value = _entries.value + TerminalEntry(id = id, command = cmd)
-
-        viewModelScope.launch {
-            val result = rpc.bash(
-                requestId = id,
-                command = "pwd",
-                workdir = resolved,
-                timeoutMs = 30_000,
-                awaitTimeoutMs = 40_000,
-            )
-            val success = result != null && result.int("exitCode") == 0
-            _entries.value = _entries.value.map { e ->
-                if (e.id == id) {
-                    if (success) {
-                        e.copy(output = resolved, exitCode = 0)
+                inCsi -> {
+                    if (ch in '0'..'9' || ch == ';' || ch == '?') {
+                        csiParams += ch
                     } else {
-                        e.copy(
-                            output = "",
-                            error = "目录不存在或无权限",
-                        )
+                        handleCsi(ch)
+                        inCsi = false
                     }
-                } else e
+                }
+                ch == '\u001b' -> { inEsc = true }
+                ch == '\r' -> curCol = 0
+                ch == '\n' -> lineFeed()
+                ch == '\b' -> if (curCol > 0) curCol--
+                ch == '\t' -> curCol = minOf(COLS - 1, (curCol / 8 + 1) * 8)
+                else -> putChar(ch)
             }
-            if (success) _cwd.value = resolved
+            i++
         }
+        render()
     }
 
-    /** 解析 cd 目标 → 绝对路径（支持 ~ / ~/x / 相对 / 绝对 / ..，手动 normalize） */
-    private fun resolveCwd(current: String, target: String): String {
-        val expanded = when {
-            target.isEmpty() -> homeDir
-            target == "~" -> homeDir
-            target.startsWith("~/") -> homeDir + "/" + target.removePrefix("~/")
-            else -> target
-        }
-        val raw = if (expanded.startsWith("/")) expanded else current + "/" + expanded
-        return normalizePath(raw)
-    }
-
-    /** 路径规范化：处理 `.` / `..` / 连续斜杠 */
-    private fun normalizePath(path: String): String {
-        val stack = ArrayDeque<String>()
-        for (part in path.split('/')) {
-            when (part) {
-                "", "." -> Unit
-                ".." -> if (stack.isNotEmpty()) stack.removeLast()
-                else -> stack.addLast(part)
+    private fun handleCsi(final: Char) {
+        val parts = csiParams.split(';').map { it.toIntOrNull() ?: 0 }
+        when (final) {
+            'H', 'f' -> {
+                curRow = (parts.getOrNull(0) ?: 1).coerceIn(1, ROWS) - 1
+                curCol = (parts.getOrNull(1) ?: 1).coerceIn(1, COLS) - 1
             }
+            'A' -> curRow = (curRow - (parts.getOrNull(0) ?: 1)).coerceAtLeast(0)
+            'B' -> curRow = (curRow + (parts.getOrNull(0) ?: 1)).coerceAtMost(ROWS - 1)
+            'C' -> curCol = (curCol + (parts.getOrNull(0) ?: 1)).coerceAtMost(COLS - 1)
+            'D' -> curCol = (curCol - (parts.getOrNull(0) ?: 1)).coerceAtLeast(0)
+            'J' -> clearDisplay(parts.getOrNull(0) ?: 0)
+            'K' -> clearLine(parts.getOrNull(0) ?: 0)
+            'm' -> applySgr(parts)
+            else -> {} // 忽略未支持的 CSI（DEC 等）
         }
-        return "/" + stack.joinToString("/")
     }
 
-    /** 中止正在运行的终端命令（session/bashCancel） */
-    fun abortRunning() {
-        val id = lastRequestId ?: return
-        viewModelScope.launch {
-            runtimeManager.rpcClient?.bashCancel(id)
+    private fun applySgr(params: List<Int>) {
+        if (params.isEmpty() || params.all { it == 0 }) {
+            grid[curRow][curCol].fg = DEFAULT_FG
+            return
+        }
+        // 只处理前景色；存储到「当前行」的后续字符（简化：无持久颜色态，用下一个字符的颜色）
+        // 为支持多字符着色，这里维护一个「当前前景色」，由 putChar 使用
+        var fg = currentFg
+        var i = 0
+        while (i < params.size) {
+            when (val p = params[i]) {
+                0 -> fg = DEFAULT_FG
+                1 -> {} // bold 忽略
+                in 30..37 -> fg = ANSI_COLORS[p - 30]
+                in 90..97 -> fg = ANSI_BRIGHT[p - 90]
+                39 -> fg = DEFAULT_FG
+            }
+            i++
+        }
+        currentFg = fg
+    }
+
+    private var currentFg = DEFAULT_FG
+
+    private fun putChar(ch: Char) {
+        if (ch.code < 32) return
+        if (curCol >= COLS) { curCol = 0; lineFeed() }
+        val cell = grid[curRow][curCol]
+        cell.ch = ch
+        cell.fg = currentFg
+        curCol++
+    }
+
+    private fun lineFeed() {
+        if (curRow < ROWS - 1) {
+            curRow++
+        } else {
+            scrollUp()
         }
     }
 
-    fun clear() {
-        currentCollector?.cancel()
-        currentCollector = null
-        lastRequestId = null
-        _entries.value = emptyList()
+    private fun scrollUp() {
+        for (r in 0 until ROWS - 1) grid[r] = grid[r + 1]
+        grid[ROWS - 1] = Array(COLS) { Cell() }
+    }
+
+    private fun clearDisplay(mode: Int) {
+        when (mode) {
+            2 -> for (r in 0 until ROWS) for (c in 0 until COLS) grid[r][c] = Cell()
+            0 -> for (c in curCol until COLS) grid[curRow][c] = Cell()
+            1 -> for (c in 0..curCol) grid[curRow][c] = Cell()
+        }
+    }
+
+    private fun clearLine(mode: Int) {
+        when (mode) {
+            0 -> for (c in curCol until COLS) grid[curRow][c] = Cell()
+            1 -> for (c in 0..curCol) grid[curRow][c] = Cell()
+            2 -> for (c in 0 until COLS) grid[curRow][c] = Cell()
+        }
+    }
+
+    /** 屏幕网格 → 渲染行（每行按同色连续字符合并成段） */
+    private fun render() {
+        val out = mutableListOf<List<TerminalSegment>>()
+        for (r in 0 until ROWS) {
+            val segs = mutableListOf<TerminalSegment>()
+            var sb = StringBuilder()
+            var fg = DEFAULT_FG
+            for (c in 0 until COLS) {
+                val cell = grid[r][c]
+                if (cell.fg != fg) {
+                    if (sb.isNotEmpty()) { segs.add(TerminalSegment(sb.toString(), fg)); sb = StringBuilder() }
+                    fg = cell.fg
+                }
+                sb.append(cell.ch)
+            }
+            if (sb.isNotEmpty()) segs.add(TerminalSegment(sb.toString(), fg))
+            out.add(segs)
+        }
+        _lines.value = out
+    }
+
+    companion object {
+        private val ANSI_COLORS = intArrayOf(
+            0xFF000000.toInt(), 0xFFCD3131.toInt(), 0xFF0DBC79.toInt(), 0xFFE5E510.toInt(),
+            0xFF2472C8.toInt(), 0xFFBC3FBC.toInt(), 0xFF11A8CD.toInt(), 0xFFE5E5E5.toInt(),
+        )
+        private val ANSI_BRIGHT = intArrayOf(
+            0xFF666666.toInt(), 0xFFF14C4C.toInt(), 0xFF23D18B.toInt(), 0xFFF5F543.toInt(),
+            0xFF3B8EEA.toInt(), 0xFFD670D6.toInt(), 0xFF29B8DB.toInt(), 0xFFFFFFFF.toInt(),
+        )
     }
 }
