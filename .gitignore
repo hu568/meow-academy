@@ -1,5 +1,6 @@
 # 本地生成的 agent 记忆文件，不入库
 AGENTS.md
+MEMORY.md
 
 # Reasonix 本地配置
 .reasonix/
@@ -14,3 +15,7 @@ release/*
 .tmp/
 
 .agents/
+
+# DSH fork（本地独立副本，从 github.com/deepseek-ai/deepseek-harness fork，
+# 用于构建 runtime 闭包，与 D:\deepseek-harness 解耦；源码 92MB + node_modules 964MB，不入库）
+/dsh/

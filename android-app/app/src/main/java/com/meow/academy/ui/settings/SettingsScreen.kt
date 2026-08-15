@@ -142,7 +142,7 @@ fun SettingsScreen(
             SettingsRow(
                 icon = Icons.Filled.Stop,
                 title = stringResource(R.string.settings_stop_service),
-                subtitle = "立即停止 Pi 后台进程",
+                subtitle = "立即停止 DSH 后台进程",
                 onClick = { app.runtimeManager.stop() },
             )
         }
@@ -316,7 +316,7 @@ private fun ModelConfigDialog(
                     visualTransformation = PasswordVisualTransformation(),
                 )
                 Text(
-                    "Key 仅存本机（DataStore），注入 pi 进程环境变量，不会上传。",
+                    "Key 仅存本机（DataStore），注入 DSH 进程环境变量，不会上传。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

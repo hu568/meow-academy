@@ -4,16 +4,16 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.meow.academy.MeowAcademyApp
-import com.meow.academy.rpc.PiEventTypes
-import com.meow.academy.rpc.RpcCommand
-import com.meow.academy.rpc.str
+import com.meow.academy.rpc.DshNotifMethods
+import com.meow.academy.rpc.bool
 import com.meow.academy.rpc.int
+import com.meow.academy.rpc.str
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
-import java.io.File
 
 /** 终端条目：一条命令 + 其输出（不可变，更新用 copy 保证 StateFlow 触发重组） */
 data class TerminalEntry(
@@ -28,24 +28,24 @@ data class TerminalEntry(
 }
 
 /**
- * 终端页 ViewModel（M2.5 + Bug1 修复）。
+ * 终端页 ViewModel（DSH 版）。
  *
- * 走 RPC `bash` 命令执行（非真 PTY，见决策 3.2）：
- * 发送时带 id，`bash_execution_update`（delta 增量）流式累积，
- * response 返回最终 output / exitCode。
+ * 走 meow-jsonrpc 插件的 `session/bash` 方法（非真 PTY，体验同现状）：
+ *  - 输出经 session.bashOutput 通知按 requestId 流式累积；
+ *  - 响应返回最终 exitCode / status / timedOut / cancelled；
+ *  - 命令的工作目录用 workdir 参数指定（不再前缀 cd &&）。
  *
- * ### 虚拟 cwd（Bug1 修复）
- * pi 的 session.cwd 固定、RPC 无 set_cwd 命令、每条 bash 都是独立 shell，
- * 因此 App 端维护 [cwd] 状态：
- *  - `cd` 命令在 App 端解析（更新 [cwd]，不发 RPC；发 `cd <目标> && pwd` 验证存在性）；
- *  - 其余命令执行时前缀 `cd "<cwd>" &&`，让每条独立 shell 都从当前虚拟目录开始。
+ * ### 虚拟 cwd（Bug1 修复的延续）
+ * 每条 bash 都是独立 shell，因此 App 端维护 [cwd] 状态：
+ *  - `cd` 命令在 App 端解析（更新 [cwd]，不发执行；发 `pwd` 带 workdir 验证存在性）；
+ *  - 其余命令带 workdir=[cwd]，让每条独立 shell 都从当前虚拟目录开始。
  * 双入口初始化不同 cwd：文件管理 → 知识库目录；设置 → home（null 时用 homeDir）。
  */
 class TerminalViewModel(app: Application) : AndroidViewModel(app) {
 
     private val runtimeManager = (app as MeowAcademyApp).runtimeManager
 
-    /** pi 视角的 home（= App 私有目录，PiProcessLauncher 里 HOME/filesDir 一致） */
+    /** DSH 视角的 home（= App 私有目录，DshProcessLauncher 里 HOME/filesDir 一致） */
     val homeDir: String = app.filesDir.absolutePath
 
     private val _cwd = MutableStateFlow(homeDir)
@@ -56,7 +56,10 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
 
     private var currentCollector: Job? = null
 
-    /** Pi 运行时状态描述（排障用） */
+    /** 最近一条终端命令的 requestId（abortRunning 用） */
+    private var lastRequestId: String? = null
+
+    /** DSH 运行时状态描述（排障用） */
     val runtimeState = runtimeManager.state
 
     /** 设置初始工作目录（入口语境变化时由 UI 调用，如 文件管理=知识库 / 设置=home） */
@@ -65,7 +68,7 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 执行命令。`cd` 在 App 端解析并验证；其余命令前缀 `cd "<cwd>" &&` 后走 RPC bash。
+     * 执行命令。`cd` 在 App 端解析并验证；其余命令带 workdir=[cwd] 走 session/bash。
      */
     fun runCommand(cmd: String) {
         val trimmed = cmd.trim()
@@ -80,10 +83,10 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
         val rpc = runtimeManager.rpcClient
         if (rpc == null) {
             _entries.value = _entries.value + TerminalEntry(
-                id = "err-${System.currentTimeMillis()}",
+                id = "err-" + System.currentTimeMillis(),
                 command = cmd,
                 output = "",
-                error = "Pi 运行时未启动（设置 → 常驻开关 / 检查 API Key）",
+                error = "DSH 运行时未启动（设置 → 常驻开关 / 检查 API Key）",
             )
             return
         }
@@ -91,51 +94,53 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
         val id = rpc.newId()
         val entry = TerminalEntry(id = id, command = trimmed)
         _entries.value = _entries.value + entry
-
-        // 前缀 cd：让独立 shell 从当前虚拟目录开始
-        val fullCommand = "cd \"${_cwd.value}\" && $trimmed"
+        lastRequestId = id
 
         viewModelScope.launch {
-            // 事件收集：与当前命令同 id 的 bash_execution_update → 累积 delta（不可变 copy 更新）
+            // 事件收集：同 requestId 的 session.bashOutput → 累积 delta（不可变 copy 更新）
             currentCollector?.cancel()
             currentCollector = launch {
-                rpc.events.collect { ev ->
-                    if (ev.id == id && ev.type == PiEventTypes.BASH_EXECUTION_UPDATE) {
-                        val delta = ev.raw.str("delta") ?: return@collect
+                rpc.events
+                    .filter { it.method == DshNotifMethods.BASH_OUTPUT && it.requestId == id }
+                    .collect { ev ->
+                        val delta = ev.delta ?: return@collect
                         _entries.value = _entries.value.map { e ->
                             if (e.id == id) e.copy(output = e.output + delta) else e
                         }
                     }
-                }
             }
 
-            val resp = rpc.send(
-                RpcCommand(type = "bash", command = fullCommand, id = id),
+            // 执行：workdir 直接指定虚拟 cwd；超时 300s 与服务端 maxTimeoutMs 对齐
+            val result = rpc.bash(
+                requestId = id,
+                command = trimmed,
+                workdir = _cwd.value,
                 timeoutMs = 300_000,
+                awaitTimeoutMs = 310_000,
             )
             currentCollector?.cancel()
             currentCollector = null
 
-            if (resp?.success == true) {
-                val data = resp.data
+            if (result != null) {
+                val cancelled = result.bool("cancelled") == true || result.bool("timedOut") == true
                 _entries.value = _entries.value.map { e ->
                     if (e.id == id) {
+                        // 被中止时 exitCode 常为 null（信号杀死），用 -1 兜底结束 running 状态
                         e.copy(
-                            output = data?.str("output") ?: e.output,
-                            exitCode = data?.int("exitCode"),
-                            cancelled = data?.str("cancelled")?.toBoolean() ?: false,
+                            exitCode = result.int("exitCode") ?: if (cancelled) -1 else null,
+                            cancelled = cancelled,
                         )
                     } else e
                 }
             } else {
                 _entries.value = _entries.value.map { e ->
-                    if (e.id == id) e.copy(error = resp?.error ?: "bash 执行失败") else e
+                    if (e.id == id) e.copy(error = "bash 执行失败（超时/断连）") else e
                 }
             }
         }
     }
 
-    /** cd 命令：App 端解析目标目录，发 `cd <目标> && pwd` 验证存在性，成功才更新 [cwd] */
+    /** cd 命令：App 端解析目标目录，发 `pwd`（workdir=目标）验证存在性，成功才更新 [cwd] */
     private fun runCd(cmd: String) {
         val target = cmd.removePrefix("cd").trim()
         val resolved = resolveCwd(_cwd.value, target)
@@ -145,10 +150,10 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
             // 运行时未启动：至少本地记录（目录存在性无法验证）
             _cwd.value = resolved
             _entries.value = _entries.value + TerminalEntry(
-                id = "cd-${System.currentTimeMillis()}",
+                id = "cd-" + System.currentTimeMillis(),
                 command = cmd,
                 output = "",
-                error = "Pi 运行时未启动，已本地切换目录（未验证）",
+                error = "DSH 运行时未启动，已本地切换目录（未验证）",
             )
             return
         }
@@ -157,24 +162,22 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
         _entries.value = _entries.value + TerminalEntry(id = id, command = cmd)
 
         viewModelScope.launch {
-            val resp = rpc.send(
-                RpcCommand(type = "bash", command = "cd \"$resolved\" && pwd", id = id),
+            val result = rpc.bash(
+                requestId = id,
+                command = "pwd",
+                workdir = resolved,
                 timeoutMs = 30_000,
+                awaitTimeoutMs = 40_000,
             )
-            val success = resp?.success == true && resp?.data?.int("exitCode") == 0
+            val success = result != null && result.int("exitCode") == 0
             _entries.value = _entries.value.map { e ->
                 if (e.id == id) {
                     if (success) {
-                        e.copy(
-                            output = resp?.data?.str("output") ?: resolved,
-                            exitCode = 0,
-                        )
+                        e.copy(output = resolved, exitCode = 0)
                     } else {
                         e.copy(
-                            output = resp?.data?.str("output") ?: "",
-                            error = resp?.data?.str("output")?.lines()?.lastOrNull()
-                                ?: resp?.error
-                                ?: "目录不存在",
+                            output = "",
+                            error = "目录不存在或无权限",
                         )
                     }
                 } else e
@@ -188,10 +191,10 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
         val expanded = when {
             target.isEmpty() -> homeDir
             target == "~" -> homeDir
-            target.startsWith("~/") -> "$homeDir/${target.removePrefix("~/")}"
+            target.startsWith("~/") -> homeDir + "/" + target.removePrefix("~/")
             else -> target
         }
-        val raw = if (expanded.startsWith("/")) expanded else "$current/$expanded"
+        val raw = if (expanded.startsWith("/")) expanded else current + "/" + expanded
         return normalizePath(raw)
     }
 
@@ -208,15 +211,18 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
         return "/" + stack.joinToString("/")
     }
 
+    /** 中止正在运行的终端命令（session/bashCancel） */
     fun abortRunning() {
+        val id = lastRequestId ?: return
         viewModelScope.launch {
-            runtimeManager.rpcClient?.sendFireAndForget(RpcCommand(type = "abort_bash"))
+            runtimeManager.rpcClient?.bashCancel(id)
         }
     }
 
     fun clear() {
         currentCollector?.cancel()
         currentCollector = null
+        lastRequestId = null
         _entries.value = emptyList()
     }
 }

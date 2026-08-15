@@ -26,14 +26,14 @@ class AppLifecycleObserver(
 
     private val handler = Handler(Looper.getMainLooper())
     private val stopRunnable = Runnable {
-        Log.i("AppLifecycle", "timed stop: pi 停止")
+        Log.i("AppLifecycle", "timed stop: dsh 停止")
         app.runtimeManager.stop()
     }
 
     override fun onStart(owner: LifecycleOwner) {
         handler.removeCallbacks(stopRunnable)
         scope.launch {
-            // 前台使用中必然要 pi；start() 幂等
+            // 前台使用中必然要 DSH；start() 幂等
             app.runtimeManager.start()
         }
     }

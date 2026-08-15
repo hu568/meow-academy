@@ -124,10 +124,12 @@ object RuntimeExtractor {
         targetDir
     }
 
-    /** 运行时是否已解压就绪 */
+    /** 运行时是否已解压就绪（DSH 版：node + closure + cordis.yml） */
     fun isInstalled(context: Context): Boolean {
         val dir = File(context.filesDir, RUNTIME_DIR)
-        return File(dir, "bin/node").exists() && File(dir, "lib/node_modules").exists()
+        return File(dir, "bin/node").exists()
+            && File(dir, "node_modules").exists()
+            && File(dir, "dsh/cordis.yml").exists()
     }
 
     /** 运行时目录 */

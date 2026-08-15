@@ -77,7 +77,7 @@ class SettingsRepository(private val context: Context) {
         prefs[Keys.LLM_MODEL] ?: "deepseek-v4-flash"
     }
 
-    /** DeepSeek API Key（App 私有存储，注入 pi 进程环境变量） */
+    /** DeepSeek API Key（App 私有存储，注入 DSH 进程环境变量） */
     val llmApiKey: Flow<String> = context.settingsDataStore.data.map { prefs ->
         prefs[Keys.LLM_API_KEY] ?: ""
     }

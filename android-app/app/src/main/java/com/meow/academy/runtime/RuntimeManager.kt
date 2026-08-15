@@ -23,7 +23,7 @@ sealed interface RuntimeState {
     /** 已解压就绪，进程未启动 */
     data object Ready : RuntimeState
 
-    /** pi 进程运行中 */
+    /** DSH 进程运行中 */
     data object Running : RuntimeState
 
     /** 异常（解压失败 / 进程拉起失败 / key 缺失） */
@@ -31,9 +31,9 @@ sealed interface RuntimeState {
 }
 
 /**
- * Pi 运行时管理器：编排「解压 → 拉起前台服务 → pi 进程」。
+ * DSH 运行时管理器：编排「解压 → 拉起前台服务 → DSH 进程」。
  *
- * 进程本身由 [PiRuntimeService] 持有；本类负责状态转换与对外暴露 RPC 客户端。
+ * 进程本身由 [DshRuntimeService] 持有；本类负责状态转换与对外暴露 RPC 客户端。
  */
 class RuntimeManager(
     private val context: Context,
@@ -45,12 +45,12 @@ class RuntimeManager(
     /** start() 互斥，防并发触发两次解压/启动 */
     private val startMutex = Mutex()
 
-    /** 由 PiRuntimeService 设置；未启动时为空 */
+    /** 由 DshRuntimeService 设置；未启动时为空 */
     @Volatile
-    var rpcClient: com.meow.academy.rpc.PiRpcClient? = null
+    var rpcClient: com.meow.academy.rpc.DshRpcClient? = null
         internal set
 
-    /** PiRuntimeService 拉起进程成功后调用 */
+    /** DshRuntimeService 拉起进程成功后调用 */
     fun markRunning() {
         Log.i("RuntimeManager", "markRunning")
         _state.value = RuntimeState.Running
@@ -67,7 +67,7 @@ class RuntimeManager(
     /** 启动失败：置 Error（保留给设置页展示，不再回落） */
     fun markLaunchFailed() {
         Log.i("RuntimeManager", "markLaunchFailed")
-        _state.value = RuntimeState.Error("Pi 启动失败，请检查配置后重试")
+        _state.value = RuntimeState.Error("DSH 启动失败，请检查配置后重试")
     }
 
     /** 幂等启动：已运行直接返回 */
@@ -100,14 +100,14 @@ class RuntimeManager(
         }
         _state.value = RuntimeState.Ready
 
-        // 2) 启动前台服务（服务内拉起 pi 进程并创建 RPC 客户端）
-        val intent = Intent(context, PiRuntimeService::class.java)
+        // 2) 启动前台服务（服务内拉起 DSH 进程并创建 RPC 客户端）
+        val intent = Intent(context, DshRuntimeService::class.java)
         ContextCompat.startForegroundService(context, intent)
     }
 
     /** 停止：通知服务停进程、回收客户端 */
     fun stop() {
-        val intent = Intent(context, PiRuntimeService::class.java).setAction(PiRuntimeService.ACTION_STOP)
+        val intent = Intent(context, DshRuntimeService::class.java).setAction(DshRuntimeService.ACTION_STOP)
         context.startService(intent)
         rpcClient?.close()
         rpcClient = null

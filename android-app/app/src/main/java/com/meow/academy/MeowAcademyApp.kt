@@ -6,7 +6,7 @@ import com.meow.academy.data.chat.ChatDatabase
 import com.meow.academy.data.settings.ResidentMode
 import com.meow.academy.data.settings.SettingsRepository
 import com.meow.academy.runtime.AppLifecycleObserver
-import com.meow.academy.runtime.PiKeepAliveWorker
+import com.meow.academy.runtime.DshKeepAliveWorker
 import com.meow.academy.runtime.RuntimeManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,9 +30,9 @@ class MeowAcademyApp : Application() {
         appScope.launch {
             settingsRepository.residentMode.collect { mode ->
                 if (mode == ResidentMode.OFF) {
-                    WorkManager.getInstance(this@MeowAcademyApp).cancelUniqueWork(PiKeepAliveWorker.UNIQUE_WORK)
+                    WorkManager.getInstance(this@MeowAcademyApp).cancelUniqueWork(DshKeepAliveWorker.UNIQUE_WORK)
                 } else {
-                    PiKeepAliveWorker.schedule(this@MeowAcademyApp)
+                    DshKeepAliveWorker.schedule(this@MeowAcademyApp)
                 }
             }
         }

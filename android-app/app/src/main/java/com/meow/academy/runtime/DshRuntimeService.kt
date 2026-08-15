@@ -15,7 +15,7 @@ import androidx.core.content.ContextCompat
 import com.meow.academy.MainActivity
 import com.meow.academy.MeowAcademyApp
 import com.meow.academy.R
-import com.meow.academy.rpc.PiRpcClient
+import com.meow.academy.rpc.DshRpcClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,18 +24,18 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
- * Pi 运行时前台服务（M2.2）。
+ * DSH 运行时前台服务（替代 pi 时代的 PiRuntimeService）。
  *
- * 持有 pi 进程与 [PiRpcClient]，通过低优先级常驻通知保活；
+ * 持有 DSH 进程与 [DshRpcClient]，通过低优先级常驻通知保活；
  * 三档常驻策略（M2.6）在此基础上控制通知/停止时机。
  */
-class PiRuntimeService : Service() {
+class DshRuntimeService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var process: Process? = null
-    private var client: PiRpcClient? = null
+    private var client: DshRpcClient? = null
 
-    /** 启动互斥：startPi 异步（先读配置），onStartCommand 并发时防止双进程 */
+    /** 启动互斥：startDsh 异步（先读配置），onStartCommand 并发时防止双进程 */
     private val launching = java.util.concurrent.atomic.AtomicBoolean(false)
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -48,37 +48,40 @@ class PiRuntimeService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            stopPi()
+            stopDsh()
             return START_NOT_STICKY
         }
         if (process != null && process?.isAlive == true) {
             return START_NOT_STICKY // 已运行
         }
         if (launching.compareAndSet(false, true)) {
-            startPi()
+            startDsh()
         }
         return START_NOT_STICKY
     }
 
-    /** 拉起 pi 进程并创建 RPC 客户端（异步：需要先读配置） */
-    private fun startPi() {
+    /** 拉起 DSH 进程并创建 RPC 客户端（异步：需要先读配置） */
+    private fun startDsh() {
         val app = application as MeowAcademyApp
         scope.launch {
             try {
                 val settings = app.settingsRepository
-                val provider = settings.llmProvider.first()
+                val providerRaw = settings.llmProvider.first()
                 val model = settings.llmModel.first()
                 val apiKey = settings.llmApiKey.first()
 
                 if (apiKey.isBlank()) {
                     updateNotification("缺少 API Key")
-                    Log.w("PiRuntimeService", "apiKey blank, skip launch")
+                    Log.w("DshRuntimeService", "apiKey blank, skip launch")
                     stopSelf()
                     return@launch
                 }
 
-                val proc = PiProcessLauncher.launch(this@PiRuntimeService, provider, model, apiKey)
-                Log.i("PiRuntimeService", "launched proc alive=${proc.isAlive}")
+                // 设置里的 "deepseek" 映射到 DSH 的 provider 路由名 deepseek-official
+                val provider = if (providerRaw == "deepseek") "deepseek-official" else providerRaw
+
+                val proc = DshProcessLauncher.launch(this@DshRuntimeService, apiKey)
+                Log.i("DshRuntimeService", "launched proc alive=" + proc.isAlive)
                 if (process != null) {
                     // 竞态兜底：本服务不应有第二个存活进程（launching 已互斥，防御性检查）
                     proc.destroyForcibly()
@@ -86,25 +89,38 @@ class PiRuntimeService : Service() {
                     return@launch
                 }
                 process = proc
-                val rpc = PiRpcClient(
-                    stdout = proc.inputStream,
+                val rpc = DshRpcClient(
+                    input = proc.inputStream,
+                    output = proc.outputStream,
                     stderr = proc.errorStream,
-                    stdin = proc.outputStream,
                 )
                 client = rpc
                 // 暴露给 RuntimeManager（App 持有）
                 app.runtimeManager.rpcClient = rpc
-                Log.i("PiRuntimeService", "rpc client created, starting read loop")
+                Log.i("DshRuntimeService", "rpc client created, starting read loop")
                 rpc.start()
+
+                // JSON-RPC 握手：initialize 完成前会话请求会用错 model，必须先等它成功
+                val initialized = rpc.initialize(
+                    cwd = app.filesDir.absolutePath,
+                    provider = provider,
+                    model = model,
+                )
+                if (!initialized) {
+                    Log.e("DshRuntimeService", "initialize failed, kill proc")
+                    proc.destroyForcibly()
+                    throw IllegalStateException("DSH initialize 失败")
+                }
+
                 app.runtimeManager.markRunning()
-                updateNotification("运行中 · $provider/$model")
-                Log.i("PiRuntimeService", "startPi complete")
+                updateNotification("运行中 · " + provider + "/" + model)
+                Log.i("DshRuntimeService", "startDsh complete")
                 launching.set(false)
 
                 // 进程意外退出 → 收管道、清理状态、回落
                 Thread {
                     val code = proc.waitFor()
-                    Log.i("PiRuntimeService", "pi exited code=$code")
+                    Log.i("DshRuntimeService", "dsh exited code=" + code)
                     if (process === proc) {
                         process = null
                     }
@@ -117,9 +133,9 @@ class PiRuntimeService : Service() {
                     stopSelf()
                 }.start()
             } catch (e: Exception) {
-                Log.e("PiRuntimeService", "start pi failed", e)
+                Log.e("DshRuntimeService", "start dsh failed", e)
                 markLaunchFailed()
-                updateNotification("启动失败：${e.message}")
+                updateNotification("启动失败：" + e.message)
                 stopSelf()
             } finally {
                 launching.set(false)
@@ -143,7 +159,7 @@ class PiRuntimeService : Service() {
             "喵学堂运行时",
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "Pi Agent 后台运行时（低优先级，不打扰）"
+            description = "DeepSeek Harness 后台运行时（低优先级，不打扰）"
             setShowBadge(false)
         }
         manager.createNotificationChannel(channel)
@@ -157,7 +173,7 @@ class PiRuntimeService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle("喵学堂 · Pi 运行时")
+            .setContentTitle("喵学堂 · DSH 运行时")
             .setContentText(text)
             .setContentIntent(pending)
             .setOngoing(true)
@@ -176,7 +192,7 @@ class PiRuntimeService : Service() {
     }
 
     override fun onDestroy() {
-        Log.i("PiRuntimeService", "onDestroy")
+        Log.i("DshRuntimeService", "onDestroy")
         client?.close()
         client = null
         process?.destroyForcibly()
@@ -187,8 +203,8 @@ class PiRuntimeService : Service() {
     }
 
     /** 主动停止：杀进程、收管道（waitFor 线程会自行 stopSelf，这里不重复调） */
-    private fun stopPi() {
-        Log.i("PiRuntimeService", "stopPi")
+    private fun stopDsh() {
+        Log.i("DshRuntimeService", "stopDsh")
         val rm = (application as MeowAcademyApp).runtimeManager
         client?.close()
         client = null
@@ -200,18 +216,18 @@ class PiRuntimeService : Service() {
     }
 
     companion object {
-        const val ACTION_STOP = "com.meow.academy.action.STOP_PI"
-        private const val CHANNEL_ID = "pi_runtime"
+        const val ACTION_STOP = "com.meow.academy.action.STOP_DSH"
+        private const val CHANNEL_ID = "dsh_runtime"
         private const val NOTIFICATION_ID = 1001
 
         /** 便捷启动（确保前台服务） */
         fun start(context: Context) {
-            ContextCompat.startForegroundService(context, Intent(context, PiRuntimeService::class.java))
+            ContextCompat.startForegroundService(context, Intent(context, DshRuntimeService::class.java))
         }
 
         /** 便捷停止 */
         fun stop(context: Context) {
-            context.startService(Intent(context, PiRuntimeService::class.java).setAction(ACTION_STOP))
+            context.startService(Intent(context, DshRuntimeService::class.java).setAction(ACTION_STOP))
         }
     }
 }
