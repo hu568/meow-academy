@@ -51,6 +51,9 @@ interface ChatDao {
     @Query("UPDATE messages SET toolCallsJson = :toolCallsJson WHERE id = :id")
     suspend fun updateMessageTools(id: Long, toolCallsJson: String?)
 
+    @Query("UPDATE messages SET segmentsJson = :segmentsJson WHERE id = :id")
+    suspend fun updateMessageSegments(id: Long, segmentsJson: String?)
+
     @Query("DELETE FROM messages WHERE sessionId = :sessionId")
     suspend fun deleteMessages(sessionId: Long)
 

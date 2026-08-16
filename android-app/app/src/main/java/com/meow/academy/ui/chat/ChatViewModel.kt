@@ -16,13 +16,16 @@ import com.meow.academy.rpc.DshEventTypes
 import com.meow.academy.rpc.DshNotifMethods
 import com.meow.academy.rpc.DshRpcClient
 import com.meow.academy.rpc.DshTurnEndKinds
+import com.meow.academy.rpc.LlmProviderInfo
 import com.meow.academy.rpc.str
+import com.meow.academy.runtime.RuntimeState
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -79,7 +82,30 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val webSearchEnabled: StateFlow<Boolean> = settingsRepository.webSearchEnabled
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    // ── 模型管理：可切换 provider 与模型列表（M4，从 DSH RPC 读取） ──
+    private val DEFAULT_MODELS = listOf("deepseek-v4-flash", "deepseek-v4-pro")
+
+    private val _providers = MutableStateFlow<List<LlmProviderInfo>>(emptyList())
+    val providers: StateFlow<List<LlmProviderInfo>> = _providers.asStateFlow()
+
+    private val _availableModels = MutableStateFlow(DEFAULT_MODELS)
+    val availableModels: StateFlow<List<String>> = _availableModels.asStateFlow()
+
+    /** 当前 provider（DataStore "deepseek" → DSH 路由 "deepseek-official"） */
+    val currentProvider: StateFlow<String> = settingsRepository.llmProvider
+        .map { if (it == "deepseek") "deepseek-official" else it }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "deepseek-official")
+
     private var client = runtimeManager.rpcClient
+
+    init {
+        // DSH 启动成功后自动拉取 provider 目录与当前 provider 的模型列表
+        viewModelScope.launch {
+            runtimeManager.state.collect { s ->
+                if (s is RuntimeState.Running) refreshModelCatalog()
+            }
+        }
+    }
 
     /** 当前流式会话对应的 DSH sessionId（停止生成用） */
     private var streamingDshSessionId: String? = null
@@ -91,9 +117,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      */
     data class StreamingState(
         val messageId: Long,
-        val content: String = "",
-        val thinking: String = "",
-        val toolCalls: List<ToolCallInfo> = emptyList(),
+        val segments: List<Segment> = emptyList(),
     )
 
     data class ToolCallInfo(
@@ -103,6 +127,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val result: String = "",
         val isError: Boolean = false,
     )
+
+    /** 有序步骤：思考段 / 文本段 / 工具调用按 DSH 事件到达顺序交错渲染 */
+    sealed interface Segment {
+        data class Reasoning(val text: String) : Segment
+        data class Text(val text: String) : Segment
+        data class Tool(val call: ToolCallInfo) : Segment
+    }
 
     fun openSession(id: Long) {
         _currentSessionId.value = id
@@ -187,6 +218,34 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 刷新 provider 目录 + 当前 provider 的模型列表（进入聊天页/运行时启动后调用） */
+    fun refreshModelCatalog() {
+        viewModelScope.launch {
+            val c = runtimeManager.rpcClient ?: return@launch
+            val disabled = settingsRepository.disabledProviders.first()
+            _providers.value = (c.llmProviders() ?: emptyList()).filter { it.provider !in disabled }
+            val p = currentProvider.value
+            val models = c.llmModels(p) ?: emptyList()
+            _availableModels.value = if (models.isEmpty()) DEFAULT_MODELS else models.map { it.id }
+        }
+    }
+
+    /** 切换 provider：更新默认 + 选第一个模型 + 当前会话立即生效 */
+    fun selectProvider(provider: String) {
+        viewModelScope.launch {
+            val c = runtimeManager.rpcClient ?: client
+            val models = c?.llmModels(provider) ?: emptyList()
+            val first = if (models.isEmpty()) DEFAULT_MODELS.first() else models.first().id
+            settingsRepository.setLlmProvider(provider)
+            settingsRepository.setLlmModel(first)
+            _availableModels.value = if (models.isEmpty()) DEFAULT_MODELS else models.map { it.id }
+            val sessionId = _currentSessionId.value
+            if (sessionId != null) {
+                c?.setModel(dshSessionIdOf(sessionId), provider = provider, model = first)
+            }
+        }
+    }
+
     /** 切换思考强度：更新全局默认 + 当前会话立即生效（session/setModel） */
     fun selectReasoningEffort(effort: String) {
         viewModelScope.launch {
@@ -232,9 +291,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         var lastPersist = 0L
 
         val persist: suspend (StreamingState, MessageStatus) -> Unit = { s, status ->
-            dao.updateMessageContent(assistantId, s.content, status)
-            dao.updateMessageThinking(assistantId, s.thinking)
-            dao.updateMessageTools(assistantId, json.encodeToString(JsonArray.serializer(), toolsToJson(s.toolCalls)))
+            dao.updateMessageContent(assistantId, "", status)
+            dao.updateMessageSegments(assistantId, json.encodeToString(JsonArray.serializer(), segmentsToJson(s.segments)))
             dao.touchSession(roomSessionId)
         }
 
@@ -261,9 +319,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                                         val chunk = ev.chunk ?: return@runCatching
                                         when (chunk.str("type")) {
                                             DshChunkTypes.REASONING_DELTA ->
-                                                state = state.copy(thinking = state.thinking + (chunk.str("text") ?: ""))
+                                                state = state.copy(segments = appendReasoning(state.segments, chunk.str("text") ?: ""))
                                             DshChunkTypes.TEXT_DELTA ->
-                                                state = state.copy(content = state.content + (chunk.str("text") ?: ""))
+                                                state = state.copy(segments = appendText(state.segments, chunk.str("text") ?: ""))
                                         }
                                         _streaming.value = state
                                         val now = System.currentTimeMillis()
@@ -276,18 +334,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                                         val id = ev.toolCallId ?: "tool-" + System.currentTimeMillis()
                                         val name = ev.toolName ?: "unknown"
                                         val args = ev.toolArguments ?: ""
-                                        state = state.copy(toolCalls = state.toolCalls + ToolCallInfo(id = id, name = name, arguments = args))
+                                        val call = ToolCallInfo(id = id, name = name, arguments = args)
+                                        state = state.copy(segments = state.segments + Segment.Tool(call))
                                         _streaming.value = state
                                     }
                                     DshEventTypes.TOOL_RESULT -> {
-                                        val id = ev.toolCallId
+                                        val id = ev.toolResultCallId
                                         if (id == null) return@runCatching
-                                        state = state.copy(toolCalls = state.toolCalls.map { old ->
-                                            if (old.id != id) return@map old
-                                            old.copy(
-                                                result = ev.toolResultText ?: old.result,
-                                                isError = ev.toolResultIsError,
-                                            )
+                                        state = state.copy(segments = state.segments.map { seg ->
+                                            if (seg is Segment.Tool && seg.call.id == id) {
+                                                seg.copy(call = seg.call.copy(
+                                                    result = ev.toolResultText ?: seg.call.result,
+                                                    isError = ev.toolResultIsError,
+                                                ))
+                                            } else {
+                                                seg
+                                            }
                                         })
                                         _streaming.value = state
                                     }
@@ -338,15 +400,49 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _streaming.value = null
     }
 
-    private fun toolsToJson(tools: List<ToolCallInfo>): JsonArray = buildJsonArray {
-        tools.forEach { t ->
-            add(buildJsonObject {
-                put("id", t.id)
-                put("name", t.name)
-                put("arguments", t.arguments)
-                put("result", t.result)
-                put("isError", t.isError)
-            })
+    /** 有序步骤序列 → JSON（落库 segmentsJson 字段） */
+    private fun segmentsToJson(segments: List<Segment>): JsonArray = buildJsonArray {
+        segments.forEach { seg ->
+            when (seg) {
+                is Segment.Reasoning -> add(buildJsonObject {
+                    put("type", "reasoning")
+                    put("text", seg.text)
+                })
+                is Segment.Text -> add(buildJsonObject {
+                    put("type", "text")
+                    put("text", seg.text)
+                })
+                is Segment.Tool -> add(buildJsonObject {
+                    put("type", "tool")
+                    put("id", seg.call.id)
+                    put("name", seg.call.name)
+                    put("arguments", seg.call.arguments)
+                    put("result", seg.call.result)
+                    put("isError", seg.call.isError)
+                })
+            }
+        }
+    }
+
+    /** reasoning-delta 追加到末尾 Reasoning 段；末尾不是 Reasoning（或空列表）则新建一段 */
+    private fun appendReasoning(segments: List<Segment>, text: String): List<Segment> {
+        if (text.isEmpty()) return segments
+        val last = segments.lastOrNull()
+        return if (last is Segment.Reasoning) {
+            segments.dropLast(1) + Segment.Reasoning(last.text + text)
+        } else {
+            segments + Segment.Reasoning(text)
+        }
+    }
+
+    /** text-delta 追加到末尾 Text 段；末尾不是 Text（或空列表）则新建一段 */
+    private fun appendText(segments: List<Segment>, text: String): List<Segment> {
+        if (text.isEmpty()) return segments
+        val last = segments.lastOrNull()
+        return if (last is Segment.Text) {
+            segments.dropLast(1) + Segment.Text(last.text + text)
+        } else {
+            segments + Segment.Text(text)
         }
     }
 }

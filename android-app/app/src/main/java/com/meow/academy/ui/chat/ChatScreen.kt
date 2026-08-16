@@ -34,8 +34,6 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.DropdownMenu
@@ -60,6 +58,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -76,10 +75,13 @@ import com.meow.academy.data.chat.MessageEntity
 import com.meow.academy.data.chat.MessageRole
 import com.meow.academy.data.chat.MessageStatus
 import com.meow.academy.data.chat.SessionEntity
+import com.meow.academy.rpc.LlmProviderInfo
+import com.meow.academy.rpc.str
 import io.noties.markwon.Markwon
 import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.linkify.LinkifyPlugin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 /** DeepSeek 可切换模型（输入栏工具栏下拉；deepseek-chat/reasoner 已弃用，仅 v4 系列有效） */
 private val DEEPSEEK_MODELS = listOf("deepseek-v4-flash", "deepseek-v4-pro")
@@ -92,6 +94,9 @@ private fun modelLabel(model: String): String = when (model) {
     "deepseek-v4-pro" -> "v4-pro"
     else -> model
 }
+
+private fun providerLabel(provider: String, providers: List<LlmProviderInfo>): String =
+    providers.firstOrNull { it.provider == provider }?.displayName ?: provider
 
 private fun effortLabel(effort: String): String = when (effort) {
     "off" -> "关闭思考"
@@ -125,6 +130,9 @@ private fun ChatDetailView(
     val llmModel by vm.llmModel.collectAsState()
     val reasoningEffort by vm.reasoningEffort.collectAsState()
     val webSearchEnabled by vm.webSearchEnabled.collectAsState()
+    val providers by vm.providers.collectAsState()
+    val availableModels by vm.availableModels.collectAsState()
+    val currentProvider by vm.currentProvider.collectAsState()
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -143,9 +151,16 @@ private fun ChatDetailView(
         }
     }
 
-    // 新消息/流式增量 → 自动滚到底部（scrollToItem 无动画，避免流式时与内容追加竞争导致抽搐）
-    LaunchedEffect(messages.size, streaming?.content?.length, streaming?.thinking?.length) {
-        if (messages.isNotEmpty() || streaming != null) {
+    // 贴底跟随：仅当用户处于底部时才自动滚到底；用户上滑后暂停跟随，滚回底部恢复。
+    var atBottom by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.canScrollForward }
+            .distinctUntilChanged()
+            .collect { canScroll -> atBottom = !canScroll }
+    }
+    // 新消息/流式增量 → 贴底时自动跟随（scrollToItem 无动画，避免流式时与内容追加竞争导致抽搐）
+    LaunchedEffect(messages.size, streaming?.segments) {
+        if (atBottom && (messages.isNotEmpty() || streaming != null)) {
             listState.scrollToItem(Int.MAX_VALUE)
         }
     }
@@ -192,9 +207,13 @@ private fun ChatDetailView(
                     llmModel = llmModel,
                     reasoningEffort = reasoningEffort,
                     webSearchEnabled = webSearchEnabled,
+                    providers = providers,
+                    availableModels = availableModels,
+                    currentProvider = currentProvider,
                     onSend = { vm.sendMessage(input); input = "" },
                     onStop = vm::stopGenerating,
                     onSelectModel = vm::selectModel,
+                    onSelectProvider = vm::selectProvider,
                     onSelectReasoningEffort = vm::selectReasoningEffort,
                     onToggleWebSearch = vm::toggleWebSearch,
                     onPickFile = { filePicker.launch("*/*") },
@@ -230,20 +249,10 @@ private fun ChatDetailView(
                     }
                     streaming?.let { s ->
                         item(key = "streaming") {
-                            val entity = MessageEntity(
-                                id = -1,
-                                sessionId = -1,
-                                role = MessageRole.ASSISTANT,
-                                content = s.content,
-                                thinking = s.thinking,
-                                toolCallsJson = null,
+                            AssistantBody(
+                                segments = s.segments,
                                 status = MessageStatus.STREAMING,
                             )
-                            Column {
-                                s.thinking.takeIf { it.isNotBlank() }?.let { ThinkingCard(it) }
-                                s.toolCalls.forEach { ToolCard(it) }
-                                AssistantBubble(entity)
-                            }
                         }
                     }
                 }
@@ -366,12 +375,161 @@ private fun MessageRow(msg: MessageEntity) {
     when (msg.role) {
         MessageRole.USER -> UserBubble(msg.content)
         MessageRole.ASSISTANT -> {
-            Column {
-                msg.thinking.takeIf { it.isNotBlank() }?.let { ThinkingCard(it) }
-                msg.toolCallsJson?.let { json ->
-                    parseToolCalls(json).forEach { ToolCard(it) }
+            val segments = parseSegments(msg.segmentsJson)
+            if (segments != null) {
+                AssistantBody(
+                    segments = segments,
+                    status = msg.status,
+                )
+            } else {
+                // 旧消息兼容：segmentsJson 为空时回退 thinking + toolCallsJson
+                Column {
+                    msg.thinking.takeIf { it.isNotBlank() }?.let { ThinkingCard(it) }
+                    msg.toolCallsJson?.let { json ->
+                        parseToolCalls(json).forEach { ToolCard(it) }
+                    }
+                    AssistantBubble(msg.content, msg.status)
                 }
-                AssistantBubble(msg)
+            }
+        }
+    }
+}
+
+/**
+ * 助手消息主体：组外思考/文本按到达顺序展示（思考是独立折叠卡、文本是气泡，均不并入工具组）；
+ * 工具调用序列折叠成一组，组内若存在「运行中」的工具则自动展开（运行输出完自动收起）。
+ */
+@Composable
+private fun AssistantBody(
+    segments: List<ChatViewModel.Segment>,
+    status: MessageStatus,
+) {
+    val toolIndices = segments.indices.filter { segments[it] is ChatViewModel.Segment.Tool }
+
+    Column {
+        if (toolIndices.isEmpty()) {
+            // 无工具：思考折叠卡 + 文本气泡，按顺序
+            segments.forEach { seg ->
+                when (seg) {
+                    is ChatViewModel.Segment.Reasoning -> ThinkingCard(seg.text)
+                    is ChatViewModel.Segment.Text -> TextBubble(seg.text, status)
+                    is ChatViewModel.Segment.Tool -> Unit
+                }
+            }
+        } else {
+            val firstTool = toolIndices.first()
+            val lastTool = toolIndices.last()
+            // 工具组前（对提问的思考 / 干活前的回复，均不并入工具组）
+            for (i in 0 until firstTool) {
+                when (val seg = segments[i]) {
+                    is ChatViewModel.Segment.Reasoning -> ThinkingCard(seg.text)
+                    is ChatViewModel.Segment.Text -> TextBubble(seg.text, status)
+                    is ChatViewModel.Segment.Tool -> Unit
+                }
+            }
+            // 工具调用序列折叠成一组
+            ToolGroup(segments.subList(firstTool, lastTool + 1), status)
+            // 工具组后（干活完成后的思考 / 最终回复）
+            for (i in lastTool + 1 until segments.size) {
+                when (val seg = segments[i]) {
+                    is ChatViewModel.Segment.Reasoning -> ThinkingCard(seg.text)
+                    is ChatViewModel.Segment.Text -> TextBubble(seg.text, status)
+                    is ChatViewModel.Segment.Tool -> Unit
+                }
+            }
+        }
+        // 空态兜底（尚无任何内容：加载中 / 空回复）
+        if (segments.isEmpty()) {
+            AssistantBubble("", status)
+        }
+    }
+}
+
+/** 文本气泡（Text 段）：流式用纯文本，完成后用 Markdown 渲染 */
+@Composable
+private fun TextBubble(text: String, status: MessageStatus) {
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier
+                .widthIn(max = 320.dp)
+                .clip(RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(10.dp),
+        ) {
+            if (status == MessageStatus.STREAMING) {
+                Text(text, style = MaterialTheme.typography.bodyLarge)
+            } else {
+                MarkdownText(text)
+            }
+        }
+    }
+}
+
+/** 思考段（工具组内）：组展开后直接展示，不单独折叠 */
+@Composable
+private fun ThinkingBlock(thinking: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+    ) {
+        Text(
+            "🧠 思考",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = thinking,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
+}
+
+/** 工具调用折叠组：收起时显示「🔧 工具调用 xN」；有运行中的工具时自动展开，运行完自动收起 */
+@Composable
+private fun ToolGroup(segments: List<ChatViewModel.Segment>, status: MessageStatus) {
+    val toolCount = segments.count { it is ChatViewModel.Segment.Tool }
+    val hasRunning = segments.any {
+        it is ChatViewModel.Segment.Tool && it.call.result.isBlank() && !it.call.isError
+    }
+    var userExpanded by remember { mutableStateOf(false) }
+    val expanded = hasRunning || userExpanded
+
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 2.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.secondaryContainer)
+                .clickable { userExpanded = !userExpanded }
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "🔧 工具调用 x$toolCount",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (expanded) "▾ 收起" else "▸ 展开",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (expanded) {
+            segments.forEach { seg ->
+                when (seg) {
+                    is ChatViewModel.Segment.Reasoning -> ThinkingBlock(seg.text)
+                    is ChatViewModel.Segment.Text -> TextBubble(seg.text, status)
+                    is ChatViewModel.Segment.Tool -> ToolCard(seg.call)
+                }
             }
         }
     }
@@ -393,7 +551,7 @@ private fun UserBubble(text: String) {
 }
 
 @Composable
-private fun AssistantBubble(msg: MessageEntity) {
+private fun AssistantBubble(content: String, status: MessageStatus) {
     Row(modifier = Modifier.fillMaxWidth()) {
         Box(
             modifier = Modifier
@@ -403,7 +561,7 @@ private fun AssistantBubble(msg: MessageEntity) {
                 .padding(10.dp),
         ) {
             when {
-                msg.content.isBlank() && msg.status == MessageStatus.STREAMING -> {
+                content.isBlank() && status == MessageStatus.STREAMING -> {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(16.dp),
@@ -413,13 +571,13 @@ private fun AssistantBubble(msg: MessageEntity) {
                         Text("思考中…", style = MaterialTheme.typography.bodyMedium)
                     }
                 }
-                msg.content.isNotBlank() && msg.status == MessageStatus.STREAMING -> Text(
-                    text = msg.content,
+                content.isNotBlank() && status == MessageStatus.STREAMING -> Text(
+                    text = content,
                     style = MaterialTheme.typography.bodyLarge,
                 )
-                msg.content.isNotBlank() -> MarkdownText(msg.content)
+                content.isNotBlank() -> MarkdownText(content)
                 else -> Text(
-                    msg.status.takeIf { it == MessageStatus.ERROR }?.let { "⚠️ 出错" } ?: "（空回复）",
+                    status.takeIf { it == MessageStatus.ERROR }?.let { "⚠️ 出错" } ?: "（空回复）",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.error,
                 )
@@ -428,80 +586,99 @@ private fun AssistantBubble(msg: MessageEntity) {
     }
 }
 
-/** thinking 折叠卡片 */
+/** thinking 折叠胶囊（默认收起一行，点击展开） */
 @Composable
 private fun ThinkingCard(thinking: String) {
     var expanded by remember { mutableStateOf(false) }
-    Card(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
-            .clickable { expanded = !expanded },
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .clickable { expanded = !expanded }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.padding(10.dp)) {
-            Text(
-                text = if (expanded) "🧠 思考过程（点击收起）" else "🧠 思考过程（点击展开）",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (expanded) {
-                Text(
-                    text = thinking,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-            }
-        }
+        Text(
+            text = "🧠 思考过程",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    if (expanded) {
+        Text(
+            text = thinking,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 12.dp, top = 4.dp, end = 8.dp),
+        )
     }
 }
 
-/** 工具调用卡片 */
+/** 工具调用胶囊：默认折叠成一行（图标 + 工具名 + 状态 + 箭头），点击展开参数/结果 */
 @Composable
 private fun ToolCard(tool: ChatViewModel.ToolCallInfo) {
-    var expanded by remember { mutableStateOf(false) }
-    Card(
+    var expanded by remember(tool.id) { mutableStateOf(false) }
+    val statusMark = when {
+        tool.isError -> "✗"
+        tool.result.isNotBlank() -> "✓"
+        else -> "…"
+    }
+    val statusColor = when {
+        tool.isError -> MaterialTheme.colorScheme.error
+        tool.result.isNotBlank() -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
-            .clickable { expanded = !expanded },
-        colors = CardDefaults.cardColors(
-            containerColor = if (tool.isError) {
-                MaterialTheme.colorScheme.errorContainer
-            } else {
-                MaterialTheme.colorScheme.secondaryContainer
-            },
-        ),
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                if (tool.isError) MaterialTheme.colorScheme.errorContainer
+                else MaterialTheme.colorScheme.surfaceContainerLow,
+            )
+            .clickable { expanded = !expanded }
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.padding(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("🛠 ${tool.name}", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.weight(1f))
+        Text(
+            "🛠 ${tool.name}",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Spacer(Modifier.weight(1f))
+        Text(statusMark, color = statusColor, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.width(4.dp))
+        Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+    if (expanded) {
+        Column(modifier = Modifier.padding(start = 12.dp, top = 4.dp, end = 8.dp)) {
+            if (tool.arguments.isNotBlank()) {
                 Text(
-                    if (expanded) "收起" else "展开",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    "参数：${tool.arguments}",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
                 )
             }
-            if (expanded) {
-                if (tool.arguments.isNotBlank()) {
-                    Text(
-                        "参数：${tool.arguments}",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                }
-                if (tool.result.isNotBlank()) {
-                    Text(
-                        "结果：${tool.result.take(2000)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = if (tool.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                }
+            if (tool.result.isNotBlank()) {
+                Text(
+                    "结果：${tool.result.take(2000)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = if (tool.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            } else if (!tool.isError) {
+                Text(
+                    "执行中…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
             }
         }
     }
@@ -517,9 +694,13 @@ private fun ChatInputArea(
     llmModel: String,
     reasoningEffort: String,
     webSearchEnabled: Boolean,
+    providers: List<LlmProviderInfo>,
+    availableModels: List<String>,
+    currentProvider: String,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onSelectModel: (String) -> Unit,
+    onSelectProvider: (String) -> Unit,
     onSelectReasoningEffort: (String) -> Unit,
     onToggleWebSearch: (Boolean) -> Unit,
     onPickFile: () -> Unit,
@@ -556,7 +737,11 @@ private fun ChatInputArea(
             llmModel = llmModel,
             reasoningEffort = reasoningEffort,
             webSearchEnabled = webSearchEnabled,
+            providers = providers,
+            availableModels = availableModels,
+            currentProvider = currentProvider,
             onSelectModel = onSelectModel,
+            onSelectProvider = onSelectProvider,
             onSelectReasoningEffort = onSelectReasoningEffort,
             onToggleWebSearch = onToggleWebSearch,
             onPickFile = onPickFile,
@@ -569,12 +754,17 @@ private fun ChatToolbar(
     llmModel: String,
     reasoningEffort: String,
     webSearchEnabled: Boolean,
+    providers: List<LlmProviderInfo>,
+    availableModels: List<String>,
+    currentProvider: String,
     onSelectModel: (String) -> Unit,
+    onSelectProvider: (String) -> Unit,
     onSelectReasoningEffort: (String) -> Unit,
     onToggleWebSearch: (Boolean) -> Unit,
     onPickFile: () -> Unit,
 ) {
     var modelMenu by remember { mutableStateOf(false) }
+    var providerMenu by remember { mutableStateOf(false) }
     var effortMenu by remember { mutableStateOf(false) }
 
     Row(
@@ -583,9 +773,20 @@ private fun ChatToolbar(
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Box {
+            AssistChip(onClick = { providerMenu = true }, label = { Text(providerLabel(currentProvider, providers), fontSize = 12.sp) })
+            DropdownMenu(expanded = providerMenu, onDismissRequest = { providerMenu = false }) {
+                providers.forEach { p ->
+                    DropdownMenuItem(
+                        text = { Text(p.displayName) },
+                        onClick = { onSelectProvider(p.provider); providerMenu = false },
+                    )
+                }
+            }
+        }
+        Box {
             AssistChip(onClick = { modelMenu = true }, label = { Text(modelLabel(llmModel), fontSize = 12.sp) })
             DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
-                DEEPSEEK_MODELS.forEach { m ->
+                availableModels.forEach { m ->
                     DropdownMenuItem(
                         text = { Text(m) },
                         onClick = { onSelectModel(m); modelMenu = false },
@@ -654,12 +855,38 @@ private fun parseToolCalls(json: String): List<ChatViewModel.ToolCallInfo> {
         arr.mapNotNull { el ->
             val obj = el as? kotlinx.serialization.json.JsonObject ?: return@mapNotNull null
             ChatViewModel.ToolCallInfo(
-                id = obj["id"]?.toString() ?: "",
-                name = obj["name"]?.toString() ?: "unknown",
-                arguments = obj["arguments"]?.toString() ?: "",
-                result = obj["result"]?.toString() ?: "",
-                isError = obj["isError"]?.toString()?.toBoolean() ?: false,
+                id = obj.str("id") ?: "",
+                name = obj.str("name") ?: "unknown",
+                arguments = obj.str("arguments") ?: "",
+                result = obj.str("result") ?: "",
+                isError = obj.str("isError")?.toBoolean() ?: false,
             )
         }
     }.getOrDefault(emptyList())
+}
+
+/** 解析 segmentsJson → 有序步骤序列；null 表示旧消息（无 segmentsJson，走兼容渲染） */
+private fun parseSegments(json: String?): List<ChatViewModel.Segment>? {
+    if (json.isNullOrBlank()) return null
+    return runCatching {
+        val arr = kotlinx.serialization.json.Json.parseToJsonElement(json) as? kotlinx.serialization.json.JsonArray
+            ?: return null
+        arr.mapNotNull { el ->
+            val obj = el as? kotlinx.serialization.json.JsonObject ?: return@mapNotNull null
+            when (obj.str("type")) {
+                "reasoning" -> ChatViewModel.Segment.Reasoning(obj.str("text") ?: "")
+                "text" -> ChatViewModel.Segment.Text(obj.str("text") ?: "")
+                "tool" -> ChatViewModel.Segment.Tool(
+                    ChatViewModel.ToolCallInfo(
+                        id = obj.str("id") ?: "",
+                        name = obj.str("name") ?: "unknown",
+                        arguments = obj.str("arguments") ?: "",
+                        result = obj.str("result") ?: "",
+                        isError = obj.str("isError")?.toBoolean() ?: false,
+                    )
+                )
+                else -> null
+            }
+        }
+    }.getOrNull()
 }

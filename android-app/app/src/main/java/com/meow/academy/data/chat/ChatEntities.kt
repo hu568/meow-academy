@@ -31,8 +31,14 @@ data class MessageEntity(
     val role: MessageRole,
     val content: String = "",
     val thinking: String = "",
-    /** 工具调用记录（JSON 数组字符串：{toolName, arguments, result, isError}[]） */
+    /** 工具调用记录（JSON 数组字符串：{toolName, arguments, result, isError}[]）；旧字段，新消息改用 [segmentsJson] */
     val toolCallsJson: String? = null,
+    /**
+     * 有序步骤序列（JSON 数组字符串）：思考段与工具调用按 DSH 事件到达顺序交错。
+     * 元素：{"type":"reasoning","text":...} 或 {"type":"tool","id","name","arguments","result","isError"}。
+     * 为 null 表示旧消息，渲染时回退到 thinking + toolCallsJson。
+     */
+    val segmentsJson: String? = null,
     val status: MessageStatus = MessageStatus.DONE,
     val createdAt: Long = System.currentTimeMillis(),
 )
