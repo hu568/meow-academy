@@ -96,7 +96,13 @@ mkdir -p "$PTY_STAGE" "$RUNTIME/node_modules/@mmmbuto"
 cp -rL "$PTY_STAGE/node_modules/@mmmbuto/node-pty-android-arm64" "$RUNTIME/node_modules/@mmmbuto/"
 # DSH 的 subprocess 插件依赖「官方 node-pty」，但它没有 Android arm64 预编译；
 # 把 fork 的 pty.node 复制到官方 node-pty 的 prebuilds/android-arm64/，让官方 node-pty 也能加载
-NODE_PTY_DIR=$(find "$RUNTIME/node_modules/.pnpm" -maxdepth 4 -type d -path "*/node_modules/node-pty" 2>/dev/null | head -1)
+# （hoisted 布局 node-pty 在顶层；isolated 布局在 .pnpm 槽位）
+NODE_PTY_DIR=""
+if [ -d "$RUNTIME/node_modules/node-pty" ]; then
+  NODE_PTY_DIR="$RUNTIME/node_modules/node-pty"
+else
+  NODE_PTY_DIR=$(find "$RUNTIME/node_modules/.pnpm" -maxdepth 4 -type d -path "*/node_modules/node-pty" 2>/dev/null | head -1)
+fi
 if [ -n "$NODE_PTY_DIR" ]; then
   mkdir -p "$NODE_PTY_DIR/prebuilds/android-arm64"
   cp "$RUNTIME/node_modules/@mmmbuto/node-pty-android-arm64/prebuilds/android-arm64/pty.node" "$NODE_PTY_DIR/prebuilds/android-arm64/pty.node"
@@ -116,6 +122,33 @@ cp -L "$PREFIX/etc/tls/cert.pem" "$RUNTIME/etc/tls/cert.pem"
 #       App 端通过 NODE_OPTIONS --require lib/dns-shim.js 注入）──
 echo "» 拷贝 dns-shim.js…"
 cp "$(cd "$(dirname "$0")" && pwd)/dns-shim.js" "$RUNTIME/lib/dns-shim.js"
+
+# ── 5.5 物化 symlink（Android SELinux 禁 createSymbolicLink，App 端解压会丢链接；
+#        pnpm .pnpm 布局依赖相对 symlink，这里把全部链接解引用成真实拷贝）──
+echo "» 物化 node_modules symlink…"
+node -e '
+const fs = require("fs"), path = require("path");
+const root = process.argv[1];
+function copyReal(src, dest) {
+  const st = fs.lstatSync(src);
+  if (st.isSymbolicLink()) { copyReal(path.resolve(path.dirname(src), fs.readlinkSync(src)), dest); return; }
+  if (st.isDirectory()) { fs.mkdirSync(dest, { recursive: true }); for (const n of fs.readdirSync(src)) copyReal(path.join(src, n), path.join(dest, n)); return; }
+  fs.copyFileSync(src, dest);
+}
+function walk(dir) {
+  for (const n of fs.readdirSync(dir)) {
+    const full = path.join(dir, n);
+    let st; try { st = fs.lstatSync(full); } catch { continue; }
+    if (st.isSymbolicLink()) {
+      const t = path.resolve(path.dirname(full), fs.readlinkSync(full));
+      fs.unlinkSync(full);
+      if (fs.existsSync(t)) copyReal(t, full);
+    } else if (st.isDirectory()) walk(full);
+  }
+}
+walk(root);
+console.log("  ✓ symlink 物化完成");
+' "$RUNTIME/node_modules"
 
 # ── 6. 打包（gzip 流；.bin 后缀避开 AGP 对 .gz 的自动解压改名）──
 echo "» 打包 tar.gz…"

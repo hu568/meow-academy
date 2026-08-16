@@ -41,7 +41,7 @@ DEPLOY_DIR="$STAGE/runtime"
 echo "» pnpm deploy（约 1-2 分钟）…"
 cd "$DSH_ROOT"
 pnpm --filter ./deploy/meow-runtime deploy --prod --legacy \
-  --config.link-workspace-packages=false "$DEPLOY_DIR" >/dev/null 2>&1 || \
+  --config.link-workspace-packages=false --config.node-linker=hoisted "$DEPLOY_DIR" >/dev/null 2>&1 || \
   { echo "✗ pnpm deploy 失败" >&2; exit 1; }
 
 # ── 2. 链接归一化（逃逸链接 → 闭包内相对链接 / 物化 vendor 包）──

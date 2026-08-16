@@ -14,6 +14,9 @@ release/*
 
 .tmp/
 
+# 构建临时日志（assembleDebug 输出）
+android-app/.tmp_build*.log
+
 .agents/
 
 # DSH fork（本地独立副本，从 github.com/deepseek-ai/deepseek-harness fork，
