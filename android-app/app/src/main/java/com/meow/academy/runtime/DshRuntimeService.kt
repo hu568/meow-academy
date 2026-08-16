@@ -124,12 +124,22 @@ class DshRuntimeService : Service() {
                 rpc.start()
 
                 // JSON-RPC 握手：initialize 完成前会话请求会用错 model，必须先等它成功
-                val initialized = rpc.initialize(
+                var initialized = rpc.initialize(
                     cwd = app.filesDir.absolutePath,
                     provider = provider,
                     model = model,
                     reasoningEffort = reasoningEffort,
                 )
+                if (!initialized && provider != "deepseek-official") {
+                    // 自定义 provider 在 settings 中不存在（数据被清等）→ 回退内置 DeepSeek
+                    Log.w("DshRuntimeService", "initialize with $provider failed, fallback to deepseek-official")
+                    initialized = rpc.initialize(
+                        cwd = app.filesDir.absolutePath,
+                        provider = "deepseek-official",
+                        model = "deepseek-v4-flash",
+                        reasoningEffort = reasoningEffort,
+                    )
+                }
                 if (!initialized) {
                     Log.e("DshRuntimeService", "initialize failed, kill proc")
                     proc.destroyForcibly()

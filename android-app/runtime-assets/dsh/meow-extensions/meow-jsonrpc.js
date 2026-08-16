@@ -19,6 +19,7 @@ import { JsonRpcLineTransport } from '@deepseek-ai/dsh-sdk-protocol'
 import { HarnessSdkJsonRpcServer } from '@deepseek-ai/dsh-sdk-jsonrpc-server'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import z from '@deepseek-ai/schemastery'
 
 export const name = 'meow-jsonrpc'
@@ -170,6 +171,121 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     return { sessionId, selection: this.currentSelection() }
   }
 
+  /** provider 名 → credential ref（POSIX 标识符；provider 名非字母数字转下划线） */
+  providerCredentialRef(provider) {
+    return 'MEOW_' + String(provider).replace(/[^A-Za-z0-9]/g, '_').toUpperCase() + '_API_KEY'
+  }
+
+  /** llm/providers：可配置 provider 目录 + 已注册状态合并 */
+  listProviders() {
+    const llm = this.ctx.get('llm')
+    if (llm === undefined) return { providers: [] }
+    const registered = new Set(llm.listProviders().map((p) => p.id))
+    const providers = llm.listConfigurableProviders().map((entry) => ({
+      provider: entry.provider,
+      displayName: entry.displayName,
+      settingsNs: entry.settingsNs,
+      settingsPath: entry.settingsPath,
+      registered: registered.has(entry.provider),
+    }))
+    return { providers }
+  }
+
+  /** llm/models：某 provider 的模型目录 */
+  async listModels(params) {
+    const provider = String(params.provider ?? '')
+    if (provider === '') throw new Error('llm/models: provider is required')
+    const llm = this.ctx.get('llm')
+    if (llm === undefined) throw new Error('llm service unavailable')
+    const models = await llm.listModels(provider)
+    return { models: models.map((m) => ({ id: m.id, name: m.name, ...(m.description === undefined ? {} : { description: m.description }) })) }
+  }
+
+  /** llm/discoverModels：测试连接 / 获取远端模型列表（llm-pi-ai 命名空间） */
+  async discoverModels(params) {
+    const llm = this.ctx.get('llm')
+    if (llm === undefined) throw new Error('llm service unavailable')
+    const request = {}
+    if (params.provider !== undefined && params.provider !== '') request.provider = String(params.provider)
+    if (params.baseURL !== undefined && params.baseURL !== '') request.baseURL = String(params.baseURL)
+    if (params.api !== undefined && params.api !== '') request.api = String(params.api)
+    if (params.apiKey !== undefined && params.apiKey !== '') request.apiKey = String(params.apiKey)
+    const models = await llm.discoverModels('llm-pi-ai', request)
+    return { models }
+  }
+
+  /** llm/testModel：对单个模型发最小 chat 请求测连通 */
+  async testModel(params) {
+    const provider = String(params.provider ?? '')
+    const model = String(params.model ?? '')
+    if (provider === '' || model === '') throw new Error('llm/testModel: provider and model are required')
+    const llm = this.ctx.get('llm')
+    if (llm === undefined) throw new Error('llm service unavailable')
+    const message = createUserMessage({ content: [{ type: 'text', text: 'ping' }], source: { kind: 'user' } })
+    const chunks = llm.stream({ provider, model, messages: [message] })
+    for await (const chunk of chunks) {
+      if (chunk.type === 'finish') {
+        if (chunk.reason?.kind === 'error') {
+          const msg = chunk.reason?.failure?.message ?? '模型请求失败'
+          throw new Error('testModel 失败: ' + msg)
+        }
+        return { ok: true, model }
+      }
+    }
+    return { ok: true, model }
+  }
+
+  /** settings/describe：读取某 namespace 的 redacted descriptor */
+  describeSettings(params) {
+    const settings = this.ctx.get('settings')
+    if (settings === undefined) return { namespaces: [] }
+    const ns = params?.ns !== undefined && params.ns !== '' ? String(params.ns) : 'llm-pi-ai'
+    const hit = settings.describe({ redactSecrets: true }).find((d) => d.ns === ns)
+    if (hit === undefined) return { namespaces: [] }
+    return { namespaces: [{ ns: hit.ns, value: hit.value, revision: hit.revision, ...(hit.user === undefined ? {} : { user: hit.user }) }] }
+  }
+
+  /** settings/setProvider：写 provider profile + 对应 credential */
+  async setProvider(params) {
+    const provider = String(params.provider ?? '')
+    if (provider === '') throw new Error('settings/setProvider: provider is required')
+    const settings = this.ctx.get('settings')
+    if (settings === undefined) throw new Error('settings service unavailable')
+    const credentials = this.ctx.get('credentials')
+
+    const ref = this.providerCredentialRef(provider)
+    const apiKey = params.apiKey !== undefined ? String(params.apiKey) : ''
+    if (credentials !== undefined) {
+      if (apiKey.length > 0) await credentials.set(ref, apiKey)
+      else await credentials.unset(ref)
+    }
+
+    const profile = { apiKeyEnv: ref }
+    if (params.displayName !== undefined && params.displayName !== '') profile.displayName = String(params.displayName)
+    if (params.baseURL !== undefined && params.baseURL !== '') profile.baseURL = String(params.baseURL)
+    if (params.api !== undefined && params.api !== '') profile.api = String(params.api)
+    if (params.models !== undefined) profile.models = params.models
+
+    const expectedRevision = params.expectedRevision !== undefined ? Number(params.expectedRevision) : undefined
+    await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', provider], value: profile }], expectedRevision)
+
+    const desc = settings.describe({ redactSecrets: true }).find((d) => d.ns === 'llm-pi-ai')
+    return { provider, revision: desc?.revision ?? 0 }
+  }
+
+  /** settings/removeProvider：删除 provider profile + 对应 credential */
+  async removeProvider(params) {
+    const provider = String(params.provider ?? '')
+    if (provider === '') throw new Error('settings/removeProvider: provider is required')
+    const settings = this.ctx.get('settings')
+    if (settings === undefined) throw new Error('settings service unavailable')
+    const credentials = this.ctx.get('credentials')
+    const expectedRevision = params.expectedRevision !== undefined ? Number(params.expectedRevision) : undefined
+    await settings.mutate('llm-pi-ai', [{ op: 'unset', path: ['providers', provider] }], expectedRevision)
+    if (credentials !== undefined) await credentials.unset(this.providerCredentialRef(provider))
+    return { removed: true }
+  }
+
   /** 扩展方法路由：自定义方法优先，其余交给官方实现 */
   async handleRequest(method, params) {
     switch (method) {
@@ -178,6 +294,13 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
       case 'session/bash': return this.runBash(params ?? {})
       case 'session/bashCancel': return this.cancelBash(params ?? {})
       case 'session/setModel': return this.setModel(params ?? {})
+      case 'llm/providers': return this.listProviders()
+      case 'llm/models': return this.listModels(params ?? {})
+      case 'llm/discoverModels': return this.discoverModels(params ?? {})
+      case 'llm/testModel': return this.testModel(params ?? {})
+      case 'settings/describe': return this.describeSettings(params ?? {})
+      case 'settings/setProvider': return this.setProvider(params ?? {})
+      case 'settings/removeProvider': return this.removeProvider(params ?? {})
       default: return super.handleRequest(method, params)
     }
   }

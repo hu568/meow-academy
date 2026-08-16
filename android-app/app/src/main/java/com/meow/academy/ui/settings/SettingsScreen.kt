@@ -35,7 +35,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.meow.academy.R
@@ -64,13 +63,17 @@ fun SettingsScreen(
     val residentMinutes by vm.residentMinutes.collectAsState()
     val llmProvider by vm.llmProvider.collectAsState()
     val llmModel by vm.llmModel.collectAsState()
-    val llmApiKey by vm.llmApiKey.collectAsState()
+
+    var showModelManage by remember { mutableStateOf(false) }
+    if (showModelManage) {
+        ModelManageScreen(onBack = { showModelManage = false })
+        return
+    }
 
     var showHomeDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
     var showResidentDialog by remember { mutableStateOf(false) }
     var showMinutesDialog by remember { mutableStateOf(false) }
-    var showModelDialog by remember { mutableStateOf(false) }
 
     LazyColumn(modifier = Modifier.fillMaxWidth()) {
         // 页头
@@ -133,8 +136,8 @@ fun SettingsScreen(
             SettingsRow(
                 icon = Icons.Filled.ModelTraining,
                 title = stringResource(R.string.settings_model),
-                subtitle = "$llmProvider / $llmModel" + if (llmApiKey.isBlank()) " · 未配置 Key" else " · Key 已配置",
-                onClick = { showModelDialog = true },
+                subtitle = "$llmProvider / $llmModel",
+                onClick = { showModelManage = true },
             )
         }
         item {
@@ -184,20 +187,6 @@ fun SettingsScreen(
             selected = residentMinutes,
             onSelect = { vm.setResidentMinutes(it); showMinutesDialog = false },
             onDismiss = { showMinutesDialog = false },
-        )
-    }
-    if (showModelDialog) {
-        ModelConfigDialog(
-            provider = llmProvider,
-            model = llmModel,
-            apiKey = llmApiKey,
-            onSave = { p, m, k ->
-                vm.setLlmProvider(p)
-                vm.setLlmModel(m)
-                vm.setLlmApiKey(k)
-                showModelDialog = false
-            },
-            onDismiss = { showModelDialog = false },
         )
     }
 }
@@ -273,59 +262,6 @@ private fun <T> SingleChoiceDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        },
-    )
-}
-
-/** 模型配置对话框（M2.6 雏形）：provider / model / API Key */
-@Composable
-private fun ModelConfigDialog(
-    provider: String,
-    model: String,
-    apiKey: String,
-    onSave: (String, String, String) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var p by remember { mutableStateOf(provider) }
-    var m by remember { mutableStateOf(model) }
-    var k by remember { mutableStateOf(apiKey) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("模型管理") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(
-                    value = p,
-                    onValueChange = { p = it },
-                    label = { Text("Provider") },
-                    singleLine = true,
-                )
-                OutlinedTextField(
-                    value = m,
-                    onValueChange = { m = it },
-                    label = { Text("Model") },
-                    singleLine = true,
-                )
-                OutlinedTextField(
-                    value = k,
-                    onValueChange = { k = it },
-                    label = { Text("DeepSeek API Key") },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                )
-                Text(
-                    "Key 仅存本机（DataStore），注入 DSH 进程环境变量，不会上传。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onSave(p.trim(), m.trim(), k.trim()) }) { Text("保存") }
-        },
-        dismissButton = {
             TextButton(onClick = onDismiss) { Text("取消") }
         },
     )

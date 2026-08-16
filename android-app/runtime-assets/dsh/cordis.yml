@@ -10,6 +10,27 @@
   config:
     maxTokensAsSuccess: true
 
+# 可配置 Provider 机制（模型管理）：settings + credentials 后端 + pi-ai 通用网关
+# settings-file 提供 settings service（provider profile 存 settings.yaml，运行时热生效）
+# credentials-local 提供 credentials service（provider apiKey 存 .credentials.yaml）
+# llm-pi-ai 承载用户自定义 OpenAI 格式 provider（空 providers = dormant，经 settings 写入才注册）
+- id: settings
+  name: '@deepseek-ai/dsh-settings-file'
+  config:
+    path: !!js process.env.DSH_SETTINGS_PATH ?? (process.env.DSH_CWD ?? process.cwd()) + '/dsh-settings.yaml'
+    watch: false
+
+- id: credentials
+  name: '@deepseek-ai/dsh-credentials-local'
+  config:
+    path: !!js process.env.DSH_CREDENTIALS_PATH ?? (process.env.DSH_CWD ?? process.cwd()) + '/dsh-credentials.yaml'
+    watch: false
+
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers: {}
+
 # DeepSeek 官方直连（key 从 DEEPSEEK_API_KEY 读取，由 App 进程环境注入）
 - id: llm-deepseek
   name: '@deepseek-ai/dsh-llm-deepseek'

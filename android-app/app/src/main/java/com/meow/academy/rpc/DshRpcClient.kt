@@ -14,8 +14,10 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.OutputStream
 import java.util.UUID
@@ -186,6 +188,69 @@ class DshRpcClient(
     /** ping：心跳（保活 worker 用；进程活着且可响应即 true） */
     suspend fun ping(timeoutMs: Long = 8_000): Boolean =
         requestOk("ping", null, timeoutMs)
+
+    // ── 模型管理（可配置 provider，M4） ──
+
+    /** llm/providers：列出可配置 provider 目录（含注册状态） */
+    suspend fun llmProviders(timeoutMs: Long = 15_000): List<LlmProviderInfo>? {
+        val result = request("llm/providers", DshParams.llmProviders(), timeoutMs)?.result ?: return null
+        val arr = result["providers"] as? JsonArray ?: return emptyList()
+        return arr.mapNotNull { el ->
+            runCatching { json.decodeFromJsonElement(LlmProviderInfo.serializer(), el) }.getOrNull()
+        }
+    }
+
+    /** llm/models：某 provider 的模型目录 */
+    suspend fun llmModels(provider: String, timeoutMs: Long = 15_000): List<LlmModelInfo>? {
+        val result = request("llm/models", DshParams.llmModels(provider), timeoutMs)?.result ?: return null
+        val arr = result["models"] as? JsonArray ?: return emptyList()
+        return arr.mapNotNull { el ->
+            runCatching { json.decodeFromJsonElement(LlmModelInfo.serializer(), el) }.getOrNull()
+        }
+    }
+
+    /** llm/discoverModels：测试连接 / 获取远端模型列表（draft，不落库） */
+    suspend fun llmDiscoverModels(
+        provider: String?,
+        baseURL: String?,
+        api: String?,
+        apiKey: String?,
+        timeoutMs: Long = 30_000,
+    ): List<LlmModelInfo>? {
+        val result = request(
+            "llm/discoverModels",
+            DshParams.llmDiscoverModels(provider, baseURL, api, apiKey),
+            timeoutMs,
+        )?.result ?: return null
+        val arr = result["models"] as? JsonArray ?: return emptyList()
+        return arr.mapNotNull { el ->
+            runCatching { json.decodeFromJsonElement(LlmModelInfo.serializer(), el) }.getOrNull()
+        }
+    }
+
+    /** settings/describe：读取某 namespace 的 redacted descriptor（返回原始 result） */
+    suspend fun settingsDescribe(ns: String? = null, timeoutMs: Long = 15_000): JsonObject? =
+        request("settings/describe", DshParams.settingsDescribe(ns), timeoutMs)?.result
+
+    /** settings/setProvider：写 provider profile + credential */
+    suspend fun settingsSetProvider(
+        provider: String,
+        displayName: String?,
+        baseURL: String?,
+        api: String?,
+        models: List<LlmModelInput>,
+        apiKey: String?,
+        expectedRevision: Int? = null,
+        timeoutMs: Long = 15_000,
+    ): Boolean = requestOk(
+        "settings/setProvider",
+        DshParams.settingsSetProvider(provider, displayName, baseURL, api, models, apiKey, expectedRevision),
+        timeoutMs,
+    )
+
+    /** settings/removeProvider：删除 provider profile + credential */
+    suspend fun settingsRemoveProvider(provider: String, expectedRevision: Int? = null, timeoutMs: Long = 15_000): Boolean =
+        requestOk("settings/removeProvider", DshParams.settingsRemoveProvider(provider, expectedRevision), timeoutMs)
 
     private suspend fun write(frame: DshRequest) {
         writeMutex.withLock {

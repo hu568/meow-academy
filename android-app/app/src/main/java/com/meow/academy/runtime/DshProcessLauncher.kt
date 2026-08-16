@@ -78,6 +78,9 @@ object DshProcessLauncher {
             put("DSH_BASH_BIN", runtimeDir.absolutePath + "/lib/bash.bin")
             // DSH 会话持久化（SQLite）与默认 cwd（cordis.yml 里经 DSH_SESSION_DB / DSH_CWD 读取）
             put("DSH_SESSION_DB", context.filesDir.absolutePath + "/.dsh-sessions/chat.db")
+            // 可配置 provider 的 settings / credentials 文档路径（模型管理，M4）
+            put("DSH_SETTINGS_PATH", context.filesDir.absolutePath + "/dsh-settings.yaml")
+            put("DSH_CREDENTIALS_PATH", context.filesDir.absolutePath + "/dsh-credentials.yaml")
             put("DSH_UPLOAD_DIR", context.filesDir.absolutePath + "/uploads")
             put("DSH_CWD", context.filesDir.absolutePath)
             // 网络搜索开关（'1' 启用；cordis.yml 里 tool-web.search 据此决定是否注册 web_search）

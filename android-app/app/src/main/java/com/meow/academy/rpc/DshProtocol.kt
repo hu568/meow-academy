@@ -153,6 +153,69 @@ object DshParams {
 
     /** shutdown：让服务端优雅退出 */
     fun shutdown(): JsonObject = buildJsonObject { }
+
+    // ── 模型管理（可配置 provider，M4） ──
+
+    /** llm/providers：列出可配置 provider 目录 */
+    fun llmProviders(): JsonObject = buildJsonObject { }
+
+    /** llm/models：某 provider 的模型目录 */
+    fun llmModels(provider: String): JsonObject = buildJsonObject { put("provider", provider) }
+
+    /** llm/discoverModels：测试连接 / 获取远端模型列表 */
+    fun llmDiscoverModels(provider: String?, baseURL: String?, api: String?, apiKey: String?): JsonObject =
+        buildJsonObject {
+            if (provider != null) put("provider", provider)
+            if (baseURL != null) put("baseURL", baseURL)
+            if (api != null) put("api", api)
+            if (apiKey != null) put("apiKey", apiKey)
+        }
+
+    /** settings/describe：读取某 namespace 的 redacted descriptor */
+    fun settingsDescribe(ns: String? = null): JsonObject = buildJsonObject {
+        if (ns != null) put("ns", ns)
+    }
+
+    /** settings/setProvider：写 provider profile + credential */
+    fun settingsSetProvider(
+        provider: String,
+        displayName: String?,
+        baseURL: String?,
+        api: String?,
+        models: List<LlmModelInput>,
+        apiKey: String?,
+        expectedRevision: Int? = null,
+    ): JsonObject = buildJsonObject {
+        put("provider", provider)
+        if (displayName != null) put("displayName", displayName)
+        if (baseURL != null) put("baseURL", baseURL)
+        if (api != null) put("api", api)
+        put("models", buildJsonArray {
+            models.forEach { m ->
+                add(buildJsonObject {
+                    put("id", m.id)
+                    if (m.name != null) put("name", m.name)
+                    if (m.contextWindow != null) put("contextWindow", m.contextWindow)
+                    if (m.maxTokens != null) put("maxTokens", m.maxTokens)
+                    if (m.input != null) put("input", buildJsonArray { m.input.forEach { add(JsonPrimitive(it)) } })
+                })
+            }
+        })
+        if (apiKey != null) put("apiKey", apiKey)
+        if (expectedRevision != null) put("expectedRevision", expectedRevision)
+    }
+
+    /** settings/removeProvider：删除 provider profile + credential */
+    fun settingsRemoveProvider(provider: String, expectedRevision: Int? = null): JsonObject = buildJsonObject {
+        put("provider", provider)
+        if (expectedRevision != null) put("expectedRevision", expectedRevision)
+    }
+
+    /** llm/testModel：对单个模型发最小 chat 请求测连通 */
+    fun testModel(provider: String, model: String): JsonObject = buildJsonObject {
+        put("provider", provider)
+        put("model", model)
+    }
 }
 
 /**
@@ -199,17 +262,35 @@ class DshEvent private constructor(
     /** tool/call 的原始参数字符串 */
     val toolArguments: String? get() = data?.str("arguments")
 
-    /** tool/result 的文本结果（message.content 里第一个 text 块） */
-    val toolResultText: String?
+    /** tool/result 的 callId（data.message.content[0].toolCallId；与 tool/call 的顶层 callId 不同） */
+    val toolResultCallId: String?
         get() {
             val message = data?.get("message") as? JsonObject ?: return null
             val content = message["content"] as? JsonArray ?: return null
-            return content.firstOrNull { (it as? JsonObject)?.str("type") == "text" }
+            val block = content.firstOrNull() as? JsonObject ?: return null
+            return block.str("toolCallId")
+        }
+
+    /** tool/result 的文本结果（data.message.content[0].content 里第一个 text 块） */
+    val toolResultText: String?
+        get() {
+            val message = data?.get("message") as? JsonObject ?: return null
+            val messageContent = message["content"] as? JsonArray ?: return null
+            val block = messageContent.firstOrNull() as? JsonObject ?: return null
+            val blocks = block["content"] as? JsonArray ?: return null
+            return blocks.firstOrNull { (it as? JsonObject)?.str("type") == "text" }
                 ?.let { (it as JsonObject).str("text") }
         }
 
-    /** tool/result 是否失败（error 字段存在即失败） */
-    val toolResultIsError: Boolean get() = data?.get("error") != null
+    /** tool/result 是否失败（content[0].isError 或顶层 error 字段存在） */
+    val toolResultIsError: Boolean
+        get() {
+            if (data?.get("error") != null) return true
+            val message = data?.get("message") as? JsonObject ?: return false
+            val messageContent = message["content"] as? JsonArray ?: return false
+            val block = messageContent.firstOrNull() as? JsonObject ?: return false
+            return block.bool("isError") == true
+        }
 
     /** turn/end 的结束原因 kind（completed / aborted / error / max-tokens …） */
     val turnEndKind: String? get() = (data?.get("reason") as? JsonObject)?.str("kind")
@@ -227,6 +308,36 @@ class DshEvent private constructor(
         }
     }
 }
+
+// ── 模型管理（可配置 provider）数据模型 ──
+
+/** 可配置 provider 目录条目（llm/providers 响应） */
+@Serializable
+data class LlmProviderInfo(
+    val provider: String,
+    val displayName: String,
+    val settingsNs: String = "",
+    val settingsPath: List<String> = emptyList(),
+    val registered: Boolean = false,
+)
+
+/** 模型目录条目（llm/models、llm/discoverModels 响应） */
+@Serializable
+data class LlmModelInfo(
+    val id: String,
+    val name: String,
+    val description: String? = null,
+)
+
+/** 提交 provider 时的模型条目（settings/setProvider 的 models） */
+@Serializable
+data class LlmModelInput(
+    val id: String,
+    val name: String? = null,
+    val contextWindow: Int? = null,
+    val maxTokens: Int? = null,
+    val input: List<String>? = null,
+)
 
 /** 便捷扩展：读 JsonObject 里的字符串字段（非 primitive 时序列化为字符串，绝不抛异常） */
 fun JsonObject.str(key: String): String? = when (val v = this[key]) {

@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -30,6 +31,8 @@ class SettingsRepository(private val context: Context) {
         val LLM_API_KEY = stringPreferencesKey("llm_api_key")
         val REASONING_EFFORT = stringPreferencesKey("reasoning_effort")
         val WEB_SEARCH_ENABLED = booleanPreferencesKey("web_search_enabled")
+        // 禁用的 provider 名集合（App 层 UI 过滤；DSH 侧仍注册，配置不丢）
+        val DISABLED_PROVIDERS = stringSetPreferencesKey("disabled_providers")
     }
 
     val themeMode: Flow<ThemeMode> = context.settingsDataStore.data.map { prefs ->
@@ -78,6 +81,19 @@ class SettingsRepository(private val context: Context) {
     /** LLM 模型 id（默认 deepseek-v4-flash，与后端 .env 一致） */
     val llmModel: Flow<String> = context.settingsDataStore.data.map { prefs ->
         prefs[Keys.LLM_MODEL] ?: "deepseek-v4-flash"
+    }
+
+    /** 禁用的 provider 名集合（模型管理页启用/禁用开关；聊天页据此过滤） */
+    val disabledProviders: Flow<Set<String>> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.DISABLED_PROVIDERS] ?: emptySet()
+    }
+
+    suspend fun setProviderDisabled(provider: String, disabled: Boolean) {
+        context.settingsDataStore.edit { prefs ->
+            val current = prefs[Keys.DISABLED_PROVIDERS] ?: emptySet()
+            val next = if (disabled) current + provider else current - provider
+            prefs[Keys.DISABLED_PROVIDERS] = next
+        }
     }
 
     /** DeepSeek API Key（App 私有存储，注入 DSH 进程环境变量） */
