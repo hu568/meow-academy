@@ -1,5 +1,10 @@
 package com.meow.academy.ui.chat
 
+/**
+ * Markdown 渲染组件（Markwon 封装）。
+ * 从 ChatScreen.kt 原子拆出，作为可复用组件（聊天气泡 / 知识库渲染等）。
+ */
+
 import android.text.method.LinkMovementMethod
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember

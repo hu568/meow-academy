@@ -62,6 +62,8 @@ flowchart TD
 
 **核心链路**：App 启动 → 解压 `runtime.bin` → `linker64` 拉起 node 运行 `terminal-host.js`（内置 PTY bash）→ DSH 作为 bash 子进程运行 → 聊天 / 终端均经本地 socket 走 JSON-RPC 2.0 → 模型请求发往云端 API。
 
+> 🗺️ 每个源码模块的职责与协作关系见 [docs/module-structure.md](docs/module-structure.md)（2026-08-17 原子化拆分后的模块地图）。
+
 **DSH 组合与插件**：`android-app/runtime-assets/dsh/cordis.yml` 定义了喵学堂的 Agent 组合（llm-deepseek / bash / agent-spine / 可配置 Provider 等）；`meow-extensions/meow-jsonrpc.js` 是自定义 Cordis 插件，扩展了官方 jsonrpc server（`session/cancel`、`session/bash`、`session/setModel`、`ping`、`agents.resume()` 跨进程会话恢复）。
 
 ---
@@ -140,6 +142,7 @@ meow-academy/
 │   ├── decision-dsh-agent.md       # 🧩 方案决策：Pi → DSH 替换
 │   ├── decision-local-pi-agent.md  # 🐧 方案决策：Pi 本地化 + 终端驻留
 │   ├── design-gui.md               # 🎨 GUI 设计：信息架构 v1
+│   ├── module-structure.md         # 🗺️ 安卓端模块地图（原子化拆分后）
 │   ├── plan-phase1.md              # 📝 M2「给 Pi 套壳」细化规划
 │   ├── plan-phase2.md              # 📝 M3 细化规划
 │   └── reference/                  # 📚 RAG / Cherry Studio / RikkaHub 参考
@@ -166,6 +169,7 @@ meow-academy/
 | [docs/decision-dsh-agent.md](docs/decision-dsh-agent.md) | Pi Agent → DeepSeek Harness 替换的决策与实施 |
 | [docs/decision-local-pi-agent.md](docs/decision-local-pi-agent.md) | Pi 本地化 + 终端驻留 + 推敲 v2 决策 |
 | [docs/design-gui.md](docs/design-gui.md) | GUI 信息架构设计 v1 |
+| [docs/module-structure.md](docs/module-structure.md) | 安卓端模块地图：每个文件的职责、依赖与扩展指引 |
 | [docs/plan-phase1.md](docs/plan-phase1.md) | M2「给 Pi 套壳」细化规划 + Android 关键坑记录 |
 | [docs/plan-phase2.md](docs/plan-phase2.md) | M3 会话持久化 + Chatbox 化细化规划 |
 | [docs/reference/](docs/reference/) | RAG 算法 / Cherry Studio / RikkaHub 参考实现 |

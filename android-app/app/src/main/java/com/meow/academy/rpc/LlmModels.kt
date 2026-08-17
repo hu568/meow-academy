@@ -1,5 +1,11 @@
 package com.meow.academy.rpc
 
+/**
+ * 模型管理数据模型（M4 可配置 provider）。
+ * llm/providers、llm/models、llm/discoverModels、settings/setProvider 的响应/请求模型，
+ * 由 DshRpcClient 解析、模型管理页使用。
+ */
+
 import kotlinx.serialization.Serializable
 
 // ── 模型管理（可配置 provider）数据模型 ──

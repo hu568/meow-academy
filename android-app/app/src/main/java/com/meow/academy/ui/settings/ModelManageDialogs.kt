@@ -1,5 +1,10 @@
 package com.meow.academy.ui.settings
 
+/**
+ * 模型管理页的 4 种对话框组件：
+ * 删除提供商确认 / 添加模型 / 编辑模型 / 获取到的远端模型列表。
+ */
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row

@@ -1,5 +1,10 @@
 package com.meow.academy.ui.chat
 
+/**
+ * 会话抽屉组件（聊天页左侧）。
+ * 会话列表 + 新建 + 重命名/删除对话框；从 ChatScreen.kt 原子拆出。
+ */
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box

@@ -1,5 +1,10 @@
 package com.meow.academy.data.settings
 
+/**
+ * 设置相关枚举的展示名映射（展示层归属，与枚举定义分离）。
+ * HomeTab / ThemeMode / ResidentMode → 中文展示名，集中在此避免散落各页面。
+ */
+
 /** 枚举 → 展示名映射（集中在此，避免散落在各页面） */
 
 fun HomeTab.displayName(): String = when (this) {

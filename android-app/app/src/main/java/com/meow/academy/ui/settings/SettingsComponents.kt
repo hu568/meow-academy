@@ -1,5 +1,10 @@
 package com.meow.academy.ui.settings
 
+/**
+ * 设置页通用组件：SectionHeader / SettingsRow / SingleChoiceDialog。
+ * 从 SettingsScreen.kt 原子拆出，可在其他页面复用。
+ */
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row

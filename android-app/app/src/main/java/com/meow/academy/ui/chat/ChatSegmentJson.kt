@@ -1,5 +1,13 @@
 package com.meow.academy.ui.chat
 
+/**
+ * 聊天步骤序列的 JSON 序列化 / 解析 + 增量追加纯函数。
+ * - segmentsToJson：落库 segmentsJson 字段；
+ * - parseSegments / parseToolCalls：DB 读取后渲染（旧消息兼容）；
+ * - appendReasoning / appendText：流式 delta 追加到末尾同类型段。
+ * 全部无 Android 依赖，可独立单测。
+ */
+
 import com.meow.academy.rpc.str
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray

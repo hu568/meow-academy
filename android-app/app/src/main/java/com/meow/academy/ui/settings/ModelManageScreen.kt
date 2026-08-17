@@ -1,5 +1,10 @@
 package com.meow.academy.ui.settings
 
+/**
+ * 模型管理页：路由（列表 ↔ 详情）+ provider 列表页。
+ * 从原 ModelManageScreen.kt（657 行）原子拆出，详情页/表单/对话框各在独立文件。
+ */
+
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable

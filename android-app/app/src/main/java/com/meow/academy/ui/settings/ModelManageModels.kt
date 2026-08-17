@@ -1,5 +1,10 @@
 package com.meow.academy.ui.settings
 
+/**
+ * 模型管理共享数据模型与常量（Screen 与 ViewModel 共用）。
+ * ProviderProfile / ModelProfile / ProviderListItem + slug() / PRESETS / DEEPSEEK_PROVIDER。
+ */
+
 /** 内置 DeepSeek 官方的 DSH provider 路由名 */
 const val DEEPSEEK_PROVIDER = "deepseek-official"
 

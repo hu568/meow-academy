@@ -1,5 +1,10 @@
 package com.meow.academy.ui.settings
 
+/**
+ * 模型管理详情页：配置/模型页签 + 保存/删除/获取/测试操作编排。
+ * 对话框（ModelManageDialogs.kt）与表单（ProviderForms.kt / ModelListTab.kt）独立成文件。
+ */
+
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth

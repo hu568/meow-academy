@@ -1,5 +1,11 @@
 package com.meow.academy.ui.chat
 
+/**
+ * 聊天输入栏 + 工具栏组件。
+ * 输入框/发送/停止 + provider/模型/思考强度下拉 + 联网开关 + 上传文件；
+ * 从 ChatScreen.kt 原子拆出。
+ */
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column

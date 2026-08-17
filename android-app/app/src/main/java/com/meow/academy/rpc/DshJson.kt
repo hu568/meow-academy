@@ -1,5 +1,10 @@
 package com.meow.academy.rpc
 
+/**
+ * JsonObject 便捷扩展（协议解析通用工具）。
+ * str / bool / int 三个只读访问器，非预期类型时返回 null / 序列化字符串，绝不抛异常。
+ */
+
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
