@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.meow.academy.data.model.ModelProfile
 import com.meow.academy.rpc.LlmModelInfo
 
 /** 删除提供商确认对话框 */

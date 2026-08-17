@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.meow.academy.data.model.ModelProfile
 
 /** 模型列表页签：模型卡片 + 添加/获取按钮 */
 @Composable

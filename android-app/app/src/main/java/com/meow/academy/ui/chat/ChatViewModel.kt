@@ -6,6 +6,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.meow.academy.MeowAcademyApp
 import com.meow.academy.data.chat.ChatDatabase
+import com.meow.academy.data.model.ProviderProfile
+import com.meow.academy.data.model.parseCatalogProfiles
 import com.meow.academy.data.chat.MessageEntity
 import com.meow.academy.data.chat.MessageRole
 import com.meow.academy.data.chat.MessageStatus
@@ -34,6 +36,7 @@ import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.jsonObject
 
 /**
  * 聊天页 ViewModel（DSH 版，替代 pi 事件流）。
@@ -49,6 +52,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val dao = ChatDatabase.get(app).chatDao()
     private val runtimeManager = (app as MeowAcademyApp).runtimeManager
     private val settingsRepository = (app as MeowAcademyApp).settingsRepository
+    private val modelCatalog = (app as MeowAcademyApp).modelCatalogRepository
     private val json = Json { ignoreUnknownKeys = true }
 
     // ── 会话列表 ──
@@ -96,12 +100,54 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private var client = runtimeManager.rpcClient
 
     init {
-        // DSH 启动成功后自动拉取 provider 目录与当前 provider 的模型列表
+        // ① 前端解耦：立即用本地缓存渲染工具栏（无缓存则回退内置 DeepSeek），
+        //    不等 DSH 后端加载完成——控件一进页面就是完整可用的
+        viewModelScope.launch { applyCatalogCache() }
+        // ② DSH 启动成功后后台同步 provider 目录与当前 provider 的模型列表（并写缓存）
         viewModelScope.launch {
             runtimeManager.state.collect { s ->
                 if (s is RuntimeState.Running) refreshModelCatalog()
             }
         }
+    }
+
+    /** 缓存优先渲染：从本地模型目录缓存构建工具栏，无缓存时至少显示内置 DeepSeek */
+    private suspend fun applyCatalogCache() {
+        val cached = modelCatalog.catalogJson.first() ?: return applyBuiltinFallback()
+        val profiles = runCatching {
+            parseCatalogProfiles(json.parseToJsonElement(cached).jsonObject)
+        }.getOrNull()
+        if (profiles.isNullOrEmpty()) return applyBuiltinFallback()
+        val disabled = settingsRepository.disabledProviders.first()
+        _providers.value = buildProviderList(profiles, disabled)
+        _availableModels.value = buildModelList(profiles)
+    }
+
+    /** 无缓存兜底：至少内置 DeepSeek 一个 provider，工具栏立即可用 */
+    private fun applyBuiltinFallback() {
+        _providers.value = listOf(
+            LlmProviderInfo(provider = "deepseek-official", displayName = "DeepSeek", registered = true),
+        )
+        _availableModels.value = DEFAULT_MODELS
+    }
+
+    /** 由缓存 profiles 构建 provider 目录（内置 DeepSeek 兜底 + 禁用过滤） */
+    private fun buildProviderList(profiles: Map<String, ProviderProfile>, disabled: Set<String>): List<LlmProviderInfo> {
+        val list = profiles
+            .map { (key, p) -> LlmProviderInfo(provider = key, displayName = p.displayName ?: key, registered = true) }
+            .filter { it.provider !in disabled }
+            .toMutableList()
+        if (list.none { it.provider == "deepseek-official" }) {
+            list.add(0, LlmProviderInfo(provider = "deepseek-official", displayName = "DeepSeek", registered = true))
+        }
+        return list
+    }
+
+    /** 当前 provider 的模型列表（缓存缺模型时回退默认） */
+    private fun buildModelList(profiles: Map<String, ProviderProfile>?): List<String> {
+        val cur = currentProvider.value
+        val models = profiles?.get(cur)?.models?.map { it.id }.orEmpty()
+        return if (models.isEmpty()) DEFAULT_MODELS else models
     }
 
     /** 当前流式会话对应的 DSH sessionId（停止生成用） */
@@ -199,6 +245,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val p = currentProvider.value
             val models = c.llmModels(p) ?: emptyList()
             _availableModels.value = if (models.isEmpty()) DEFAULT_MODELS else models.map { it.id }
+            // 同步写本地缓存：下次打开（或 DSH 未就绪时）UI 可直接渲染，无需等后端
+            c.settingsDescribe("llm-pi-ai")?.let { resp ->
+                runCatching { modelCatalog.saveCatalog(resp.toString()) }
+            }
         }
     }
 

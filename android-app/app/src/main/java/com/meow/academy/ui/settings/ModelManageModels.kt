@@ -1,28 +1,13 @@
 package com.meow.academy.ui.settings
 
 /**
- * 模型管理共享数据模型与常量（Screen 与 ViewModel 共用）。
- * ProviderProfile / ModelProfile / ProviderListItem + slug() / PRESETS / DEEPSEEK_PROVIDER。
+ * 模型管理共享 UI 数据与常量（Screen 与 ViewModel 共用）。
+ * ProviderProfile / ModelProfile 已下沉到 data.model（前后端解耦的缓存层），
+ * 这里保留 ProviderListItem + slug() / PRESETS / DEEPSEEK_PROVIDER。
  */
 
 /** 内置 DeepSeek 官方的 DSH provider 路由名 */
 const val DEEPSEEK_PROVIDER = "deepseek-official"
-
-/** provider 配置 profile（settings/describe 的 value.providers.<name>） */
-data class ProviderProfile(
-    val displayName: String? = null,
-    val api: String? = null,
-    val baseURL: String? = null,
-    val models: List<ModelProfile> = emptyList(),
-)
-
-/** provider 下单个模型的扩展配置 */
-data class ModelProfile(
-    val id: String,
-    val name: String? = null,
-    val contextWindow: Int? = null,
-    val maxTokens: Int? = null,
-)
 
 /** 模型管理列表条目（内置 DeepSeek + 常见 provider + 用户自定义） */
 data class ProviderListItem(

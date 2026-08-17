@@ -3,6 +3,7 @@ package com.meow.academy
 import android.app.Application
 import androidx.work.WorkManager
 import com.meow.academy.data.chat.ChatDatabase
+import com.meow.academy.data.model.ModelCatalogRepository
 import com.meow.academy.data.settings.ResidentMode
 import com.meow.academy.data.settings.SettingsRepository
 import com.meow.academy.runtime.AppLifecycleObserver
@@ -19,6 +20,9 @@ class MeowAcademyApp : Application() {
     val settingsRepository: SettingsRepository by lazy { SettingsRepository(this) }
 
     val runtimeManager: RuntimeManager by lazy { RuntimeManager(this, settingsRepository) }
+
+    /** 模型目录本地缓存（前后端解耦：UI 先用缓存渲染，DSH 就绪后再同步） */
+    val modelCatalogRepository: ModelCatalogRepository by lazy { ModelCatalogRepository(this) }
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 

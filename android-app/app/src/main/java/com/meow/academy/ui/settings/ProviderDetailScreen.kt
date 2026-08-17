@@ -31,6 +31,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.meow.academy.data.model.ModelProfile
 import com.meow.academy.rpc.LlmModelInfo
 import com.meow.academy.rpc.LlmModelInput
 import kotlinx.coroutines.launch

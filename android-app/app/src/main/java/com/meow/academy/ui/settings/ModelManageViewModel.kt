@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.meow.academy.MeowAcademyApp
+import com.meow.academy.data.model.ProviderProfile
+import com.meow.academy.data.model.parseCatalogProfiles
 import com.meow.academy.data.settings.SettingsRepository
 import com.meow.academy.rpc.DshParams
 import com.meow.academy.rpc.DshRpcClient
@@ -24,7 +26,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * 模型管理页 ViewModel：provider 列表（内置 + 常见 + 自定义）+ profile 读写。
@@ -34,6 +35,7 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
 
     private val runtimeManager = (app as MeowAcademyApp).runtimeManager
     private val settingsRepository = (app as MeowAcademyApp).settingsRepository
+    private val modelCatalog = (app as MeowAcademyApp).modelCatalogRepository
     private val json = Json { ignoreUnknownKeys = true }
 
     /** 列表条目（内置 + 常见 + 自定义） */
@@ -69,19 +71,38 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
             _llmProvider.value = settingsRepository.llmProvider.first()
             _llmModel.value = settingsRepository.llmModel.first()
         }
+        // 前端解耦：立即用本地缓存渲染列表（内置 + 常见 + 已配置 provider），
+        //    不等 DSH 后端加载完成——进页面即有内容
+        viewModelScope.launch {
+            val cached = modelCatalog.catalogJson.first()
+            val profiles = cached?.let { runCatching { parseCatalogProfiles(json.parseToJsonElement(it).jsonObject) }.getOrNull() }
+                ?: emptyMap()
+            _profiles.value = profiles
+            _items.value = buildItems(profiles)
+        }
     }
 
-    /** 拉取 provider 列表 + profile（进入页面时调用） */
+    /** 拉取 provider 列表 + profile（进入页面时调用；DSH 未就绪时回退本地缓存） */
     fun refresh() {
         viewModelScope.launch {
+            val c = client
+            if (c == null) {
+                // DSH 未就绪：用本地缓存渲染（内置 + 预设 + 已配置 provider），不阻塞页面
+                val cached = modelCatalog.catalogJson.first()
+                val profiles = cached?.let { runCatching { parseCatalogProfiles(json.parseToJsonElement(it).jsonObject) }.getOrNull() }
+                    ?: emptyMap()
+                _profiles.value = profiles
+                _items.value = buildItems(profiles)
+                return@launch
+            }
             _loading.value = true
             try {
-                val c = client
-                if (c != null) {
-                    val profiles = parseProfiles(c.settingsDescribe("llm-pi-ai"))
-                    _profiles.value = profiles
-                    _items.value = buildItems(profiles)
-                }
+                val result = c.settingsDescribe("llm-pi-ai")
+                val profiles = parseCatalogProfiles(result)
+                _profiles.value = profiles
+                _items.value = buildItems(profiles)
+                // 写本地缓存：下次打开（或 DSH 未就绪时）立即渲染
+                result?.let { runCatching { modelCatalog.saveCatalog(it.toString()) } }
             } finally {
                 _loading.value = false
             }
@@ -193,35 +214,6 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
     /** 启用/禁用（写 DataStore 禁用集合） */
     fun toggleDisabled(provider: String, disabled: Boolean) {
         viewModelScope.launch { settingsRepository.setProviderDisabled(provider, disabled) }
-    }
-
-    private fun parseProfiles(result: JsonObject?): Map<String, ProviderProfile> {
-        if (result == null) return emptyMap()
-        val namespaces = result["namespaces"]?.jsonArray ?: return emptyMap()
-        val ns = namespaces.firstOrNull()?.jsonObject ?: return emptyMap()
-        val value = ns["value"]?.jsonObject ?: return emptyMap()
-        val providers = value["providers"]?.jsonObject ?: return emptyMap()
-        val map = mutableMapOf<String, ProviderProfile>()
-        for ((name, profileEl) in providers) {
-            val p = profileEl.jsonObject
-            val models = p["models"]?.jsonArray?.mapNotNull { m ->
-                val mo = m.jsonObject
-                val id = mo["id"]?.jsonPrimitive?.content ?: return@mapNotNull null
-                ModelProfile(
-                    id = id,
-                    name = mo["name"]?.jsonPrimitive?.content,
-                    contextWindow = mo["contextWindow"]?.jsonPrimitive?.content?.toIntOrNull(),
-                    maxTokens = mo["maxTokens"]?.jsonPrimitive?.content?.toIntOrNull(),
-                )
-            } ?: emptyList()
-            map[name] = ProviderProfile(
-                displayName = p["displayName"]?.jsonPrimitive?.content,
-                api = p["api"]?.jsonPrimitive?.content,
-                baseURL = p["baseURL"]?.jsonPrimitive?.content,
-                models = models,
-            )
-        }
-        return map
     }
 
     companion object {
