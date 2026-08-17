@@ -24,13 +24,6 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.cancellation.CancellationException
 
-/** 连接状态 */
-sealed interface DshConnectionState {
-    data object Connecting : DshConnectionState
-    data object Running : DshConnectionState
-    data class Closed(val error: String? = null) : DshConnectionState
-}
-
 /**
  * DSH jsonrpc 协议客户端（JSON-RPC 2.0 over stdio）。
  *

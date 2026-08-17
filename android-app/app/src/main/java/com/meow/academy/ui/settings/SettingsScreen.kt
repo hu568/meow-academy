@@ -1,38 +1,25 @@
 package com.meow.academy.ui.settings
 
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.ModelTraining
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -42,6 +29,7 @@ import com.meow.academy.data.settings.HomeTab
 import com.meow.academy.data.settings.ResidentMode
 import com.meow.academy.data.settings.SettingsRepository
 import com.meow.academy.data.settings.ThemeMode
+import com.meow.academy.data.settings.displayName
 
 /**
  * ⚙️ 我的/设置页（雏形）。
@@ -119,7 +107,7 @@ fun SettingsScreen(
                 SettingsRow(
                     icon = Icons.Filled.Terminal,
                     title = "保活时长",
-                    subtitle = "${residentMinutes} 分钟",
+                    subtitle = residentMinutes.toString() + " 分钟",
                     onClick = { showMinutesDialog = true },
                 )
             }
@@ -189,101 +177,4 @@ fun SettingsScreen(
             onDismiss = { showMinutesDialog = false },
         )
     }
-}
-
-/** 分组小标题 */
-@Composable
-private fun SectionHeader(title: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp),
-    )
-}
-
-/** 设置行（图标 + 标题 + 副标题 + 右箭头） */
-@Composable
-private fun SettingsRow(
-    icon: ImageVector,
-    title: String,
-    subtitle: String? = null,
-    onClick: (() -> Unit)? = null,
-) {
-    ListItem(
-        leadingContent = { Icon(icon, contentDescription = null) },
-        headlineContent = { Text(title) },
-        supportingContent = subtitle?.let { { Text(it) } },
-        trailingContent = {
-            if (onClick != null) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = null,
-                )
-            }
-        },
-        modifier = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier,
-    )
-}
-
-/** 通用单选对话框 */
-@Composable
-private fun <T> SingleChoiceDialog(
-    title: String,
-    options: List<Pair<T, String>>,
-    selected: T,
-    onSelect: (T) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column {
-                options.forEach { (value, label) ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onSelect(value) }
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(
-                            selected = value == selected,
-                            onClick = { onSelect(value) },
-                        )
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.bodyLarge,
-                            modifier = Modifier.padding(start = 8.dp),
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        },
-    )
-}
-
-// ── 显示名映射 ──
-
-private fun HomeTab.displayName(): String = when (this) {
-    HomeTab.CHAT -> "💬 聊天"
-    HomeTab.FILES -> "📁 文件管理"
-    HomeTab.SETTINGS -> "⚙️ 我的"
-}
-
-private fun ThemeMode.displayName(): String = when (this) {
-    ThemeMode.SYSTEM -> "跟随系统"
-    ThemeMode.LIGHT -> "浅色"
-    ThemeMode.DARK -> "深色"
-    ThemeMode.CUSTOM -> "自定义"
-}
-
-private fun ResidentMode.displayName(minutes: Int): String = when (this) {
-    ResidentMode.OFF -> "关闭"
-    ResidentMode.TIMED -> "有限保活（$minutes 分钟）"
-    ResidentMode.ALWAYS -> "一直常驻"
 }

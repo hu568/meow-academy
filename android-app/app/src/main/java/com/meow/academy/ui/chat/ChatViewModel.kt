@@ -34,9 +34,6 @@ import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 
 /**
  * 聊天页 ViewModel（DSH 版，替代 pi 事件流）。
@@ -109,31 +106,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 当前流式会话对应的 DSH sessionId（停止生成用） */
     private var streamingDshSessionId: String? = null
-
-    /**
-     * 流式消息的实时状态（全 val 不可变）。
-     * StateFlow 用 equals 判等去重，同一实例原地改字段再回写不会触发 emit，
-     * 必须 copy 出新对象（与 TerminalEntry 同理，见踩坑记录 #5）。
-     */
-    data class StreamingState(
-        val messageId: Long,
-        val segments: List<Segment> = emptyList(),
-    )
-
-    data class ToolCallInfo(
-        val id: String,
-        val name: String,
-        val arguments: String = "",
-        val result: String = "",
-        val isError: Boolean = false,
-    )
-
-    /** 有序步骤：思考段 / 文本段 / 工具调用按 DSH 事件到达顺序交错渲染 */
-    sealed interface Segment {
-        data class Reasoning(val text: String) : Segment
-        data class Text(val text: String) : Segment
-        data class Tool(val call: ToolCallInfo) : Segment
-    }
 
     fun openSession(id: Long) {
         _currentSessionId.value = id
@@ -400,49 +372,4 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _streaming.value = null
     }
 
-    /** 有序步骤序列 → JSON（落库 segmentsJson 字段） */
-    private fun segmentsToJson(segments: List<Segment>): JsonArray = buildJsonArray {
-        segments.forEach { seg ->
-            when (seg) {
-                is Segment.Reasoning -> add(buildJsonObject {
-                    put("type", "reasoning")
-                    put("text", seg.text)
-                })
-                is Segment.Text -> add(buildJsonObject {
-                    put("type", "text")
-                    put("text", seg.text)
-                })
-                is Segment.Tool -> add(buildJsonObject {
-                    put("type", "tool")
-                    put("id", seg.call.id)
-                    put("name", seg.call.name)
-                    put("arguments", seg.call.arguments)
-                    put("result", seg.call.result)
-                    put("isError", seg.call.isError)
-                })
-            }
-        }
-    }
-
-    /** reasoning-delta 追加到末尾 Reasoning 段；末尾不是 Reasoning（或空列表）则新建一段 */
-    private fun appendReasoning(segments: List<Segment>, text: String): List<Segment> {
-        if (text.isEmpty()) return segments
-        val last = segments.lastOrNull()
-        return if (last is Segment.Reasoning) {
-            segments.dropLast(1) + Segment.Reasoning(last.text + text)
-        } else {
-            segments + Segment.Reasoning(text)
-        }
-    }
-
-    /** text-delta 追加到末尾 Text 段；末尾不是 Text（或空列表）则新建一段 */
-    private fun appendText(segments: List<Segment>, text: String): List<Segment> {
-        if (text.isEmpty()) return segments
-        val last = segments.lastOrNull()
-        return if (last is Segment.Text) {
-            segments.dropLast(1) + Segment.Text(last.text + text)
-        } else {
-            segments + Segment.Text(text)
-        }
-    }
 }

@@ -26,45 +26,6 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-/** provider 配置 profile（settings/describe 的 value.providers.<name>） */
-data class ProviderProfile(
-    val displayName: String? = null,
-    val api: String? = null,
-    val baseURL: String? = null,
-    val models: List<ModelProfile> = emptyList(),
-)
-
-/** provider 下单个模型的扩展配置 */
-data class ModelProfile(
-    val id: String,
-    val name: String? = null,
-    val contextWindow: Int? = null,
-    val maxTokens: Int? = null,
-)
-
-/** 模型管理列表条目（内置 DeepSeek + 常见 provider + 用户自定义） */
-data class ProviderListItem(
-    val key: String,
-    val displayName: String,
-    val baseURL: String?,
-    val modelCount: Int,
-    val registered: Boolean,
-    val isBuiltin: Boolean,
-)
-
-/** provider 显示名 → 路由名（settings dict key）的 slug 化 */
-fun slug(name: String): String =
-    name.lowercase().trim().replace(Regex("[^a-z0-9]+"), "_").trim('_').ifBlank { "provider" }
-
-/** 常见 OpenAI 兼容 provider 预设（直接展示在列表，baseURL 预填） */
-val PRESETS: List<Pair<String, String>> = listOf(
-    "OpenAI" to "https://api.openai.com/v1",
-    "Moonshot (Kimi)" to "https://api.moonshot.cn/v1",
-    "Groq" to "https://api.groq.com/openai/v1",
-    "硅基流动 SiliconFlow" to "https://api.siliconflow.cn/v1",
-    "通义千问 Qwen" to "https://dashscope.aliyuncs.com/compatible-mode/v1",
-)
-
 /**
  * 模型管理页 ViewModel：provider 列表（内置 + 常见 + 自定义）+ profile 读写。
  * 默认模型用本地 StateFlow 保证 UI 即时反馈（避免 DataStore 读延迟导致的点击竞态）。
