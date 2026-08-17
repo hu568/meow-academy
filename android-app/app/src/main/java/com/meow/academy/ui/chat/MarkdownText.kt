@@ -34,6 +34,8 @@ fun MarkdownText(markdown: String, modifier: Modifier = Modifier) {
             android.widget.TextView(ctx).apply {
                 textSize = 15f
                 movementMethod = LinkMovementMethod.getInstance()
+                // 长按可选择/复制文本（先设 movementMethod 再设 isTextSelectable，链接仍可点击）
+                setTextIsSelectable(true)
             }
         },
         update = { view -> markwon.setMarkdown(view, markdown) },

@@ -7,7 +7,10 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.meow.academy.MeowAcademyApp
+import com.meow.academy.data.model.DEEPSEEK_PROVIDER
+import com.meow.academy.data.model.PROVIDER_PRESETS
 import com.meow.academy.data.model.ProviderProfile
+import com.meow.academy.data.model.buildProviderDirectory
 import com.meow.academy.data.model.parseCatalogProfiles
 import com.meow.academy.data.settings.SettingsRepository
 import com.meow.academy.rpc.DshParams
@@ -109,30 +112,20 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 合并列表：内置 DeepSeek + 常见 provider（baseURL 预填）+ 用户自定义 */
+    /** 合并列表：与聊天页共用同一份 provider 目录（内置 DeepSeek + 预设 + 自定义），保证两页 key/名称一致 */
     private fun buildItems(profiles: Map<String, ProviderProfile>): List<ProviderListItem> {
-        val list = mutableListOf<ProviderListItem>()
-        list.add(ProviderListItem("deepseek-official", "DeepSeek", null, 2, true, true))
-        for ((name, url) in PRESETS) {
-            val key = slug(name)
-            val profile = profiles[key]
-            list.add(
-                ProviderListItem(
-                    key = key,
-                    displayName = name,
-                    baseURL = profile?.baseURL ?: url,
-                    modelCount = profile?.models?.size ?: 0,
-                    registered = profile != null,
-                    isBuiltin = false,
-                )
+        return buildProviderDirectory(profiles).map { entry ->
+            val preset = PROVIDER_PRESETS.firstOrNull { it.key == entry.key }
+            val profile = profiles[entry.key]
+            ProviderListItem(
+                key = entry.key,
+                displayName = entry.displayName,
+                baseURL = profile?.baseURL ?: preset?.baseURL,
+                modelCount = if (entry.key == DEEPSEEK_PROVIDER) 2 else profile?.models?.size ?: 0,
+                registered = entry.registered,
+                isBuiltin = entry.key == DEEPSEEK_PROVIDER,
             )
         }
-        // 用户自定义（profiles 里、不在预设里的）
-        for ((key, profile) in profiles) {
-            if (PRESETS.any { slug(it.first) == key }) continue
-            list.add(ProviderListItem(key, profile.displayName ?: key, profile.baseURL, profile.models.size, true, false))
-        }
-        return list
     }
 
     suspend fun loadModels(provider: String): List<LlmModelInfo>? = client?.llmModels(provider)

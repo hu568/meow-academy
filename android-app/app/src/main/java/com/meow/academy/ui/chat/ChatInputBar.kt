@@ -6,6 +6,7 @@ package com.meow.academy.ui.chat
  * 从 ChatScreen.kt 原子拆出。
  */
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,7 +15,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -37,7 +40,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.meow.academy.rpc.LlmProviderInfo
@@ -56,6 +62,38 @@ private fun modelLabel(model: String): String = when (model) {
 
 private fun providerLabel(provider: String, providers: List<LlmProviderInfo>): String =
     providers.firstOrNull { it.provider == provider }?.displayName ?: provider
+
+/** 首字圆标头像（provider 用主色容器、模型用次要色容器区分；工具栏芯片/下拉菜单共用） */
+@Composable
+private fun LetterAvatar(
+    name: String,
+    size: Dp = 20.dp,
+    fontSize: TextUnit = 11.sp,
+    container: Color = MaterialTheme.colorScheme.primaryContainer,
+    content: Color = MaterialTheme.colorScheme.onPrimaryContainer,
+) {
+    Box(
+        modifier = Modifier.size(size).background(container, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            name.take(1).uppercase(),
+            fontSize = fontSize,
+            color = content,
+        )
+    }
+}
+
+/** 模型首字圆标（次要色容器，与 provider 头像区分） */
+@Composable
+private fun ModelAvatar(name: String, size: Dp = 20.dp, fontSize: TextUnit = 11.sp) =
+    LetterAvatar(
+        name = name,
+        size = size,
+        fontSize = fontSize,
+        container = MaterialTheme.colorScheme.secondaryContainer,
+        content = MaterialTheme.colorScheme.onSecondaryContainer,
+    )
 
 private fun effortLabel(effort: String): String = when (effort) {
     "off" -> "关闭思考"
@@ -163,22 +201,41 @@ fun ChatToolbar(
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Box {
-            AssistChip(onClick = { providerMenu = true }, label = { Text(providerLabel(currentProvider, providers), fontSize = 12.sp) })
+            AssistChip(
+                onClick = { providerMenu = true },
+                // 收起时只显示首字图标，省出整行空间（展开菜单里才有名字）
+                label = { LetterAvatar(providerLabel(currentProvider, providers)) },
+            )
             DropdownMenu(expanded = providerMenu, onDismissRequest = { providerMenu = false }) {
                 providers.forEach { p ->
                     DropdownMenuItem(
-                        text = { Text(p.displayName) },
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                LetterAvatar(p.displayName, size = 24.dp, fontSize = 12.sp)
+                                Spacer(Modifier.width(8.dp))
+                                Text(p.displayName)
+                            }
+                        },
                         onClick = { onSelectProvider(p.provider); providerMenu = false },
                     )
                 }
             }
         }
         Box {
-            AssistChip(onClick = { modelMenu = true }, label = { Text(modelLabel(llmModel), fontSize = 12.sp) })
+            AssistChip(
+                onClick = { modelMenu = true },
+                label = { ModelAvatar(modelLabel(llmModel)) },
+            )
             DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
                 availableModels.forEach { m ->
                     DropdownMenuItem(
-                        text = { Text(m) },
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                ModelAvatar(modelLabel(m), size = 24.dp, fontSize = 12.sp)
+                                Spacer(Modifier.width(8.dp))
+                                Text(m)
+                            }
+                        },
                         onClick = { onSelectModel(m); modelMenu = false },
                     )
                 }

@@ -1,21 +1,28 @@
 package com.meow.academy.ui.chat
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -24,6 +31,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -38,21 +48,71 @@ fun MessageRow(msg: MessageEntity) {
         MessageRole.USER -> UserBubble(msg.content)
         MessageRole.ASSISTANT -> {
             val segments = parseSegments(msg.segmentsJson)
-            if (segments != null) {
-                AssistantBody(
-                    segments = segments,
-                    status = msg.status,
-                )
-            } else {
-                // 旧消息兼容：segmentsJson 为空时回退 thinking + toolCallsJson
-                Column {
-                    msg.thinking.takeIf { it.isNotBlank() }?.let { ThinkingCard(it) }
-                    msg.toolCallsJson?.let { json ->
-                        parseToolCalls(json).forEach { ToolCard(it) }
+            val copyText = assistantFinalMarkdown(segments, msg.content)
+            Column(modifier = Modifier.fillMaxWidth()) {
+                if (segments != null) {
+                    AssistantBody(
+                        segments = segments,
+                        status = msg.status,
+                    )
+                } else {
+                    // 旧消息兼容：segmentsJson 为空时回退 thinking + toolCallsJson
+                    Column {
+                        msg.thinking.takeIf { it.isNotBlank() }?.let { ThinkingCard(it) }
+                        msg.toolCallsJson?.let { json ->
+                            parseToolCalls(json).forEach { ToolCard(it) }
+                        }
+                        AssistantBubble(msg.content, msg.status)
                     }
-                    AssistantBubble(msg.content, msg.status)
+                }
+                // 每轮助手回复下方操作栏：复制最后返回的正文（Markdown 原文）
+                if (copyText.isNotBlank()) {
+                    AssistantCopyButton(copyText)
                 }
             }
+        }
+    }
+}
+
+/**
+ * 复制内容 = 本轮对话模型最后返回的正文（Markdown 原文，非渲染后的纯文本）：
+ * 取 segments 中最后一个 Text 段 —— 最后一次工具调用结束后返回的正文；无工具时取唯一正文段。
+ * 旧消息（segmentsJson 为 null）回退到整条 content 字段。
+ */
+fun assistantFinalMarkdown(segments: List<Segment>?, fallbackContent: String): String =
+    segments?.filterIsInstance<Segment.Text>()?.lastOrNull()?.text
+        ?.takeIf { it.isNotBlank() }
+        ?: if (segments == null) fallbackContent else ""
+
+/** 助手回复下方操作栏：复制按钮（小图标 + 文案）；重新生成 / 更多 后续再加 */
+@Composable
+fun AssistantCopyButton(copyText: String, modifier: Modifier = Modifier) {
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(start = 6.dp, top = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        TextButton(
+            onClick = {
+                clipboard.setText(AnnotatedString(copyText))
+                Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+            },
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+        ) {
+            Icon(
+                Icons.Outlined.ContentCopy,
+                contentDescription = "复制",
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                "复制",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -119,7 +179,9 @@ fun TextBubble(text: String, status: MessageStatus) {
                 .padding(10.dp),
         ) {
             if (status == MessageStatus.STREAMING) {
-                Text(text, style = MaterialTheme.typography.bodyLarge)
+                SelectionContainer {
+                    Text(text, style = MaterialTheme.typography.bodyLarge)
+                }
             } else {
                 MarkdownText(text)
             }
@@ -143,12 +205,14 @@ fun ThinkingBlock(thinking: String) {
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Text(
-            text = thinking,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp),
-        )
+        SelectionContainer {
+            Text(
+                text = thinking,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
     }
 }
 
@@ -208,7 +272,9 @@ fun UserBubble(text: String) {
                 .background(MaterialTheme.colorScheme.primaryContainer)
                 .padding(12.dp),
         ) {
-            Text(text = text, style = MaterialTheme.typography.bodyLarge)
+            SelectionContainer {
+                Text(text = text, style = MaterialTheme.typography.bodyLarge)
+            }
         }
     }
 }
@@ -235,10 +301,12 @@ fun AssistantBubble(content: String, status: MessageStatus) {
                         Text("思考中…", style = MaterialTheme.typography.bodyMedium)
                     }
                 }
-                content.isNotBlank() && status == MessageStatus.STREAMING -> Text(
-                    text = content,
-                    style = MaterialTheme.typography.bodyLarge,
-                )
+                content.isNotBlank() && status == MessageStatus.STREAMING -> SelectionContainer {
+                    Text(
+                        text = content,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                }
                 content.isNotBlank() -> MarkdownText(content)
                 else -> Text(
                     status.takeIf { it == MessageStatus.ERROR }?.let { "⚠️ 出错" } ?: "（空回复）",
@@ -273,12 +341,14 @@ fun ThinkingCard(thinking: String) {
         Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     if (expanded) {
-        Text(
-            text = thinking,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 12.dp, top = 4.dp, end = 8.dp),
-        )
+        SelectionContainer {
+            Text(
+                text = thinking,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 12.dp, top = 4.dp, end = 8.dp),
+            )
+        }
     }
 }
 
@@ -322,20 +392,24 @@ fun ToolCard(tool: ToolCallInfo) {
     if (expanded) {
         Column(modifier = Modifier.padding(start = 12.dp, top = 4.dp, end = 8.dp)) {
             if (tool.arguments.isNotBlank()) {
-                Text(
-                    "参数：" + tool.arguments,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                )
+                SelectionContainer {
+                    Text(
+                        "参数：" + tool.arguments,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
             }
             if (tool.result.isNotBlank()) {
-                Text(
-                    "结果：" + tool.result.take(2000),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = if (tool.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
+                SelectionContainer {
+                    Text(
+                        "结果：" + tool.result.take(2000),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = if (tool.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
             } else if (!tool.isError) {
                 Text(
                     "执行中…",

@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.meow.academy.data.model.DEEPSEEK_PROVIDER
 
 private sealed interface ModelRoute {
     data object List : ModelRoute

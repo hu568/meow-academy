@@ -32,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.meow.academy.data.model.DEEPSEEK_PROVIDER
 
 /** 内置 DeepSeek 官方直连配置（API Key + 内置模型默认星标） */
 @Composable
