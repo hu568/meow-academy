@@ -266,6 +266,8 @@ M2.0 原型验证（真机 Termux 跑 pi）
 
 **APK 体积实测（2026-08-11）**：debug APK **105MB**（含 runtime.bin 52.9MB gzip；dex 合计 ~45MB 未开 R8），低于 200MB 红线 ✅；release 构建预期更小。
 
+**APK 体积实测（2026-08-16，WSL 构建）**：debug APK **86MB**（含 runtime.bin 66.6MB gzip；dex 11 个 raw 合计 59.6MB、zip 压缩后仅 17.8MB），低于 200MB 红线 ✅。比 8-11 小 19MB 的主因是 dex 在包内为 deflate 压缩（8-11 记的 45MB 是未开 R8 的原始大小口径）；runtime.bin 反而从 52.9 → 68MB 变大（M3/M4 插件增多）。
+
 **待完成（M2.7 剩余）**：
 - ✅ 聊天页流式对话实测（2026-08-11 通过：DeepSeek 流式出字 + thinking 折叠 + 完整事件流）
 - ✅ 三档常驻开关实测（2026-08-11 通过，见上方实测记录）

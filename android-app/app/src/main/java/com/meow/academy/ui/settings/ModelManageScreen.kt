@@ -270,8 +270,8 @@ private fun ProviderDetailScreen(
     fun doSave() {
         scope.launch {
             val key = routeKey()
-            if (key.isBlank() || models.isEmpty()) {
-                snackbar.showSnackbar("请填写提供商名称与至少一个模型")
+            if (key.isBlank()) {
+                snackbar.showSnackbar("请填写提供商名称")
                 return@launch
             }
             busy = true

@@ -10,7 +10,7 @@ plugins {
 // ── APK 同步到 release/（与 AGENTS.md 约定一致）──
 // assembleDebug 完成后把 APK 复制到仓库根 release/meow-academy-<version>-debug.apk，
 // 每次编译后自动更新，无需手动复制。
-// release/ 中 APK 被 .gitignore 忽略（~105MB 不入库），RELEASE_NOTES_*.md 才入库。
+// release/ 中 APK 被 .gitignore 忽略（~86MB 不入库），RELEASE_NOTES_*.md 才入库。
 val syncApkToRelease = tasks.register<Copy>("syncApkToRelease") {
     group = "build"
     description = "复制 debug APK 到仓库根 release/"

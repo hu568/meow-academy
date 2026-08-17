@@ -64,8 +64,10 @@ cp -r "$DSH_DIR" "$DEPLOY_DIR/dsh"
 # ── 4. 打包（顶层条目：node_modules/ + dsh/；保持相对 symlink）──
 echo "» tar czf…"
 mkdir -p "$OUT_DIR"
-# GNU tar 会把 E:/xxx 当远程主机（rsh 语法），必须 cd 后用纯文件名
-( cd "$OUT_DIR" && tar -C "$DEPLOY_DIR" -czf "$(basename "$OUT_FILE")" node_modules dsh )
+# GNU tar 会把 E:/xxx 当远程主机（rsh 语法），必须 cd 后用纯文件名。
+# --hard-dereference：pnpm 布局用 hard link 共享 store 文件，Termux 上 SELinux 禁
+# link() 导致解包失败，这里解引用成普通文件写进归档。
+( cd "$OUT_DIR" && tar --hard-dereference -C "$DEPLOY_DIR" -czf "$(basename "$OUT_FILE")" node_modules dsh )
 ls -lh "$OUT_FILE"
 
 cat <<EOF

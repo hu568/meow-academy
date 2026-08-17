@@ -83,7 +83,7 @@ jsonrpc 协议的事件流（`session.event` + `session.status`）与 pi 的 mes
 - `node-pty` 62.6MB —— 持久终端原生模块（真终端提前到 M2 后需重新纳入；Android 上用 fork @mmmbuto/node-pty-android-arm64 或 Kotlin 侧 bionic forkpty）
 - `@google/genai` 13.7MB + `@mistralai` 9.2MB + `openai` 7.2MB + `@anthropic-ai/sdk` 3.9MB + aws-sdk + otel 11.5MB ≈ 58MB —— pi-ai 各家 LLM SDK 链（本方案用 `dsh-llm-deepseek` 直连官方 API，全不需要）
 
-**预计 runtime.bin：~35-40MB**（closure 18.7 + node ~15 + 证书等），**APK 预计 ~90-110MB**——比现状（105MB）还小，200MB 红线余量超过一倍。
+**预计 runtime.bin：~35-40MB**（closure 18.7 + node ~15 + 证书等），**APK 预计 ~90-110MB**——现实测（86MB）已低于预计，200MB 红线余量超过一倍。
 
 ---
 
