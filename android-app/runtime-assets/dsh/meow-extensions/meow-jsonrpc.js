@@ -39,6 +39,49 @@ export const Config = z.object({
 const MIN_STREAM_INTERVAL_MS = 20
 
 /**
+ * 把思考强度钳制到目标模型的能力范围内（防止 DeepSeek 的 'high' 被原样带到
+ * 不支持思考的 OpenAI 兼容模型上，导致请求以 UNSUPPORTED_REASONING_EFFORT 失败）。
+ *
+ * 关键：核心 llm 服务（resolveCallFor）对「无思考能力」的模型（reasoning 元数据
+ * 缺失，如自定义 provider 的模型）会拒绝**任何**显式强度——包括 'off'。所以：
+ *   - 模型支持该强度 → 原样保留；
+ *   - 模型无思考能力或不支持该强度 → **不传**（undefined，交 provider 默认/不思考），
+ *     而不是退回 'off'（那同样会被核心校验拒绝）；
+ *   - 模型支持思考且有无默认强度 → 用模型默认（前提是默认也在支持列表里）。
+ * 查询失败（provider 未注册/模型不存在等）→ 原样保留，把真实错误留给上游，不掩盖。
+ * @param llm - llm 服务（可能 undefined）
+ * @param provider - 目标 provider 路由
+ * @param model - 目标模型 id
+ * @param effort - 期望思考强度（undefined = 不指定，交给 provider 默认）
+ * @returns {{ effort?: string, modelReasoning?: { efforts: string[], defaultEffort?: string } }}
+ */
+async function clampReasoningEffort(llm, provider, model, effort) {
+  if (effort === undefined) return { effort: undefined, modelReasoning: undefined }
+  let info
+  try {
+    if (llm === undefined) return { effort, modelReasoning: undefined }
+    info = await llm.resolveModelInfo(provider, model)
+  } catch {
+    return { effort, modelReasoning: undefined }
+  }
+  const reasoning = info?.reasoning
+  if (reasoning === undefined) {
+    // 模型无思考能力：任何显式强度（含 off）都会被核心校验拒绝 → 不传
+    return { effort: undefined, modelReasoning: undefined }
+  }
+  const efforts = reasoning.efforts.map((entry) => String(entry.id))
+  const modelReasoning = {
+    efforts,
+    ...(reasoning.defaultEffort === undefined ? {} : { defaultEffort: String(reasoning.defaultEffort) }),
+  }
+  if (efforts.includes(effort)) return { effort, modelReasoning }
+  // 不支持当前强度 → 模型默认强度（且必须在支持列表里），否则不传
+  const fallback = reasoning.defaultEffort === undefined ? undefined : String(reasoning.defaultEffort)
+  if (fallback !== undefined && efforts.includes(fallback)) return { effort: fallback, modelReasoning }
+  return { effort: undefined, modelReasoning }
+}
+
+/**
  * 喵学堂版 SDK server：官方标准方法全部走 super，仅扩展三个自定义方法。
  */
 class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
@@ -96,7 +139,18 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     if (pending) return pending
     const persistence = this.ctx.get('sessionPersistence')
     const creation = (async () => {
-      const selection = { current: this.currentSelection(), assembled: undefined }
+      // 会话初始选择：当前默认 (provider/model/reasoningEffort)，
+      // 思考强度按目标模型能力钳制（见 clampReasoningEffort，避免全局 high 带崩不支持思考的模型）
+      const current = this.currentSelection()
+      const clamped = await clampReasoningEffort(this.ctx.get('llm'), current.provider, current.model, current.reasoningEffort)
+      const selection = {
+        current: {
+          provider: current.provider,
+          model: current.model,
+          ...(clamped.effort === undefined ? {} : { reasoningEffort: clamped.effort }),
+        },
+        assembled: undefined,
+      }
       const setup = (agentCtx) => {
         installModelSelection(agentCtx, selection)
         this.selections.set(sessionId, selection)
@@ -149,26 +203,34 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     return creation
   }
 
-  /** 运行时切换某会话的模型/思考强度（影响该会话下一次请求；未建 live agent 时更新默认） */
+  /** 运行时切换某会话的模型/思考强度（影响该会话下一次请求；未建 live agent 或空 sessionId 时更新全局默认） */
   async setModel(params) {
-    const sessionId = String(params.sessionId ?? '')
-    if (sessionId === '') throw new Error('session/setModel: sessionId is required')
+    // sessionId 为空 = 只更新运行时全局默认（无打开的会话时切模型/强度），不绑定某个会话
+    const sessionId = params.sessionId === undefined || params.sessionId === null ? '' : String(params.sessionId)
     const ref = this.selections.get(sessionId)
-    if (ref !== undefined) {
-      const cur = ref.current ?? {}
-      ref.current = {
-        provider: params.provider ?? cur.provider,
-        model: params.model ?? cur.model,
-        ...(params.reasoningEffort === undefined && cur.reasoningEffort === undefined
-          ? {}
-          : { reasoningEffort: params.reasoningEffort ?? cur.reasoningEffort }),
-      }
-      return { sessionId, selection: ref.current }
+    const base = ref?.current ?? this.currentSelection()
+    // 目标 (provider/model) 与期望强度：只更新调用方传入的字段
+    const provider = params.provider !== undefined ? String(params.provider) : base.provider
+    const model = params.model !== undefined ? String(params.model) : base.model
+    const target = params.reasoningEffort !== undefined ? String(params.reasoningEffort) : base.reasoningEffort
+    // 思考强度钳制到目标模型能力内：切换 provider/模型时不再把上一任模型的
+    // 强度原样带过去（DeepSeek high → 硅基流动千问会 UNSUPPORTED_REASONING_EFFORT）
+    const clamped = await clampReasoningEffort(this.ctx.get('llm'), provider, model, target)
+    const next = {
+      provider,
+      model,
+      ...(clamped.effort === undefined ? {} : { reasoningEffort: clamped.effort }),
     }
-    if (params.provider !== undefined) this.provider = params.provider
-    if (params.model !== undefined) this.model = params.model
-    if (params.reasoningEffort !== undefined) this.reasoningEffort = params.reasoningEffort
-    return { sessionId, selection: this.currentSelection() }
+    if (ref !== undefined) ref.current = next
+    // 运行时默认同步更新：setModel 一次即完成全局切模型，后续新会话（create/resume）继承同样的选择
+    this.provider = provider
+    this.model = model
+    if (clamped.effort !== undefined) this.reasoningEffort = clamped.effort
+    return {
+      sessionId,
+      selection: next,
+      ...(clamped.modelReasoning === undefined ? {} : { modelReasoning: clamped.modelReasoning }),
+    }
   }
 
   /** provider 名 → credential ref（POSIX 标识符；provider 名非字母数字转下划线） */

@@ -257,6 +257,18 @@ M2.0 原型验证（真机 Termux 跑 pi）
 10. **`SSL_CERT_FILE` 不被 node 读取**（那是 OpenSSL/Python 系的变量）；node 要用 `NODE_EXTRA_CA_CERTS` 额外 CA + `OPENSSL_CONF` 重定向 OpenSSL 配置路径（Termux 默认路径在 App 沙箱不可读，指到内置空 openssl.cnf）。
 11. **Termux 无 ldd**（bionic 环境，binutils 只带 g 前缀工具）：枚举动态库依赖用 `greadelf -d <bin> | grep NEEDED`，且需迭代补齐传递依赖（如 libicui18n → libicuuc）；系统库（libc/libm/libdl）不在 $PREFIX/lib 自动跳过。
 12. **拷贝 npm scope 包注意保留 scope 目录**：`cp -rL .../node_modules/@earendil-works/pi-coding-agent <dest>/node_modules/` 会丢掉 @earendil-works 层，必须先 `mkdir -p <dest>/node_modules/@earendil-works` 再拷入。
+13. **跨 provider 热切换模型报「生成出错，请重试」（turn/end kind=error）**：切换 provider/模型时 
+`reasoningEffort` 被原样带到下一轮请求——DeepSeek 的 `high` 被带到硅基流动等自定义 provider 的模型
+（`settings/setProvider` 存的 models 不含 `reasoningEfforts`）→ 核心 `dsh-llm` 的 `resolveCallFor` 对
+「无思考能力」模型拒绝**任何**显式强度（含 `off`）→ `UNSUPPORTED_REASONING_EFFORT` → 回合以 error 结束。
+修复（2026-08-17）：`meow-jsonrpc.js` 新增 `clampReasoningEffort()`，在 `setModel`/建会话时把思考强度
+钳制到目标模型能力内——**不支持思考 → 不传强度**（undefined，交 provider 默认），支持但强度不在列表
+→ 模型默认强度（且须在支持列表内），否则同样不传；第一版曾钳到 `off`，但 `off` 同样被核心校验拒绝
+（真机 WAL 实测 `does not support reasoning effort "off"` 复现坐实）。`setModel` 同时同步服务端全局
+默认（空 sessionId = 只更新默认，无打开的会话也能生效）并回传钳制后的 `selection`；客户端 
+`ChatViewModel` 解析响应把有效强度写回 DataStore（无强度时记 `off`，UI 显示「思考·关」，initialize 带的
+`off` 也会被建会话钳制消化）。修复经 PC 复现（闭包真实代码 + 真实 key：硅基流动千问回合 completed）
+与真机重打包验证。
 
 **三档常驻开关实测（2026-08-11，真机）**：
 - ✅ 关闭档：退后台 → RuntimeManager.stop()，进程退出（30s 内 ps 无残留）

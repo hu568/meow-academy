@@ -6,7 +6,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.meow.academy.MeowAcademyApp
 import com.meow.academy.data.chat.ChatDatabase
+import com.meow.academy.data.model.DEEPSEEK_PROVIDER
 import com.meow.academy.data.model.ProviderProfile
+import com.meow.academy.data.model.buildProviderDirectory
 import com.meow.academy.data.model.parseCatalogProfiles
 import com.meow.academy.data.chat.MessageEntity
 import com.meow.academy.data.chat.MessageRole
@@ -38,8 +40,11 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * 聊天页 ViewModel（DSH 版，替代 pi 事件流）。
@@ -137,54 +142,39 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * 缓存优先渲染：从本地缓存构建工具栏（无缓存时至少显示内置 DeepSeek）。
-     * provider 目录优先用 llm/providers 缓存（与真实目录一致，避免就绪后列表跳动），
-     * 其次 settingsDescribe 缓存（自定义 provider 视图）；模型列表来自 settingsDescribe 缓存。
+     * provider 目录与设置页共用同一份（内置 DeepSeek + 预设 + 已配置 provider），
+     * 优先用 providersJson 缓存（刷新时存的同一份共享目录），其次由 settingsDescribe 缓存构建；
+     * 模型列表来自 settingsDescribe 缓存。
      */
     private suspend fun applyCatalogCache() {
-        val disabled = settingsRepository.disabledProviders.first()
         val cached = modelCatalog.catalogJson.first()
         val profiles = cached?.let {
             runCatching { parseCatalogProfiles(json.parseToJsonElement(it).jsonObject) }.getOrNull()
         }
 
-        // ① provider 目录：llm/providers 缓存 → settingsDescribe 缓存 → 内置 DeepSeek
+        // ① provider 目录：providersJson 缓存（刷新时存的同一份共享目录）→ profiles 构建 → 内置 DeepSeek 兜底
         var providers: List<LlmProviderInfo>? = runCatching {
             modelCatalog.providersJson.first()?.let { raw ->
                 json.parseToJsonElement(raw).jsonArray
                     .mapNotNull { el -> runCatching { json.decodeFromJsonElement(LlmProviderInfo.serializer(), el) }.getOrNull() }
-                    .filter { it.provider !in disabled }
             }
         }.getOrNull()?.takeIf { it.isNotEmpty() }
         if (providers == null) {
-            providers = if (!profiles.isNullOrEmpty()) buildProviderList(profiles, disabled) else emptyList()
+            providers = buildProviderList(profiles ?: emptyMap(), settingsRepository.disabledProviders.first())
         }
         // 内置 DeepSeek 兜底（双保险，保证列表里始终有官方入口）
-        _providers.value = if (providers.any { it.provider == "deepseek-official" }) providers
-            else listOf(LlmProviderInfo(provider = "deepseek-official", displayName = "DeepSeek", registered = true)) + providers
+        _providers.value = if (providers.any { it.provider == DEEPSEEK_PROVIDER }) providers
+            else listOf(LlmProviderInfo(provider = DEEPSEEK_PROVIDER, displayName = "DeepSeek", registered = true)) + providers
 
         // ② 模型列表：settingsDescribe 缓存里当前 provider 的 models，缺则默认
         _availableModels.value = if (cached != null) buildModelList(profiles) else DEFAULT_MODELS
     }
 
-    /** 无缓存兜底：至少内置 DeepSeek 一个 provider，工具栏立即可用 */
-    private fun applyBuiltinFallback() {
-        _providers.value = listOf(
-            LlmProviderInfo(provider = "deepseek-official", displayName = "DeepSeek", registered = true),
-        )
-        _availableModels.value = DEFAULT_MODELS
-    }
-
-    /** 由缓存 profiles 构建 provider 目录（内置 DeepSeek 兜底 + 禁用过滤） */
-    private fun buildProviderList(profiles: Map<String, ProviderProfile>, disabled: Set<String>): List<LlmProviderInfo> {
-        val list = profiles
-            .map { (key, p) -> LlmProviderInfo(provider = key, displayName = p.displayName ?: key, registered = true) }
-            .filter { it.provider !in disabled }
-            .toMutableList()
-        if (list.none { it.provider == "deepseek-official" }) {
-            list.add(0, LlmProviderInfo(provider = "deepseek-official", displayName = "DeepSeek", registered = true))
+    /** 由缓存 profiles 构建与设置页一致的 provider 目录（内置 DeepSeek 兜底 + 禁用过滤） */
+    private fun buildProviderList(profiles: Map<String, ProviderProfile>, disabled: Set<String>): List<LlmProviderInfo> =
+        buildProviderDirectory(profiles, disabled).map { e ->
+            LlmProviderInfo(provider = e.key, displayName = e.displayName, registered = e.registered)
         }
-        return list
-    }
 
     /** 当前 provider 的模型列表（缓存缺模型时回退默认） */
     private fun buildModelList(profiles: Map<String, ProviderProfile>?): List<String> {
@@ -220,8 +210,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Room 长 id → DSH sessionId */
-    private fun dshSessionIdOf(roomId: Long): String = "room-$roomId"
+    /** Room 长 id → DSH sessionId；null（未打开会话）→ 空串：setModel 只更新服务端全局默认 */
+    private fun dshSessionIdOf(roomId: Long?): String = if (roomId == null) "" else "room-$roomId"
 
     /**
      * 发送消息：落库用户消息 → 建 assistant 流式消息 → 订阅事件流 → session/prompt → 收集事件流。
@@ -311,11 +301,20 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun selectModel(model: String) {
         viewModelScope.launch {
             settingsRepository.setLlmModel(model)
-            val sessionId = _currentSessionId.value
-            if (sessionId != null) {
-                (runtimeManager.rpcClient ?: client)?.setModel(dshSessionIdOf(sessionId), model = model)
-            }
+            (runtimeManager.rpcClient ?: client)?.setModel(dshSessionIdOf(_currentSessionId.value), model = model)
+                ?.let { syncEffectiveEffort(it) }
         }
+    }
+
+    /**
+     * setModel 响应里服务端钳制后的思考强度同步回本地全局默认（工具栏与新会话保持一致）。
+     * 服务端对不支持思考的模型会「不传强度」（selection 无 reasoningEffort），
+     * 本地用 'off' 表达该状态（UI 显示「思考·关」，且 initialize 带的 off 也会被服务端钳掉）。
+     */
+    private fun syncEffectiveEffort(result: JsonObject?) {
+        val sel = result?.get("selection")?.jsonObject ?: return
+        val effort = sel["reasoningEffort"]?.jsonPrimitive?.contentOrNull ?: "off"
+        viewModelScope.launch { settingsRepository.setReasoningEffort(effort) }
     }
 
     /** 刷新 provider 目录 + 当前 provider 的模型列表（进入聊天页/运行时启动后调用） */
@@ -323,18 +322,20 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val c = runtimeManager.rpcClient ?: return@launch
             val disabled = settingsRepository.disabledProviders.first()
-            val providers = c.llmProviders() ?: emptyList()
-            _providers.value = providers.filter { it.provider !in disabled }
-            val p = currentProvider.value
-            val models = c.llmModels(p) ?: emptyList()
-            _availableModels.value = if (models.isEmpty()) DEFAULT_MODELS else models.map { it.id }
+            // provider 目录与设置页共用同一份（内置 + 预设 + 已配置），
+            // 不用 llm/providers 的完整 pi-ai 目录（原始路由 id 与设置页名称对不上）
+            val desc = c.settingsDescribe("llm-pi-ai")
+            val profiles = desc?.let { runCatching { parseCatalogProfiles(it) }.getOrNull() } ?: emptyMap()
+            val providers = buildProviderList(profiles, disabled)
+            _providers.value = providers
             // 同步写本地缓存：下次打开（或 DSH 未就绪时）UI 可直接渲染，无需等后端
             runCatching {
                 modelCatalog.saveProviders(json.encodeToString(ListSerializer(LlmProviderInfo.serializer()), providers))
             }
-            c.settingsDescribe("llm-pi-ai")?.let { resp ->
-                runCatching { modelCatalog.saveCatalog(resp.toString()) }
-            }
+            desc?.let { resp -> runCatching { modelCatalog.saveCatalog(resp.toString()) } }
+            val p = currentProvider.value
+            val models = c.llmModels(p) ?: emptyList()
+            _availableModels.value = if (models.isEmpty()) DEFAULT_MODELS else models.map { it.id }
         }
     }
 
@@ -347,10 +348,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             settingsRepository.setLlmProvider(provider)
             settingsRepository.setLlmModel(first)
             _availableModels.value = if (models.isEmpty()) DEFAULT_MODELS else models.map { it.id }
-            val sessionId = _currentSessionId.value
-            if (sessionId != null) {
-                c?.setModel(dshSessionIdOf(sessionId), provider = provider, model = first)
-            }
+            c?.setModel(dshSessionIdOf(_currentSessionId.value), provider = provider, model = first)
+                ?.let { syncEffectiveEffort(it) }
         }
     }
 
@@ -358,10 +357,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun selectReasoningEffort(effort: String) {
         viewModelScope.launch {
             settingsRepository.setReasoningEffort(effort)
-            val sessionId = _currentSessionId.value
-            if (sessionId != null) {
-                (runtimeManager.rpcClient ?: client)?.setModel(dshSessionIdOf(sessionId), reasoningEffort = effort)
-            }
+            (runtimeManager.rpcClient ?: client)?.setModel(dshSessionIdOf(_currentSessionId.value), reasoningEffort = effort)
+                ?.let { syncEffectiveEffort(it) }
         }
     }
 

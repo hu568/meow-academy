@@ -156,14 +156,18 @@ class DshRpcClient(
     suspend fun cancelSession(sessionId: String, timeoutMs: Long = 10_000): Boolean =
         requestOk("session/cancel", DshParams.cancel(sessionId), timeoutMs)
 
-    /** session/setModel：运行时切换某会话的模型/思考强度（只更新传入字段） */
+    /**
+     * session/setModel：运行时切换某会话的模型/思考强度（只更新传入字段）。
+     * @return result（含服务端按模型能力钳制后的 selection.reasoningEffort），
+     *   调用方应把它同步回本地全局默认，让工具栏与后续新会话保持一致
+     */
     suspend fun setModel(
         sessionId: String,
         provider: String? = null,
         model: String? = null,
         reasoningEffort: String? = null,
         timeoutMs: Long = 10_000,
-    ): Boolean = requestOk("session/setModel", DshParams.setModel(sessionId, provider, model, reasoningEffort), timeoutMs)
+    ): JsonObject? = request("session/setModel", DshParams.setModel(sessionId, provider, model, reasoningEffort), timeoutMs)?.result
 
     /** session/bash：执行终端命令；返回最终结果（status/exitCode/timedOut/cancelled） */
     suspend fun bash(
