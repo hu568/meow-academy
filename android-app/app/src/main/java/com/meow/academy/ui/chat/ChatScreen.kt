@@ -78,6 +78,7 @@ private fun ChatDetailView(
     val providers by vm.providers.collectAsState()
     val availableModels by vm.availableModels.collectAsState()
     val currentProvider by vm.currentProvider.collectAsState()
+    val pendingCount by vm.pendingCount.collectAsState()
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -149,6 +150,7 @@ private fun ChatDetailView(
                     input = input,
                     onInputChange = { input = it },
                     isGenerating = isGenerating,
+                    pendingCount = pendingCount,
                     llmModel = llmModel,
                     reasoningEffort = reasoningEffort,
                     webSearchEnabled = webSearchEnabled,

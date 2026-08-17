@@ -99,14 +99,35 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private var client = runtimeManager.rpcClient
 
+    /** 待发送消息：DSH 未就绪/正在生成时入队，就绪后自动补发（sessionId 已落库，补发只走 DSH 侧） */
+    private data class PendingMessage(
+        val roomSessionId: Long,
+        val assistantMessageId: Long,
+        val text: String,
+    )
+
+    /** 待发送队列（进程内；App 被杀后由 cleanupStaleStreaming 兜底把占位标 ERROR） */
+    private val pendingQueue = ArrayDeque<PendingMessage>()
+
+    /** 防 flushPending 并发（多个触发点：Running 状态 / 每条生成结束） */
+    private val flushing = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** 队列中待发送条数（UI 提示"待发送"用） */
+    private val _pendingCount = MutableStateFlow(0)
+    val pendingCount: StateFlow<Int> = _pendingCount.asStateFlow()
+
     init {
         // ① 前端解耦：立即用本地缓存渲染工具栏（无缓存则回退内置 DeepSeek），
         //    不等 DSH 后端加载完成——控件一进页面就是完整可用的
         viewModelScope.launch { applyCatalogCache() }
-        // ② DSH 启动成功后后台同步 provider 目录与当前 provider 的模型列表（并写缓存）
+        // ② DSH 启动成功后：后台同步 provider 目录与当前 provider 的模型列表（并写缓存）+ 补发待发送队列
+        //    flushPending 放独立协程，避免长时间补发阻塞 state collect
         viewModelScope.launch {
             runtimeManager.state.collect { s ->
-                if (s is RuntimeState.Running) refreshModelCatalog()
+                if (s is RuntimeState.Running) {
+                    refreshModelCatalog()
+                    launch { flushPending() }
+                }
             }
         }
     }
@@ -183,6 +204,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 发送消息：落库用户消息 → 建 assistant 流式消息 → 订阅事件流 → session/prompt → 收集事件流。
      *
+     * 前端解耦：DSH 未就绪或当前正在生成时**不报错、不丢弃**，而是入待发送队列，
+     * DSH 就绪后（或当前条生成结束）由 [flushPending] 串行自动补发。
+     *
      * 顺序关键：**先订阅再发送**。DSH 的 session/prompt 立即回响应（受理确认），
      * turn/start / 首条 assistant/chunk 紧随其后（可能早于 send() 返回），
      * 若 send 后才订阅会漏掉开场事件（SharedFlow replay=0）。
@@ -190,7 +214,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun sendMessage(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
-        if (_streaming.value != null) return // 正在生成时不重复发送
 
         viewModelScope.launch {
             val sessionId = _currentSessionId.value
@@ -208,12 +231,49 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             )
 
             val rpc = runtimeManager.rpcClient
-            if (rpc == null) {
-                dao.updateMessageContent(assistantId, "⚠️ DSH 运行时未启动，请到「设置」检查。", MessageStatus.ERROR)
+            if (rpc == null || _streaming.value != null) {
+                // 未就绪或正在生成 → 入队（不丢消息），就绪后自动补发
+                enqueue(PendingMessage(roomSessionId = sessionId, assistantMessageId = assistantId, text = trimmed))
                 return@launch
             }
             client = rpc
             runStream(assistantId, sessionId, dshSessionIdOf(sessionId), rpc, trimmed)
+        }
+    }
+
+    /** 入队一条待发送消息：占位气泡给提示，避免 DSH 未就绪时静默排队 */
+    private suspend fun enqueue(msg: PendingMessage) {
+        dao.updateMessageContent(
+            msg.assistantMessageId,
+            "⏳ 等待 DSH 运行时就绪，将自动发送…",
+            MessageStatus.STREAMING,
+        )
+        pendingQueue.addLast(msg)
+        _pendingCount.value = pendingQueue.size
+    }
+
+    /**
+     * 串行补发待发送队列（触发点：DSH 转 Running / 每条生成结束）。
+     *
+     * AtomicBoolean 防并发（多个触发点可能同时调用）；
+     * 连接断开（进程退出/重启中）时保留队列，等下次 Running 再补发；
+     * 正在生成（用户直发的消息在跑）时提前退出，生成结束会再次触发。
+     */
+    private suspend fun flushPending() {
+        if (!flushing.compareAndSet(false, true)) return
+        try {
+            val rpc = runtimeManager.rpcClient ?: return
+            if (_streaming.value != null) return // 正在生成，等这条结束再触发
+            client = rpc
+            while (pendingQueue.isNotEmpty()) {
+                // 连接断开（进程退出/重启中）：保留队列，等下次 Running 触发
+                if (rpc.state.value !is DshConnectionState.Running) return
+                val msg = pendingQueue.removeFirst()
+                _pendingCount.value = pendingQueue.size
+                runStream(msg.assistantMessageId, msg.roomSessionId, dshSessionIdOf(msg.roomSessionId), rpc, msg.text)
+            }
+        } finally {
+            flushing.set(false)
         }
     }
 
@@ -420,6 +480,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             else -> persist(state, MessageStatus.DONE)
         }
         _streaming.value = null
+        // 队列可能还有待发送（生成中用户又发了消息）→ 触发补发
+        viewModelScope.launch { flushPending() }
     }
 
 }

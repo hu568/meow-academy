@@ -57,7 +57,20 @@ interface ChatDao {
     @Query("DELETE FROM messages WHERE sessionId = :sessionId")
     suspend fun deleteMessages(sessionId: Long)
 
-    /** 启动兜底：进程被杀后残留的 STREAMING 消息收不了尾，标记为 ERROR（保留已有内容） */
-    @Query("UPDATE messages SET status = 'ERROR', content = CASE WHEN content = '' THEN '⚠️ 生成被中断' ELSE content END WHERE status = 'STREAMING'")
+    /**
+     * 启动兜底：进程被杀后残留的 STREAMING 消息收不了尾，标记为 ERROR。
+     * - 空内容（正在流式）→ "生成被中断"
+     * - 待发送占位（"⏳ 等待 DSH…"）→ "发送中断（运行时未就绪）"
+     * - 已有内容（已落库的部分）→ 保留
+     */
+    @Query("""
+        UPDATE messages SET status = 'ERROR',
+            content = CASE
+                WHEN content = '' THEN '⚠️ 生成被中断'
+                WHEN content LIKE '⏳%' THEN '⚠️ 发送中断（运行时未就绪）'
+                ELSE content
+            END
+        WHERE status = 'STREAMING'
+    """)
     suspend fun cleanupStaleStreaming()
 }

@@ -70,6 +70,7 @@ fun ChatInputArea(
     input: String,
     onInputChange: (String) -> Unit,
     isGenerating: Boolean,
+    pendingCount: Int,
     llmModel: String,
     reasoningEffort: String,
     webSearchEnabled: Boolean,
@@ -90,6 +91,15 @@ fun ChatInputArea(
             .imePadding()
             .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
+        // 待发送队列提示（DSH 未就绪/正在生成时入队的消息，就绪后自动发出）
+        if (pendingCount > 0) {
+            Text(
+                "⏳ $pendingCount 条消息待发送，DSH 就绪后自动发出",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 12.dp, bottom = 4.dp),
+            )
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 value = input,
