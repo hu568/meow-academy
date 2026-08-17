@@ -34,8 +34,11 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 
 /**
@@ -132,16 +135,35 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 缓存优先渲染：从本地模型目录缓存构建工具栏，无缓存时至少显示内置 DeepSeek */
+    /**
+     * 缓存优先渲染：从本地缓存构建工具栏（无缓存时至少显示内置 DeepSeek）。
+     * provider 目录优先用 llm/providers 缓存（与真实目录一致，避免就绪后列表跳动），
+     * 其次 settingsDescribe 缓存（自定义 provider 视图）；模型列表来自 settingsDescribe 缓存。
+     */
     private suspend fun applyCatalogCache() {
-        val cached = modelCatalog.catalogJson.first() ?: return applyBuiltinFallback()
-        val profiles = runCatching {
-            parseCatalogProfiles(json.parseToJsonElement(cached).jsonObject)
-        }.getOrNull()
-        if (profiles.isNullOrEmpty()) return applyBuiltinFallback()
         val disabled = settingsRepository.disabledProviders.first()
-        _providers.value = buildProviderList(profiles, disabled)
-        _availableModels.value = buildModelList(profiles)
+        val cached = modelCatalog.catalogJson.first()
+        val profiles = cached?.let {
+            runCatching { parseCatalogProfiles(json.parseToJsonElement(it).jsonObject) }.getOrNull()
+        }
+
+        // ① provider 目录：llm/providers 缓存 → settingsDescribe 缓存 → 内置 DeepSeek
+        var providers: List<LlmProviderInfo>? = runCatching {
+            modelCatalog.providersJson.first()?.let { raw ->
+                json.parseToJsonElement(raw).jsonArray
+                    .mapNotNull { el -> runCatching { json.decodeFromJsonElement(LlmProviderInfo.serializer(), el) }.getOrNull() }
+                    .filter { it.provider !in disabled }
+            }
+        }.getOrNull()?.takeIf { it.isNotEmpty() }
+        if (providers == null) {
+            providers = if (!profiles.isNullOrEmpty()) buildProviderList(profiles, disabled) else emptyList()
+        }
+        // 内置 DeepSeek 兜底（双保险，保证列表里始终有官方入口）
+        _providers.value = if (providers.any { it.provider == "deepseek-official" }) providers
+            else listOf(LlmProviderInfo(provider = "deepseek-official", displayName = "DeepSeek", registered = true)) + providers
+
+        // ② 模型列表：settingsDescribe 缓存里当前 provider 的 models，缺则默认
+        _availableModels.value = if (cached != null) buildModelList(profiles) else DEFAULT_MODELS
     }
 
     /** 无缓存兜底：至少内置 DeepSeek 一个 provider，工具栏立即可用 */
@@ -301,11 +323,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val c = runtimeManager.rpcClient ?: return@launch
             val disabled = settingsRepository.disabledProviders.first()
-            _providers.value = (c.llmProviders() ?: emptyList()).filter { it.provider !in disabled }
+            val providers = c.llmProviders() ?: emptyList()
+            _providers.value = providers.filter { it.provider !in disabled }
             val p = currentProvider.value
             val models = c.llmModels(p) ?: emptyList()
             _availableModels.value = if (models.isEmpty()) DEFAULT_MODELS else models.map { it.id }
             // 同步写本地缓存：下次打开（或 DSH 未就绪时）UI 可直接渲染，无需等后端
+            runCatching {
+                modelCatalog.saveProviders(json.encodeToString(ListSerializer(LlmProviderInfo.serializer()), providers))
+            }
             c.settingsDescribe("llm-pi-ai")?.let { resp ->
                 runCatching { modelCatalog.saveCatalog(resp.toString()) }
             }
