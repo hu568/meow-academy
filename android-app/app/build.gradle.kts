@@ -118,5 +118,8 @@ dependencies {
     // 保活心跳（M2.6）
     implementation(libs.androidx.work.runtime.ktx)
 
+    // 拖拽排序（长按卡片上下拖动 + 边缘自动滚动）
+    implementation(libs.reorderable)
+
     debugImplementation(libs.androidx.ui.tooling)
 }

@@ -17,7 +17,20 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AccessTime
+import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.EditNote
+import androidx.compose.material.icons.outlined.FindReplace
+import androidx.compose.material.icons.outlined.Handyman
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.MenuBook
+import androidx.compose.material.icons.outlined.Quiz
+import androidx.compose.material.icons.outlined.Science
+import androidx.compose.material.icons.outlined.SmartToy
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -31,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -117,6 +131,47 @@ fun AssistantCopyButton(copyText: String, modifier: Modifier = Modifier) {
     }
 }
 
+/** 工具名 → 内置 Material 图标：不同种类的工具使用不同图标，未知工具回退到通用工具箱图标 */
+private fun toolIcon(name: String): ImageVector = when {
+    name.contains("bash", ignoreCase = true) ||
+        name.contains("terminal", ignoreCase = true) ||
+        name.contains("shell", ignoreCase = true) -> Icons.Outlined.Terminal
+    name.contains("rag", ignoreCase = true) ||
+        name.contains("vector", ignoreCase = true) ||
+        name.contains("knowledge", ignoreCase = true) ||
+        name.contains("kb", ignoreCase = true) ||
+        name.contains("book", ignoreCase = true) -> Icons.Outlined.MenuBook
+    name.contains("web", ignoreCase = true) ||
+        name.contains("search", ignoreCase = true) ||
+        name.contains("google", ignoreCase = true) -> Icons.Outlined.Language
+    name.contains("str_replace", ignoreCase = true) ||
+        name.contains("edit", ignoreCase = true) ||
+        name.contains("replace", ignoreCase = true) ||
+        name.contains("patch", ignoreCase = true) -> Icons.Outlined.FindReplace
+    name.contains("read", ignoreCase = true) ||
+        name.contains("view", ignoreCase = true) ||
+        name == "cat" -> Icons.Outlined.Article
+    name.contains("todo", ignoreCase = true) ||
+        name.contains("task", ignoreCase = true) ||
+        name.contains("plan", ignoreCase = true) -> Icons.Outlined.Checklist
+    name.contains("write", ignoreCase = true) ||
+        name.contains("create", ignoreCase = true) ||
+        name.contains("touch", ignoreCase = true) -> Icons.Outlined.EditNote
+    name.contains("time", ignoreCase = true) ||
+        name.contains("date", ignoreCase = true) ||
+        name.contains("clock", ignoreCase = true) -> Icons.Outlined.AccessTime
+    name.contains("ask", ignoreCase = true) ||
+        name.contains("question", ignoreCase = true) ||
+        name.contains("confirm", ignoreCase = true) -> Icons.Outlined.Quiz
+    name.contains("agent", ignoreCase = true) ||
+        name.contains("subagent", ignoreCase = true) ||
+        name.contains("delegate", ignoreCase = true) -> Icons.Outlined.SmartToy
+    name.contains("job", ignoreCase = true) ||
+        name.contains("process", ignoreCase = true) ||
+        name.contains("background", ignoreCase = true) -> Icons.Outlined.History
+    else -> Icons.Outlined.Handyman
+}
+
 /**
  * 助手消息主体：组外思考/文本按到达顺序展示（思考是独立折叠卡、文本是气泡，均不并入工具组）；
  * 工具调用序列折叠成一组，组内若存在「运行中」的工具则自动展开（运行输出完自动收起）。
@@ -167,7 +222,7 @@ fun AssistantBody(
     }
 }
 
-/** 文本气泡（Text 段）：流式用纯文本，完成后用 Markdown 渲染 */
+/** 文本气泡（Text 段）：流式中也直接渲染 Markdown，实时看到标题/列表/代码块等格式 */
 @Composable
 fun TextBubble(text: String, status: MessageStatus) {
     Row(modifier = Modifier.fillMaxWidth()) {
@@ -178,12 +233,12 @@ fun TextBubble(text: String, status: MessageStatus) {
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .padding(10.dp),
         ) {
-            if (status == MessageStatus.STREAMING) {
+            if (text.isNotBlank()) {
+                MarkdownText(text, streaming = status == MessageStatus.STREAMING)
+            } else {
                 SelectionContainer {
                     Text(text, style = MaterialTheme.typography.bodyLarge)
                 }
-            } else {
-                MarkdownText(text)
             }
         }
     }
@@ -200,11 +255,22 @@ fun ThinkingBlock(thinking: String) {
             .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .padding(horizontal = 10.dp, vertical = 8.dp),
     ) {
-        Text(
-            "🧠 思考",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Outlined.Science,
+                contentDescription = "思考",
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                "思考",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         SelectionContainer {
             Text(
                 text = thinking,
@@ -216,7 +282,7 @@ fun ThinkingBlock(thinking: String) {
     }
 }
 
-/** 工具调用折叠组：收起时显示「🔧 工具调用 xN」；有运行中的工具时自动展开，运行完自动收起 */
+/** 工具调用折叠组：收起时显示「工具箱图标 + 工具调用 xN」；有运行中的工具时自动展开，运行完自动收起 */
 @Composable
 fun ToolGroup(segments: List<Segment>, status: MessageStatus) {
     val toolCount = segments.count { it is Segment.Tool }
@@ -237,8 +303,15 @@ fun ToolGroup(segments: List<Segment>, status: MessageStatus) {
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Icon(
+                Icons.Outlined.Handyman,
+                contentDescription = "工具调用",
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            Spacer(Modifier.width(4.dp))
             Text(
-                "🔧 工具调用 x" + toolCount,
+                "工具调用 x" + toolCount,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -301,13 +374,10 @@ fun AssistantBubble(content: String, status: MessageStatus) {
                         Text("思考中…", style = MaterialTheme.typography.bodyMedium)
                     }
                 }
-                content.isNotBlank() && status == MessageStatus.STREAMING -> SelectionContainer {
-                    Text(
-                        text = content,
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                }
-                content.isNotBlank() -> MarkdownText(content)
+                content.isNotBlank() -> MarkdownText(
+                    content,
+                    streaming = status == MessageStatus.STREAMING,
+                )
                 else -> Text(
                     status.takeIf { it == MessageStatus.ERROR }?.let { "⚠️ 出错" } ?: "（空回复）",
                     style = MaterialTheme.typography.bodyMedium,
@@ -332,8 +402,15 @@ fun ThinkingCard(thinking: String) {
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        Icon(
+            Icons.Outlined.Science,
+            contentDescription = "思考过程",
+            modifier = Modifier.size(16.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(4.dp))
         Text(
-            text = "🧠 思考过程",
+            text = "思考过程",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
@@ -379,8 +456,15 @@ fun ToolCard(tool: ToolCallInfo) {
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        Icon(
+            toolIcon(tool.name),
+            contentDescription = tool.name,
+            modifier = Modifier.size(18.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.width(4.dp))
         Text(
-            "🛠 " + tool.name,
+            tool.name,
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
         )

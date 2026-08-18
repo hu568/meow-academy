@@ -23,6 +23,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,6 +53,7 @@ fun ProviderDetailScreen(
     val disabled by vm.disabled.collectAsState()
     val currentProvider by vm.llmProvider.collectAsState()
     val currentModel by vm.llmModel.collectAsState()
+    val savedApiKeys by vm.providerApiKeys.collectAsState()
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
 
@@ -62,13 +64,27 @@ fun ProviderDetailScreen(
 
     var displayName by remember(provider) { mutableStateOf(if (isNew) "" else (existing?.displayName ?: item?.displayName ?: provider)) }
     var baseURL by remember(provider) { mutableStateOf(existing?.baseURL ?: item?.baseURL ?: "") }
-    var apiKey by remember(provider) { mutableStateOf("") }
+    var apiKey by remember(provider) { mutableStateOf(savedApiKeys[provider] ?: "") }
     var models by remember(provider) { mutableStateOf<MutableList<ModelProfile>>(existing?.models?.toMutableList() ?: mutableListOf()) }
+
+    // DataStore 异步加载可能晚于首帧：已保存的 Key 到达后补填（用户已手动输入时不覆盖）
+    LaunchedEffect(provider, savedApiKeys[provider]) {
+        if (apiKey.isBlank()) apiKey = savedApiKeys[provider] ?: ""
+    }
+
+    // 老版本配置的 provider Key 只存在 DSH credential，本地无回显缓存：
+    // 打开详情页时若检测到有 credential 引用但本地缓存为空，主动拉一次明文落缓存
+    LaunchedEffect(provider, existing?.apiKeyEnv, savedApiKeys[provider]) {
+        if (apiKey.isBlank() && existing?.apiKeyEnv != null) {
+            vm.ensureProviderApiKey(provider)
+        }
+    }
 
     var tab by remember(provider) { mutableStateOf(0) }
     var busy by remember { mutableStateOf(false) }
     var showAddModel by remember { mutableStateOf(false) }
     var editingModel by remember { mutableStateOf<ModelProfile?>(null) }
+    var deletingModel by remember { mutableStateOf<ModelProfile?>(null) }
     var fetchedModels by remember { mutableStateOf<List<LlmModelInfo>?>(null) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var testingModel by remember { mutableStateOf<String?>(null) }
@@ -76,6 +92,24 @@ fun ProviderDetailScreen(
     val enabled = provider !in disabled
 
     fun routeKey(): String = if (isNew) slug(displayName) else provider
+
+    /** 模型页自动保存：只提交 models，不覆盖配置页尚未保存的 baseURL/API Key */
+    fun autoSaveModels(next: List<ModelProfile>) {
+        models = next.toMutableList()
+        val key = routeKey()
+        scope.launch {
+            val err = vm.saveModels(key, next.map { LlmModelInput(it.id, it.name, it.contextWindow, it.maxTokens) })
+            if (err != null) snackbar.showSnackbar("模型保存失败：" + err)
+        }
+    }
+
+    /** 删除模型：若删除的是当前默认模型，先复位默认回内置 DeepSeek，再从列表移除并保存 */
+    fun deleteModel(m: ModelProfile) {
+        if (currentProvider == provider && currentModel == m.id) {
+            vm.toggleDefault(provider, m.id)
+        }
+        autoSaveModels(models.filterNot { it.id == m.id })
+    }
 
     fun doSave() {
         scope.launch {
@@ -146,9 +180,11 @@ fun ProviderDetailScreen(
                     busy = busy,
                 )
                 else -> ModelsTab(
+                    provider = provider,
                     models = models,
                     onAddModel = { showAddModel = true },
                     onEditModel = { editingModel = it },
+                    onDeleteModel = { deletingModel = it },
                     onFetch = {
                         scope.launch {
                             busy = true
@@ -161,20 +197,8 @@ fun ProviderDetailScreen(
                         }
                     },
                     onToggleDefault = { m -> vm.toggleDefault(provider, m.id) },
-                    onTest = { m ->
-                        scope.launch {
-                            testingModel = m.id
-                            val r = vm.testModel(provider, m.id)
-                            testingModel = null
-                            val msg = r.fold(
-                                onSuccess = { "✅ " + m.id + " 连接成功" },
-                                onFailure = { e -> "❌ " + m.id + " 失败：" + e.message },
-                            )
-                            snackbar.showSnackbar(msg)
-                        }
-                    },
+                    onReorder = { autoSaveModels(it) },
                     currentModel = currentModel,
-                    testingModel = testingModel,
                 )
             }
         }
@@ -196,7 +220,7 @@ fun ProviderDetailScreen(
 
     if (showAddModel) {
         AddModelDialog(
-            onAdd = { id -> models = (models + ModelProfile(id = id)).toMutableList() },
+            onAdd = { id -> autoSaveModels(models + ModelProfile(id = id)) },
             onDismiss = { showAddModel = false },
         )
     }
@@ -205,9 +229,33 @@ fun ProviderDetailScreen(
         EditModelDialog(
             model = m,
             onSave = { updated ->
-                models = models.map { if (it.id == m.id) updated else it }.toMutableList()
+                autoSaveModels(models.map { if (it.id == m.id) updated else it })
             },
+            onTest = {
+                scope.launch {
+                    testingModel = m.id
+                    val r = vm.testModel(provider, m.id)
+                    testingModel = null
+                    val msg = r.fold(
+                        onSuccess = { "✅ " + m.id + " 连接成功" },
+                        onFailure = { e -> "❌ " + m.id + " 失败：" + e.message },
+                    )
+                    snackbar.showSnackbar(msg)
+                }
+            },
+            testing = testingModel == m.id,
             onDismiss = { editingModel = null },
+        )
+    }
+
+    deletingModel?.let { m ->
+        DeleteModelDialog(
+            model = m,
+            onDelete = {
+                deletingModel = null
+                deleteModel(m)
+            },
+            onDismiss = { deletingModel = null },
         )
     }
 
@@ -217,7 +265,7 @@ fun ProviderDetailScreen(
             added = models.map { it.id }.toSet(),
             onAdd = { m ->
                 if (models.none { it.id == m.id }) {
-                    models = (models + ModelProfile(id = m.id, name = m.name)).toMutableList()
+                    autoSaveModels(models + ModelProfile(id = m.id, name = m.name))
                 }
             },
             onDismiss = { fetchedModels = null },

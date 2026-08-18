@@ -118,6 +118,27 @@ object DshParams {
         if (expectedRevision != null) put("expectedRevision", expectedRevision)
     }
 
+    /** settings/updateProviderModels：只更新 provider 的模型列表（配置页的 baseURL/Key 不受影响） */
+    fun settingsUpdateProviderModels(
+        provider: String,
+        models: List<LlmModelInput>,
+        expectedRevision: Int? = null,
+    ): JsonObject = buildJsonObject {
+        put("provider", provider)
+        put("models", buildJsonArray {
+            models.forEach { m ->
+                add(buildJsonObject {
+                    put("id", m.id)
+                    if (m.name != null) put("name", m.name)
+                    if (m.contextWindow != null) put("contextWindow", m.contextWindow)
+                    if (m.maxTokens != null) put("maxTokens", m.maxTokens)
+                    if (m.input != null) put("input", buildJsonArray { m.input.forEach { add(JsonPrimitive(it)) } })
+                })
+            }
+        })
+        if (expectedRevision != null) put("expectedRevision", expectedRevision)
+    }
+
     /** settings/removeProvider：删除 provider profile + credential */
     fun settingsRemoveProvider(provider: String, expectedRevision: Int? = null): JsonObject = buildJsonObject {
         put("provider", provider)

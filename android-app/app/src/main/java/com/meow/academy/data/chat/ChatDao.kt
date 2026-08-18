@@ -19,11 +19,22 @@ interface ChatDao {
     @Query("SELECT * FROM sessions WHERE id = :id")
     fun observeSession(id: Long): Flow<SessionEntity?>
 
+    @Query("SELECT * FROM sessions WHERE id = :id")
+    suspend fun getSession(id: Long): SessionEntity?
+
     @Insert
     suspend fun insertSession(session: SessionEntity): Long
 
     @Query("UPDATE sessions SET title = :title, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateSessionTitle(id: Long, title: String, updatedAt: Long = System.currentTimeMillis())
+
+    /** 取某会话的第一条用户消息（自动生成标题用） */
+    @Query("SELECT * FROM messages WHERE sessionId = :sessionId AND role = 'USER' ORDER BY createdAt ASC, id ASC LIMIT 1")
+    suspend fun getFirstUserMessage(sessionId: Long): MessageEntity?
+
+    /** 取尚未自动生成标题的会话（title 为「新会话」的会话） */
+    @Query("SELECT * FROM sessions WHERE title = :title")
+    suspend fun getSessionsByTitle(title: String): List<SessionEntity>
 
     @Query("UPDATE sessions SET updatedAt = :updatedAt WHERE id = :id")
     suspend fun touchSession(id: Long, updatedAt: Long = System.currentTimeMillis())

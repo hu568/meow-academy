@@ -46,6 +46,25 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
+/** 新会话默认占位标题；用户在会话里发出第一条消息后自动替换为真实标题 */
+private const val DEFAULT_SESSION_TITLE = "新会话"
+
+/** 从用户消息提取会话标题：取第一行的第一个完整句子（。！？!?；; 结束），没有标点就截断第一行。 */
+private fun generateSessionTitle(text: String): String {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return DEFAULT_SESSION_TITLE
+
+    val firstLine = trimmed.lineSequence().first().trim()
+    val sentence = buildString {
+        for (ch in firstLine) {
+            append(ch)
+            if (ch in "。！？!?；;") break
+        }
+    }.trim()
+
+    return (if (sentence.isNotEmpty()) sentence else firstLine).take(30)
+}
+
 /**
  * 聊天页 ViewModel（DSH 版，替代 pi 事件流）。
  *
@@ -128,6 +147,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         // ① 前端解耦：立即用本地缓存渲染工具栏（无缓存则回退内置 DeepSeek），
         //    不等 DSH 后端加载完成——控件一进页面就是完整可用的
         viewModelScope.launch { applyCatalogCache() }
+        // 模型管理里调整过的 provider 顺序实时同步到聊天工具栏
+        viewModelScope.launch {
+            settingsRepository.providerOrder.collect { order ->
+                _providers.value = reorderLlmProviders(_providers.value, order)
+            }
+        }
+        // 旧版本遗留的「新会话」：若已有历史消息，按第一条用户消息补齐标题
+        viewModelScope.launch { autoTitleDefaultSessions() }
         // ② DSH 启动成功后：后台同步 provider 目录与当前 provider 的模型列表（并写缓存）+ 补发待发送队列
         //    flushPending 放独立协程，避免长时间补发阻塞 state collect
         viewModelScope.launch {
@@ -153,14 +180,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         // ① provider 目录：providersJson 缓存（刷新时存的同一份共享目录）→ profiles 构建 → 内置 DeepSeek 兜底
+        val order = settingsRepository.providerOrder.first()
         var providers: List<LlmProviderInfo>? = runCatching {
             modelCatalog.providersJson.first()?.let { raw ->
                 json.parseToJsonElement(raw).jsonArray
                     .mapNotNull { el -> runCatching { json.decodeFromJsonElement(LlmProviderInfo.serializer(), el) }.getOrNull() }
             }
-        }.getOrNull()?.takeIf { it.isNotEmpty() }
+        }.getOrNull()?.takeIf { it.isNotEmpty() }?.let { reorderLlmProviders(it, order) }
         if (providers == null) {
-            providers = buildProviderList(profiles ?: emptyMap(), settingsRepository.disabledProviders.first())
+            providers = buildProviderList(profiles ?: emptyMap(), settingsRepository.disabledProviders.first(), order)
         }
         // 内置 DeepSeek 兜底（双保险，保证列表里始终有官方入口）
         _providers.value = if (providers.any { it.provider == DEEPSEEK_PROVIDER }) providers
@@ -170,11 +198,26 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _availableModels.value = if (cached != null) buildModelList(profiles) else DEFAULT_MODELS
     }
 
-    /** 由缓存 profiles 构建与设置页一致的 provider 目录（内置 DeepSeek 兜底 + 禁用过滤） */
-    private fun buildProviderList(profiles: Map<String, ProviderProfile>, disabled: Set<String>): List<LlmProviderInfo> =
-        buildProviderDirectory(profiles, disabled).map { e ->
+    /** 由缓存 profiles 构建与设置页一致的 provider 目录（内置 DeepSeek 兜底 + 禁用过滤 + 用户顺序） */
+    private fun buildProviderList(
+        profiles: Map<String, ProviderProfile>,
+        disabled: Set<String>,
+        order: List<String>,
+    ): List<LlmProviderInfo> =
+        buildProviderDirectory(profiles, disabled, order).map { e ->
             LlmProviderInfo(provider = e.key, displayName = e.displayName, registered = e.registered)
         }
+
+    /** 把本地缓存里的 provider 目录按用户自定义顺序重排（缺失 key 追加到尾部） */
+    private fun reorderLlmProviders(
+        providers: List<LlmProviderInfo>,
+        order: List<String>,
+    ): List<LlmProviderInfo> {
+        if (order.isEmpty()) return providers
+        val byKey = providers.associateBy { it.provider }
+        val known = order.mapNotNull(byKey::get)
+        return known + providers.filter { it.provider !in order }
+    }
 
     /** 当前 provider 的模型列表（缓存缺模型时回退默认） */
     private fun buildModelList(profiles: Map<String, ProviderProfile>?): List<String> {
@@ -197,8 +240,36 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun newSession() {
         viewModelScope.launch {
-            val id = dao.insertSession(SessionEntity(title = "新会话"))
+            val id = dao.insertSession(SessionEntity(title = DEFAULT_SESSION_TITLE))
             _currentSessionId.value = id
+        }
+    }
+
+    /**
+     * 自动会话标题：仅当会话仍叫「新会话」时，用会话内第一条用户消息（还没有则用当前这条）
+     * 生成标题；用户手动重命名过的会话不会被覆盖。
+     */
+    private suspend fun autoTitleSession(sessionId: Long, currentText: String) {
+        val session = dao.getSession(sessionId) ?: return
+        if (session.title != DEFAULT_SESSION_TITLE) return
+
+        val firstUserMessage = dao.getFirstUserMessage(sessionId)?.content?.trim()
+            ?.takeIf { it.isNotEmpty() }
+        val title = generateSessionTitle(firstUserMessage ?: currentText)
+        if (title != DEFAULT_SESSION_TITLE) {
+            dao.updateSessionTitle(sessionId, title)
+        }
+    }
+
+    /** 启动时补齐旧数据：把已有消息但标题还是「新会话」的会话，用第一条用户消息生成标题 */
+    private suspend fun autoTitleDefaultSessions() {
+        for (session in dao.getSessionsByTitle(DEFAULT_SESSION_TITLE)) {
+            val first = dao.getFirstUserMessage(session.id)?.content?.trim()
+                ?.takeIf { it.isNotEmpty() } ?: continue
+            val title = generateSessionTitle(first)
+            if (title != DEFAULT_SESSION_TITLE) {
+                dao.updateSessionTitle(session.id, title)
+            }
         }
     }
 
@@ -229,7 +300,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
         viewModelScope.launch {
             val sessionId = _currentSessionId.value
-                ?: dao.insertSession(SessionEntity(title = trimmed.take(20))).also { _currentSessionId.value = it }
+                ?: dao.insertSession(SessionEntity(title = DEFAULT_SESSION_TITLE)).also { _currentSessionId.value = it }
+            autoTitleSession(sessionId, trimmed)
             dao.touchSession(sessionId)
 
             dao.insertMessage(MessageEntity(sessionId = sessionId, role = MessageRole.USER, content = trimmed))
@@ -322,11 +394,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val c = runtimeManager.rpcClient ?: return@launch
             val disabled = settingsRepository.disabledProviders.first()
+            val order = settingsRepository.providerOrder.first()
             // provider 目录与设置页共用同一份（内置 + 预设 + 已配置），
             // 不用 llm/providers 的完整 pi-ai 目录（原始路由 id 与设置页名称对不上）
             val desc = c.settingsDescribe("llm-pi-ai")
             val profiles = desc?.let { runCatching { parseCatalogProfiles(it) }.getOrNull() } ?: emptyMap()
-            val providers = buildProviderList(profiles, disabled)
+            val providers = buildProviderList(profiles, disabled, order)
             _providers.value = providers
             // 同步写本地缓存：下次打开（或 DSH 未就绪时）UI 可直接渲染，无需等后端
             runCatching {

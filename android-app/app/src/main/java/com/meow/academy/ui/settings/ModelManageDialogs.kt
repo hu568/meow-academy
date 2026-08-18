@@ -1,8 +1,8 @@
 package com.meow.academy.ui.settings
 
 /**
- * 模型管理页的 4 种对话框组件：
- * 删除提供商确认 / 添加模型 / 编辑模型 / 获取到的远端模型列表。
+ * 模型管理页的 5 种对话框组件：
+ * 删除提供商确认 / 删除模型确认 / 添加模型 / 编辑模型 / 获取到的远端模型列表。
  */
 
 import androidx.compose.foundation.clickable
@@ -19,9 +19,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,6 +50,24 @@ fun DeleteProviderDialog(
         onDismissRequest = onDismiss,
         title = { Text("删除提供商") },
         text = { Text("确定删除「" + displayName + "」吗？会同时删除其 API Key。") },
+        confirmButton = {
+            TextButton(onClick = { onDelete() }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+/** 删除模型确认对话框 */
+@Composable
+fun DeleteModelDialog(
+    model: ModelProfile,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("删除模型") },
+        text = { Text("确定删除「" + (model.name ?: model.id) + "」（" + model.id + "）吗？") },
         confirmButton = {
             TextButton(onClick = { onDelete() }) { Text("删除", color = MaterialTheme.colorScheme.error) }
         },
@@ -83,12 +104,14 @@ fun AddModelDialog(
     )
 }
 
-/** 编辑模型对话框（显示名称 / 上下文窗口 / 最大输出 tokens） */
+/** 编辑模型对话框（显示名称 / 上下文窗口 / 最大输出 tokens / 测试连接） */
 @Composable
 fun EditModelDialog(
     model: ModelProfile,
     onSave: (ModelProfile) -> Unit,
     onDismiss: () -> Unit,
+    onTest: (() -> Unit)? = null,
+    testing: Boolean = false,
 ) {
     var name by remember(model) { mutableStateOf(model.name ?: "") }
     var ctx by remember(model) { mutableStateOf(model.contextWindow?.toString() ?: "") }
@@ -101,6 +124,21 @@ fun EditModelDialog(
                 OutlinedTextField(name, { name = it }, label = { Text("显示名称") }, singleLine = true)
                 OutlinedTextField(ctx, { ctx = it }, label = { Text("上下文窗口") }, singleLine = true)
                 OutlinedTextField(maxTok, { maxTok = it }, label = { Text("最大输出 tokens") }, singleLine = true)
+                if (onTest != null) {
+                    OutlinedButton(
+                        onClick = onTest,
+                        enabled = !testing,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        if (testing) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Filled.PlayArrow, null, modifier = Modifier.size(16.dp))
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (testing) "测试中…" else "测试连接")
+                    }
+                }
             }
         },
         confirmButton = {
@@ -141,7 +179,10 @@ fun FetchedModelsDialog(
                         Spacer(Modifier.width(8.dp))
                         Column {
                             Text(m.id, style = MaterialTheme.typography.bodyMedium)
-                            if (m.name != m.id) Text(m.name, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            val displayName = m.name
+                            if (displayName != null && displayName != m.id) {
+                                Text(displayName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }

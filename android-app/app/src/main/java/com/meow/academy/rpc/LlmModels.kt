@@ -24,7 +24,7 @@ data class LlmProviderInfo(
 @Serializable
 data class LlmModelInfo(
     val id: String,
-    val name: String,
+    val name: String? = null,
     val description: String? = null,
 )
 

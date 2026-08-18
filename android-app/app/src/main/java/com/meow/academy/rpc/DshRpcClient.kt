@@ -245,6 +245,14 @@ class DshRpcClient(
         timeoutMs,
     )
 
+    /** settings/updateProviderModels：只更新 provider 的模型列表（不触碰 baseURL/API Key） */
+    suspend fun settingsUpdateProviderModels(
+        provider: String,
+        models: List<LlmModelInput>,
+        expectedRevision: Int? = null,
+        timeoutMs: Long = 15_000,
+    ): Boolean = requestOk("settings/updateProviderModels", DshParams.settingsUpdateProviderModels(provider, models, expectedRevision), timeoutMs)
+
     /** settings/removeProvider：删除 provider profile + credential */
     suspend fun settingsRemoveProvider(provider: String, expectedRevision: Int? = null, timeoutMs: Long = 15_000): Boolean =
         requestOk("settings/removeProvider", DshParams.settingsRemoveProvider(provider, expectedRevision), timeoutMs)

@@ -18,8 +18,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -49,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.meow.academy.data.model.DEEPSEEK_PROVIDER
@@ -132,7 +131,13 @@ private fun ProvidersScreen(
                 "模型提供商列表",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(start = 20.dp, top = 4.dp, bottom = 4.dp),
+                modifier = Modifier.padding(start = 20.dp, top = 4.dp),
+            )
+            Text(
+                "长按卡片可上下拖动排序",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 20.dp, bottom = 4.dp),
             )
             when {
                 loading && items.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -145,15 +150,20 @@ private fun ProvidersScreen(
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 }
-                else -> LazyColumn(Modifier.fillMaxSize()) {
-                    items(filtered, key = { it.key }) { item ->
-                        ProviderCard(
-                            item = item,
-                            enabled = item.isBuiltin || item.key !in disabled,
-                            isDefault = item.key == currentProvider || (item.key == DEEPSEEK_PROVIDER && currentProvider == "deepseek"),
-                            onClick = { onOpen(item.key) },
-                        )
-                    }
+                else -> ReorderableLazyColumn(
+                    items = filtered,
+                    key = { it.key },
+                    modifier = Modifier.fillMaxSize(),
+                    enabled = query.isBlank(),
+                    onDragEnd = { reordered -> vm.reorderProviders(reordered.map { it.key }) },
+                ) { item, isDragging ->
+                    ProviderCard(
+                        item = item,
+                        enabled = item.isBuiltin || item.key !in disabled,
+                        isDefault = item.key == currentProvider || (item.key == DEEPSEEK_PROVIDER && currentProvider == "deepseek"),
+                        onClick = { onOpen(item.key) },
+                        isDragging = isDragging,
+                    )
                 }
             }
         }
@@ -167,22 +177,28 @@ private fun ProviderCard(
     enabled: Boolean,
     isDefault: Boolean,
     onClick: () -> Unit,
+    isDragging: Boolean = false,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).clickable(onClick = onClick),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isDragging) 8.dp else 1.dp),
     ) {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier.size(40.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(item.displayName.take(1).uppercase(), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
-            }
+            ProviderAvatar(
+                provider = item.key,
+                displayName = item.displayName,
+                size = 40.dp,
+            )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(item.displayName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = item.displayName,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                     if (isDefault) {
                         Spacer(Modifier.width(6.dp))
                         Icon(Icons.Filled.Star, "默认", modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.tertiary)

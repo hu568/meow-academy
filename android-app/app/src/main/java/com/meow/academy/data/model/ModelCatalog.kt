@@ -18,6 +18,8 @@ data class ProviderProfile(
     val displayName: String? = null,
     val api: String? = null,
     val baseURL: String? = null,
+    /** DSH 侧凭据引用（如 MEOW_OPENAI_API_KEY），用于判断是否已有 credential 引用；不承载明文 */
+    val apiKeyEnv: String? = null,
     val models: List<ModelProfile> = emptyList(),
 )
 
@@ -71,13 +73,14 @@ data class ProviderDirectoryEntry(
 fun buildProviderDirectory(
     profiles: Map<String, ProviderProfile>,
     disabled: Set<String> = emptySet(),
+    order: List<String> = emptyList(),
 ): List<ProviderDirectoryEntry> {
-    val list = mutableListOf(
+    val default = mutableListOf(
         ProviderDirectoryEntry(DEEPSEEK_PROVIDER, "DeepSeek", registered = true),
     )
     for (preset in PROVIDER_PRESETS) {
         val profile = profiles[preset.key]
-        list += ProviderDirectoryEntry(
+        default += ProviderDirectoryEntry(
             key = preset.key,
             displayName = profile?.displayName ?: preset.displayName,
             registered = profile != null,
@@ -85,9 +88,18 @@ fun buildProviderDirectory(
     }
     for ((key, profile) in profiles) {
         if (key == DEEPSEEK_PROVIDER || PROVIDER_PRESETS.any { it.key == key }) continue
-        list += ProviderDirectoryEntry(key, profile.displayName ?: key, registered = true)
+        default += ProviderDirectoryEntry(key, profile.displayName ?: key, registered = true)
     }
-    return list.filter { it.key !in disabled }
+
+    // 用户自定义顺序：已存在的 key 按 order 排，新增/未记录的 key 保持默认顺序追加到尾部。
+    val ordered = if (order.isEmpty()) {
+        default
+    } else {
+        val known = order.distinct().mapNotNull { key -> default.firstOrNull { it.key == key } }
+        val knownKeys = known.map { it.key }
+        (known + default.filter { it.key !in knownKeys }).toMutableList()
+    }
+    return ordered.filter { it.key !in disabled }
 }
 
 /**
@@ -117,6 +129,7 @@ fun parseCatalogProfiles(result: JsonObject?): Map<String, ProviderProfile> {
             displayName = p["displayName"]?.jsonPrimitive?.content,
             api = p["api"]?.jsonPrimitive?.content,
             baseURL = p["baseURL"]?.jsonPrimitive?.content,
+            apiKeyEnv = p["apiKeyEnv"]?.jsonPrimitive?.content,
             models = models,
         )
     }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -24,29 +25,35 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.meow.academy.rpc.LlmProviderInfo
+import com.meow.academy.ui.settings.ModelAvatar
+import com.meow.academy.ui.settings.ProviderAvatar
 
 /** DeepSeek 可切换模型（输入栏工具栏下拉；deepseek-chat/reasoner 已弃用，仅 v4 系列有效） */
 private val DEEPSEEK_MODELS = listOf("deepseek-v4-flash", "deepseek-v4-pro")
@@ -62,38 +69,6 @@ private fun modelLabel(model: String): String = when (model) {
 
 private fun providerLabel(provider: String, providers: List<LlmProviderInfo>): String =
     providers.firstOrNull { it.provider == provider }?.displayName ?: provider
-
-/** 首字圆标头像（provider 用主色容器、模型用次要色容器区分；工具栏芯片/下拉菜单共用） */
-@Composable
-private fun LetterAvatar(
-    name: String,
-    size: Dp = 20.dp,
-    fontSize: TextUnit = 11.sp,
-    container: Color = MaterialTheme.colorScheme.primaryContainer,
-    content: Color = MaterialTheme.colorScheme.onPrimaryContainer,
-) {
-    Box(
-        modifier = Modifier.size(size).background(container, CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            name.take(1).uppercase(),
-            fontSize = fontSize,
-            color = content,
-        )
-    }
-}
-
-/** 模型首字圆标（次要色容器，与 provider 头像区分） */
-@Composable
-private fun ModelAvatar(name: String, size: Dp = 20.dp, fontSize: TextUnit = 11.sp) =
-    LetterAvatar(
-        name = name,
-        size = size,
-        fontSize = fontSize,
-        container = MaterialTheme.colorScheme.secondaryContainer,
-        content = MaterialTheme.colorScheme.onSecondaryContainer,
-    )
 
 private fun effortLabel(effort: String): String = when (effort) {
     "off" -> "关闭思考"
@@ -198,20 +173,24 @@ fun ChatToolbar(
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+        // 服务商：圆形按钮内显示该厂商自己的头像/Logo
         Box {
-            AssistChip(
+            ToolCircleButton(
                 onClick = { providerMenu = true },
-                // 收起时只显示首字图标，省出整行空间（展开菜单里才有名字）
-                label = { LetterAvatar(providerLabel(currentProvider, providers)) },
-            )
+                contentDescription = "切换服务商（当前${providerLabel(currentProvider, providers)}）",
+                container = Color.Transparent,
+                contentColor = Color.Transparent,
+            ) {
+                ProviderAvatar(currentProvider, providerLabel(currentProvider, providers), size = 40.dp)
+            }
             DropdownMenu(expanded = providerMenu, onDismissRequest = { providerMenu = false }) {
                 providers.forEach { p ->
                     DropdownMenuItem(
                         text = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                LetterAvatar(p.displayName, size = 24.dp, fontSize = 12.sp)
+                                ProviderAvatar(p.provider, p.displayName, size = 24.dp)
                                 Spacer(Modifier.width(8.dp))
                                 Text(p.displayName)
                             }
@@ -221,17 +200,22 @@ fun ChatToolbar(
                 }
             }
         }
+        // 模型：圆形按钮内显示该模型所属厂商的模型头像
         Box {
-            AssistChip(
+            ToolCircleButton(
                 onClick = { modelMenu = true },
-                label = { ModelAvatar(modelLabel(llmModel)) },
-            )
+                contentDescription = "切换模型（当前${modelLabel(llmModel)}）",
+                container = Color.Transparent,
+                contentColor = Color.Transparent,
+            ) {
+                ModelAvatar(currentProvider, modelLabel(llmModel), size = 40.dp)
+            }
             DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
                 availableModels.forEach { m ->
                     DropdownMenuItem(
                         text = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                ModelAvatar(modelLabel(m), size = 24.dp, fontSize = 12.sp)
+                                ModelAvatar(currentProvider, modelLabel(m), size = 24.dp)
                                 Spacer(Modifier.width(8.dp))
                                 Text(m)
                             }
@@ -241,11 +225,28 @@ fun ChatToolbar(
                 }
             }
         }
+        // 思考强度：圆形闪电图标，随档位变换底色/图标颜色
+        val effortContainer = when (reasoningEffort) {
+            "off" -> MaterialTheme.colorScheme.surfaceVariant
+            "high" -> MaterialTheme.colorScheme.primaryContainer
+            "max" -> MaterialTheme.colorScheme.tertiaryContainer
+            else -> MaterialTheme.colorScheme.surfaceVariant
+        }
+        val effortContent = when (reasoningEffort) {
+            "off" -> MaterialTheme.colorScheme.onSurfaceVariant
+            "high" -> MaterialTheme.colorScheme.onPrimaryContainer
+            "max" -> MaterialTheme.colorScheme.onTertiaryContainer
+            else -> MaterialTheme.colorScheme.onSurfaceVariant
+        }
         Box {
-            AssistChip(
+            ToolCircleButton(
                 onClick = { effortMenu = true },
-                label = { Text("思考·" + effortLabel(reasoningEffort), fontSize = 12.sp) },
-            )
+                contentDescription = "思考强度（当前${effortLabel(reasoningEffort)}）",
+                container = effortContainer,
+                contentColor = effortContent,
+            ) {
+                Icon(Icons.Filled.Bolt, contentDescription = null, modifier = Modifier.size(20.dp))
+            }
             DropdownMenu(expanded = effortMenu, onDismissRequest = { effortMenu = false }) {
                 REASONING_EFFORTS.forEach { e ->
                     DropdownMenuItem(
@@ -255,13 +256,54 @@ fun ChatToolbar(
                 }
             }
         }
-        AssistChip(
+        // 联网搜索：圆形地球图标，开启时高亮显示
+        ToolCircleButton(
             onClick = { onToggleWebSearch(!webSearchEnabled) },
-            label = { Text(if (webSearchEnabled) "联网·开" else "联网·关", fontSize = 12.sp) },
-        )
+            contentDescription = if (webSearchEnabled) "关闭联网搜索" else "开启联网搜索",
+            selected = webSearchEnabled,
+        ) {
+            Icon(Icons.Filled.Public, contentDescription = null, modifier = Modifier.size(20.dp))
+        }
         Spacer(Modifier.weight(1f))
-        IconButton(onClick = onPickFile) {
-            Icon(Icons.Filled.AttachFile, contentDescription = "上传文件")
+        // 上传文件：圆形回形针图标
+        ToolCircleButton(
+            onClick = onPickFile,
+            contentDescription = "上传文件",
+        ) {
+            Icon(Icons.Filled.AttachFile, contentDescription = null, modifier = Modifier.size(20.dp))
+        }
+    }
+}
+
+/** 工具栏圆形图标按钮：淡色圆底 + 单个图标/头像，不含文字（菜单里才显示详细文本） */
+@Composable
+private fun ToolCircleButton(
+    onClick: () -> Unit,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+    selected: Boolean = false,
+    container: Color? = null,
+    contentColor: Color? = null,
+    content: @Composable () -> Unit,
+) {
+    val bg = container ?: if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+    val fg = contentColor ?: if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+    val label = contentDescription
+    Box(
+        modifier = modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(bg)
+            .semantics { this.contentDescription = label },
+        contentAlignment = Alignment.Center,
+    ) {
+        IconButton(
+            onClick = onClick,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            CompositionLocalProvider(LocalContentColor provides fg) {
+                content()
+            }
         }
     }
 }

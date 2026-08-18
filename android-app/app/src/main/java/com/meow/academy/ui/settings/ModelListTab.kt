@@ -1,36 +1,37 @@
 package com.meow.academy.ui.settings
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CloudDownload
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.meow.academy.data.model.ModelProfile
@@ -38,14 +39,15 @@ import com.meow.academy.data.model.ModelProfile
 /** 模型列表页签：模型卡片 + 添加/获取按钮 */
 @Composable
 fun ModelsTab(
+    provider: String,
     models: List<ModelProfile>,
     onAddModel: () -> Unit,
     onEditModel: (ModelProfile) -> Unit,
+    onDeleteModel: (ModelProfile) -> Unit,
     onFetch: () -> Unit,
     onToggleDefault: (ModelProfile) -> Unit,
-    onTest: (ModelProfile) -> Unit,
+    onReorder: (List<ModelProfile>) -> Unit,
     currentModel: String,
-    testingModel: String?,
 ) {
     Column(Modifier.fillMaxSize()) {
         if (models.isEmpty()) {
@@ -53,20 +55,30 @@ fun ModelsTab(
                 Text("还没有模型\n点下方「添加新模型」或「获取模型列表」", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
             }
         } else {
-            LazyColumn(Modifier.weight(1f)) {
-                items(models, key = { it.id }) { m ->
-                    ModelCard(
-                        model = m,
-                        onEdit = { onEditModel(m) },
-                        isDefault = currentModel == m.id,
-                        onToggleDefault = { onToggleDefault(m) },
-                        onTest = { onTest(m) },
-                        testing = testingModel == m.id,
-                    )
-                }
+            Text(
+                "长按模型卡片可上下拖动排序",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 20.dp, bottom = 4.dp),
+            )
+            ReorderableLazyColumn(
+                items = models,
+                key = { it.id },
+                modifier = Modifier.weight(1f),
+                onDragEnd = onReorder,
+            ) { m, isDragging ->
+                ModelCard(
+                    provider = provider,
+                    model = m,
+                    onEdit = { onEditModel(m) },
+                    onDelete = { onDeleteModel(m) },
+                    isDefault = currentModel == m.id,
+                    onToggleDefault = { onToggleDefault(m) },
+                    isDragging = isDragging,
+                )
             }
         }
-        Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)) {
+        Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedButton(onClick = onAddModel, modifier = Modifier.weight(1f)) {
                 Icon(Icons.Filled.Add, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(4.dp))
@@ -81,47 +93,93 @@ fun ModelsTab(
     }
 }
 
-/** 单个模型卡片：头像 + 名称 + 星标默认 + 测试连接 + 设置 */
+/**
+ * 单个模型卡片：上方头像 + 名称/ID（完整显示），下方右侧紧凑操作按钮。
+ * 名称和按钮错行排布，长名称不再被右侧按钮挤压。
+ */
 @Composable
 fun ModelCard(
+    provider: String,
     model: ModelProfile,
     onEdit: () -> Unit,
+    onDelete: () -> Unit,
     isDefault: Boolean,
     onToggleDefault: () -> Unit,
-    onTest: () -> Unit,
-    testing: Boolean,
+    isDragging: Boolean = false,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (isDragging) 8.dp else 1.dp),
     ) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier.size(36.dp).background(MaterialTheme.colorScheme.secondaryContainer, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(model.name?.take(1)?.uppercase() ?: model.id.take(1).uppercase(), style = MaterialTheme.typography.titleSmall)
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(model.name ?: model.id, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-                Text(model.id, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            IconButton(onClick = onToggleDefault) {
-                Icon(
-                    if (isDefault) Icons.Filled.Star else Icons.Filled.StarBorder,
-                    "设为默认",
-                    tint = if (isDefault) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+        Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ModelAvatar(
+                    provider = provider,
+                    modelName = model.name ?: model.id,
+                    size = 36.dp,
                 )
-            }
-            IconButton(onClick = onTest, enabled = !testing) {
-                if (testing) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                } else {
-                    Icon(Icons.Filled.PlayArrow, "测试连接")
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = model.name ?: model.id,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        text = model.id,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
-            IconButton(onClick = onEdit) { Icon(Icons.Filled.Settings, "设置") }
+            Spacer(Modifier.height(2.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CompactIconButton(
+                    onClick = onToggleDefault,
+                    contentDescription = "设为默认",
+                    icon = if (isDefault) Icons.Filled.Star else Icons.Filled.StarBorder,
+                    tint = if (isDefault) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                CompactIconButton(
+                    onClick = onEdit,
+                    contentDescription = "设置",
+                    icon = Icons.Filled.Settings,
+                )
+                CompactIconButton(
+                    onClick = onDelete,
+                    contentDescription = "删除模型",
+                    icon = Icons.Filled.Delete,
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            }
         }
+    }
+}
+
+/** 紧凑操作按钮：比默认 IconButton 更小，视觉上不挤占卡片空间 */
+@Composable
+private fun CompactIconButton(
+    onClick: () -> Unit,
+    contentDescription: String?,
+    icon: ImageVector,
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+) {
+    Box(
+        modifier = Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            modifier = Modifier.size(18.dp),
+            tint = tint,
+        )
     }
 }

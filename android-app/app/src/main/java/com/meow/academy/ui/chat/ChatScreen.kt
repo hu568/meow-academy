@@ -38,16 +38,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.meow.academy.data.chat.MessageStatus
 import com.meow.academy.data.chat.SessionEntity
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.flow.distinctUntilChanged
 
 /**
  * 💬 聊天页（Chatbox 风格）：单页详情 + 左侧会话抽屉 + 顶栏新会话 + 输入栏工具栏。
@@ -97,17 +96,14 @@ private fun ChatDetailView(
         }
     }
 
-    // 贴底跟随：仅当用户处于底部时才自动滚到底；用户上滑后暂停跟随，滚回底部恢复。
-    var atBottom by remember { mutableStateOf(true) }
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.canScrollForward }
-            .distinctUntilChanged()
-            .collect { canScroll -> atBottom = !canScroll }
-    }
-    // 新消息/流式增量 → 贴底时自动跟随（scrollToItem 无动画，避免流式时与内容追加竞争导致抽搐）
-    LaunchedEffect(messages.size, streaming?.segments) {
-        if (atBottom && (messages.isNotEmpty() || streaming != null)) {
-            listState.scrollToItem(Int.MAX_VALUE)
+    // 底部锚定：聊天列表使用 reverseLayout，index 0 永远在屏幕底部。
+    // 流式气泡放在 index 0，文本变长时底部天然跟随，不需要也不应该每 token 调 scrollToItem，
+    // 否则会出现高频抽搐 / 文字重叠。
+    // 这里只在切换会话/从空会话出现第一条消息/流式开始时把滚动位置归到底部（避免复用旧会话的滚动位置；
+    // 流式开始后文本增长不再需要滚动，reverseLayout 会天然保持底部）。
+    LaunchedEffect(currentId, messages.isEmpty(), streaming != null) {
+        if (messages.isNotEmpty() || streaming != null) {
+            listState.scrollToItem(0)
         }
     }
 
@@ -115,6 +111,9 @@ private fun ChatDetailView(
     BackHandler(enabled = drawerState.isOpen) {
         scope.launch { drawerState.close() }
     }
+
+    // 顶栏显示当前会话标题（没有打开会话时回退为“聊天”）
+    val currentTitle = sessions.firstOrNull { it.id == currentId }?.title ?: "聊天"
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -132,7 +131,13 @@ private fun ChatDetailView(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text("聊天") },
+                    title = {
+                        Text(
+                            text = currentTitle,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
                     navigationIcon = {
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {
                             Icon(Icons.Filled.Menu, contentDescription = "会话管理")
@@ -188,19 +193,22 @@ private fun ChatDetailView(
                         .padding(padding),
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
+                    reverseLayout = true,
                 ) {
                     // 过滤掉正在流式的 DB 行（节流落库会产生部分内容），避免与实时气泡同屏重复渲染
                     val visible = messages.filterNot { it.id == streaming?.messageId }
-                    items(visible, key = { it.id }) { msg ->
-                        MessageRow(msg)
-                    }
+                    // reverseLayout 下 index 0 在屏幕底部：
+                    // 先放实时流式气泡（新内容），再放历史消息的倒序（越旧越往上）。
                     streaming?.let { s ->
-                        item(key = "streaming") {
+                        item(key = "streaming-${s.messageId}") {
                             AssistantBody(
                                 segments = s.segments,
                                 status = MessageStatus.STREAMING,
                             )
                         }
+                    }
+                    items(visible.asReversed(), key = { it.id }) { msg ->
+                        MessageRow(msg)
                     }
                 }
             }

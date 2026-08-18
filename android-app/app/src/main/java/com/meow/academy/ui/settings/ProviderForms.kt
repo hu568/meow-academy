@@ -15,14 +15,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -31,8 +35,38 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.meow.academy.data.model.DEEPSEEK_PROVIDER
+
+/** API Key 输入框：默认密码态，点击小眼睛切换明文/密文 */
+@Composable
+private fun ApiKeyField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    label: @Composable (() -> Unit)? = null,
+    placeholder: @Composable (() -> Unit)? = null,
+) {
+    var showKey by remember { mutableStateOf(false) }
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier,
+        label = label,
+        placeholder = placeholder,
+        singleLine = true,
+        visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+        trailingIcon = {
+            IconButton(onClick = { showKey = !showKey }) {
+                Icon(
+                    if (showKey) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                    contentDescription = if (showKey) "隐藏 API Key" else "显示 API Key",
+                )
+            }
+        },
+    )
+}
 
 /** 内置 DeepSeek 官方直连配置（API Key + 内置模型默认星标） */
 @Composable
@@ -45,16 +79,18 @@ fun BuiltinConfig(
     val apiKey by vm.llmApiKey.collectAsState()
     var keyDraft by remember { mutableStateOf(apiKey) }
     val models = listOf("deepseek-v4-flash" to "DeepSeek-V4-Flash", "deepseek-v4-pro" to "DeepSeek-V4-Pro")
+    // DataStore 异步加载晚于首帧时补填已保存 Key（用户已输入则不覆盖）
+    LaunchedEffect(apiKey) {
+        if (keyDraft.isBlank()) keyDraft = apiKey
+    }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("内置 DeepSeek 官方直连", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedTextField(
+        ApiKeyField(
             value = keyDraft,
             onValueChange = { keyDraft = it },
             modifier = Modifier.fillMaxWidth(),
             label = { Text("DeepSeek API Key") },
             placeholder = { Text("sk-…") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
         )
         Button(onClick = { vm.setApiKey(keyDraft) }, modifier = Modifier.fillMaxWidth()) { Text("保存 Key") }
         Spacer(Modifier.height(4.dp))
@@ -101,14 +137,12 @@ fun ConfigTab(
             placeholder = { Text("https://api.openai.com/v1") },
             singleLine = true,
         )
-        OutlinedTextField(
+        ApiKeyField(
             value = apiKey,
             onValueChange = onApiKey,
             modifier = Modifier.fillMaxWidth(),
             label = { Text("API Key") },
             placeholder = { Text(if (enabled || isNew) "sk-…（留空则沿用已保存的 Key）" else "sk-…") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
         )
         Text(
             "协议：OpenAI 兼容（/chat/completions、/models 由运行时自动拼接）",

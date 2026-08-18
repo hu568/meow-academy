@@ -9,6 +9,9 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 /**
  * 设置持久化仓库（DataStore Preferences）。
@@ -29,10 +32,14 @@ class SettingsRepository(private val context: Context) {
         val LLM_PROVIDER = stringPreferencesKey("llm_provider")
         val LLM_MODEL = stringPreferencesKey("llm_model")
         val LLM_API_KEY = stringPreferencesKey("llm_api_key")
+        // 自定义 provider 的 API Key 本地回显缓存（DSH settings/describe 是 redacted，不回传明文）
+        val PROVIDER_API_KEYS = stringPreferencesKey("provider_api_keys")
         val REASONING_EFFORT = stringPreferencesKey("reasoning_effort")
         val WEB_SEARCH_ENABLED = booleanPreferencesKey("web_search_enabled")
         // 禁用的 provider 名集合（App 层 UI 过滤；DSH 侧仍注册，配置不丢）
         val DISABLED_PROVIDERS = stringSetPreferencesKey("disabled_providers")
+        // 用户手动调整后的 provider 顺序（DataStore 本地保存；DSH settings 只按 key 存 profile）
+        val PROVIDER_ORDER = stringPreferencesKey("provider_order")
     }
 
     val themeMode: Flow<ThemeMode> = context.settingsDataStore.data.map { prefs ->
@@ -96,9 +103,40 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+    /** 用户自定义 provider 顺序（空列表 = 使用默认顺序） */
+    val providerOrder: Flow<List<String>> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.PROVIDER_ORDER]?.let { raw ->
+            runCatching { Json.decodeFromString<List<String>>(raw) }.getOrDefault(emptyList())
+        } ?: emptyList()
+    }
+
+    suspend fun setProviderOrder(order: List<String>) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.PROVIDER_ORDER] = Json.encodeToString(order.distinct())
+        }
+    }
+
     /** DeepSeek API Key（App 私有存储，注入 DSH 进程环境变量） */
     val llmApiKey: Flow<String> = context.settingsDataStore.data.map { prefs ->
         prefs[Keys.LLM_API_KEY] ?: ""
+    }
+
+    /** 自定义 provider 名 → API Key（仅用于前端回显；DSH 侧仍以 credential 为准） */
+    val providerApiKeys: Flow<Map<String, String>> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.PROVIDER_API_KEYS]?.let { raw ->
+            runCatching { Json.decodeFromString<Map<String, String>>(raw) }.getOrDefault(emptyMap())
+        } ?: emptyMap()
+    }
+
+    /** 保存自定义 provider 的 API Key 到本地回显缓存；空串表示移除该 provider 的缓存 */
+    suspend fun setProviderApiKey(provider: String, apiKey: String) {
+        context.settingsDataStore.edit { prefs ->
+            val current = prefs[Keys.PROVIDER_API_KEYS]?.let { raw ->
+                runCatching { Json.decodeFromString<Map<String, String>>(raw) }.getOrDefault(emptyMap())
+            } ?: emptyMap()
+            val next = if (apiKey.isBlank()) current - provider else current + (provider to apiKey.trim())
+            prefs[Keys.PROVIDER_API_KEYS] = Json.encodeToString(next)
+        }
     }
 
     suspend fun setLlmProvider(provider: String) {

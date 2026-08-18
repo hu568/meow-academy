@@ -33,7 +33,7 @@
 | 依赖 | 状态 | 说明 |
 |---|---|---|
 | JDK 17 | ✅ 已有（Temurin 17.0.20） | Gradle 构建需要 |
-| Android SDK | ✅ 已装（cmdline-tools + platform-tools + platforms;android-34 + build-tools;34.0.0） | 路径 `C:/Users/Administrator/AppData/Local/Android/Sdk` |
+| Android SDK | ✅ 已装（cmdline-tools + platform-tools + platforms;android-34 + build-tools;34.0.0） | 路径 `~/Android/Sdk`（WSL） |
 | Gradle | ✅ 已装（wrapper 8.9 随仓库提交） | `./gradlew assembleDebug` 构建通过 |
 | adb | ✅ 已装（37.0.1） | 真机调试可用 |
 | 真机 | ✅ 已有（Termux 就绪） | node 26.4 + pi 0.84.1 + API key 已配，SSH 192.168.0.173:8022 |

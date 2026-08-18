@@ -12,11 +12,15 @@ import com.meow.academy.data.model.PROVIDER_PRESETS
 import com.meow.academy.data.model.ProviderProfile
 import com.meow.academy.data.model.buildProviderDirectory
 import com.meow.academy.data.model.parseCatalogProfiles
+import com.meow.academy.data.model.providerCredentialRef
+import com.meow.academy.data.model.readDshCredentialsFile
+import java.io.File
 import com.meow.academy.data.settings.SettingsRepository
 import com.meow.academy.rpc.DshParams
 import com.meow.academy.rpc.DshRpcClient
 import com.meow.academy.rpc.LlmModelInfo
 import com.meow.academy.rpc.LlmModelInput
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -24,6 +28,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -53,6 +58,10 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
     private val _disabled = MutableStateFlow<Set<String>>(emptySet())
     val disabled: StateFlow<Set<String>> = _disabled.asStateFlow()
 
+    /** 用户自定义 provider 顺序（DataStore；空 = 默认顺序） */
+    private val _providerOrder = MutableStateFlow<List<String>>(emptyList())
+    val providerOrder: StateFlow<List<String>> = _providerOrder.asStateFlow()
+
     /** 当前默认 provider / model（本地权威状态） */
     private val _llmProvider = MutableStateFlow("deepseek")
     private val _llmModel = MutableStateFlow("deepseek-v4-flash")
@@ -63,6 +72,10 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
     val llmApiKey: StateFlow<String> = settingsRepository.llmApiKey
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
+    /** 自定义 provider 名 → API Key（本地回显缓存；DSH settings/describe 不返回明文） */
+    val providerApiKeys: StateFlow<Map<String, String>> = settingsRepository.providerApiKeys
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
 
@@ -70,6 +83,12 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch { settingsRepository.disabledProviders.collect { _disabled.value = it } }
+        viewModelScope.launch {
+            settingsRepository.providerOrder.collect { order ->
+                _providerOrder.value = order
+                _items.value = buildItems(_profiles.value)
+            }
+        }
         viewModelScope.launch {
             _llmProvider.value = settingsRepository.llmProvider.first()
             _llmModel.value = settingsRepository.llmModel.first()
@@ -104,6 +123,9 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
                 val profiles = parseCatalogProfiles(result)
                 _profiles.value = profiles
                 _items.value = buildItems(profiles)
+                // 老版本只把 Key 存在 DSH credential 里、本地没有回显缓存：
+                // DSH 就绪时把明文 Key 拉一次落本地，详情页才能显示 `·····` / 小眼睛回显
+                syncProviderApiKeysFromRuntime(profiles)
                 // 写本地缓存：下次打开（或 DSH 未就绪时）立即渲染
                 result?.let { runCatching { modelCatalog.saveCatalog(it.toString()) } }
             } finally {
@@ -114,7 +136,7 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 合并列表：与聊天页共用同一份 provider 目录（内置 DeepSeek + 预设 + 自定义），保证两页 key/名称一致 */
     private fun buildItems(profiles: Map<String, ProviderProfile>): List<ProviderListItem> {
-        return buildProviderDirectory(profiles).map { entry ->
+        return buildProviderDirectory(profiles, order = _providerOrder.value).map { entry ->
             val preset = PROVIDER_PRESETS.firstOrNull { it.key == entry.key }
             val profile = profiles[entry.key]
             ProviderListItem(
@@ -125,6 +147,26 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
                 registered = entry.registered,
                 isBuiltin = entry.key == DEEPSEEK_PROVIDER,
             )
+        }
+    }
+
+    /** 把 DSH credential 里的既有 Key 同步进本地回显缓存（仅补缺，不覆盖用户已缓存的值） */
+    private suspend fun syncProviderApiKeysFromRuntime(profiles: Map<String, ProviderProfile>) {
+        val cached = providerApiKeys.value
+        // 优先直接读 DSH credentials 文档（Android 上就在 filesDir/dsh-credentials.yaml），
+        // 不依赖新增 RPC / 不要求重打 runtime.bin
+        val fileKeys = withContext(Dispatchers.IO) {
+            readDshCredentialsFile(File(getApplication<Application>().filesDir, "dsh-credentials.yaml"))
+        }
+        profiles.forEach { (key, profile) ->
+            if (key == DEEPSEEK_PROVIDER) return@forEach
+            if (profile.apiKeyEnv == null) return@forEach
+            if (!cached[key].isNullOrEmpty()) return@forEach
+
+            val fromFile = fileKeys[providerCredentialRef(key)]
+            if (!fromFile.isNullOrBlank()) {
+                settingsRepository.setProviderApiKey(key, fromFile)
+            }
         }
     }
 
@@ -152,14 +194,34 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
             ),
             timeoutMs = 20_000,
         )
-        return if (resp?.ok == true) null else (resp?.error?.message ?: "保存失败")
+        if (resp?.ok == true) {
+            // DSH settings/describe 只返回 redacted 描述，明文 Key 需在 App 本地缓存一份供前端回显
+            if (apiKey.isNotBlank()) settingsRepository.setProviderApiKey(provider, apiKey)
+            return null
+        }
+        return resp?.error?.message ?: "保存失败"
+    }
+
+    /** 仅保存模型列表（模型页自动保存；不触碰配置页的 baseURL/API Key） */
+    suspend fun saveModels(provider: String, models: List<LlmModelInput>): String? {
+        val c = client ?: return "DSH 运行时未启动"
+        val resp = c.request(
+            "settings/updateProviderModels",
+            DshParams.settingsUpdateProviderModels(provider, models),
+            timeoutMs = 20_000,
+        )
+        return if (resp?.ok == true) null else (resp?.error?.message ?: "保存模型失败")
     }
 
     /** 删除 provider（返回错误信息，成功为 null） */
     suspend fun removeProvider(provider: String): String? {
         val c = client ?: return "DSH 运行时未启动"
         val resp = c.request("settings/removeProvider", DshParams.settingsRemoveProvider(provider), timeoutMs = 20_000)
-        return if (resp?.ok == true) null else (resp?.error?.message ?: "删除失败")
+        if (resp?.ok == true) {
+            settingsRepository.setProviderApiKey(provider, "")
+            return null
+        }
+        return resp?.error?.message ?: "删除失败"
     }
 
     /** 获取远端模型列表（provider 非空时后端走已存 credentials 兜底，key 留空也能用） */
@@ -186,6 +248,21 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
         return Result.success("连接成功")
     }
 
+    /** 详情页兜底：本地回显缓存缺失时，尝试从 DSH credential 拉一次明文 Key 落缓存 */
+    fun ensureProviderApiKey(provider: String) {
+        if (provider.isBlank() || provider == DEEPSEEK_PROVIDER) return
+        viewModelScope.launch {
+            if (!providerApiKeys.value[provider].isNullOrEmpty()) return@launch
+            val ref = providerCredentialRef(provider)
+            val fromFile = withContext(Dispatchers.IO) {
+                readDshCredentialsFile(File(getApplication<Application>().filesDir, "dsh-credentials.yaml"))[ref]
+            }
+            if (!fromFile.isNullOrBlank()) {
+                settingsRepository.setProviderApiKey(provider, fromFile)
+            }
+        }
+    }
+
     /** 保存内置 DeepSeek key */
     fun setApiKey(key: String) {
         viewModelScope.launch { settingsRepository.setLlmApiKey(key) }
@@ -207,6 +284,14 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
     /** 启用/禁用（写 DataStore 禁用集合） */
     fun toggleDisabled(provider: String, disabled: Boolean) {
         viewModelScope.launch { settingsRepository.setProviderDisabled(provider, disabled) }
+    }
+
+    /** 调整 provider 顺序：本地立即生效，同时持久化到 DataStore */
+    fun reorderProviders(orderedKeys: List<String>) {
+        val next = orderedKeys.distinct()
+        _providerOrder.value = next
+        _items.value = buildItems(_profiles.value)
+        viewModelScope.launch { settingsRepository.setProviderOrder(next) }
     }
 
     companion object {

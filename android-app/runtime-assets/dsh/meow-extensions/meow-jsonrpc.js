@@ -272,8 +272,18 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     if (params.baseURL !== undefined && params.baseURL !== '') request.baseURL = String(params.baseURL)
     if (params.api !== undefined && params.api !== '') request.api = String(params.api)
     if (params.apiKey !== undefined && params.apiKey !== '') request.apiKey = String(params.apiKey)
-    const models = await llm.discoverModels('llm-pi-ai', request)
-    return { models }
+    try {
+      const models = await llm.discoverModels('llm-pi-ai', request)
+      return { models }
+    } catch (error) {
+      // 已保存过 provider 但没存 Key 时，核心 discovery 会先抛 MISSING_CREDENTIAL；
+      // 这类端点的模型列表可能本来就是公开的（如 OpenCode Go /v1/models），
+      // 去掉 provider 重试一次，让 llm-pi-ai 以未认证方式询问端点。
+      if (error?.code !== 'MISSING_CREDENTIAL' || request.provider === undefined) throw error
+      const publicRequest = { ...request, provider: undefined }
+      const models = await llm.discoverModels('llm-pi-ai', publicRequest)
+      return { models }
+    }
   }
 
   /** llm/testModel：对单个模型发最小 chat 请求测连通 */
@@ -316,8 +326,9 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     const credentials = this.ctx.get('credentials')
 
     const ref = this.providerCredentialRef(provider)
-    const apiKey = params.apiKey !== undefined ? String(params.apiKey) : ''
-    if (credentials !== undefined) {
+    // 未传 apiKey 时保留已有 credential；传空串才删除，避免“留空沿用已保存 Key”反而清掉 Key
+    const apiKey = params.apiKey !== undefined && params.apiKey !== null ? String(params.apiKey) : undefined
+    if (credentials !== undefined && apiKey !== undefined) {
       if (apiKey.length > 0) await credentials.set(ref, apiKey)
       else await credentials.unset(ref)
     }
@@ -331,6 +342,19 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     const expectedRevision = params.expectedRevision !== undefined ? Number(params.expectedRevision) : undefined
     await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', provider], value: profile }], expectedRevision)
 
+    const desc = settings.describe({ redactSecrets: true }).find((d) => d.ns === 'llm-pi-ai')
+    return { provider, revision: desc?.revision ?? 0 }
+  }
+
+  /** settings/updateProviderModels：只更新 provider 的模型列表，不触碰 baseURL/API Key 等配置 */
+  async updateProviderModels(params) {
+    const provider = String(params.provider ?? '')
+    if (provider === '') throw new Error('settings/updateProviderModels: provider is required')
+    if (params.models === undefined) throw new Error('settings/updateProviderModels: models is required')
+    const settings = this.ctx.get('settings')
+    if (settings === undefined) throw new Error('settings service unavailable')
+    const expectedRevision = params.expectedRevision !== undefined ? Number(params.expectedRevision) : undefined
+    await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', provider, 'models'], value: params.models }], expectedRevision)
     const desc = settings.describe({ redactSecrets: true }).find((d) => d.ns === 'llm-pi-ai')
     return { provider, revision: desc?.revision ?? 0 }
   }
@@ -362,6 +386,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
       case 'llm/testModel': return this.testModel(params ?? {})
       case 'settings/describe': return this.describeSettings(params ?? {})
       case 'settings/setProvider': return this.setProvider(params ?? {})
+      case 'settings/updateProviderModels': return this.updateProviderModels(params ?? {})
       case 'settings/removeProvider': return this.removeProvider(params ?? {})
       default: return super.handleRequest(method, params)
     }
