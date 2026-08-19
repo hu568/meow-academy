@@ -10,6 +10,7 @@ package com.meow.academy.ui.chat
  */
 
 import android.text.method.LinkMovementMethod
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -18,6 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import io.noties.markwon.Markwon
@@ -66,6 +68,9 @@ fun MarkdownText(
     // streaming=false 时直接使用最新 markdown（完成后的最终渲染，不节流、不经过 state）；
     // streaming=true 时使用节流后的 rendered，避免每个 token 都触发完整 Markdown 解析。
     val displayedMarkdown = if (streaming) rendered else markdown
+    // TextView 不继承 Compose 主题，必须显式设置文字色：
+    // 否则会一直用平台深色主题的白色，浅色模式下变不成黑色
+    val textColor = MaterialTheme.colorScheme.onSurface
 
     AndroidView(
         modifier = modifier,
@@ -77,6 +82,9 @@ fun MarkdownText(
                 setTextIsSelectable(true)
             }
         },
-        update = { view -> markwon.setMarkdown(view, displayedMarkdown) },
+        update = { view ->
+            view.setTextColor(textColor.toArgb())
+            markwon.setMarkdown(view, displayedMarkdown)
+        },
     )
 }

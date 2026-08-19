@@ -11,6 +11,7 @@ package com.meow.academy.ui.chat
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.os.Build
+import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -24,12 +25,24 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import com.meow.academy.data.settings.ChatBackground
 import com.meow.academy.data.settings.parseChatBackground
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+/**
+ * 进程级聊天底图内存缓存（按文件路径）。
+ *
+ * 组件切走时 produceState 会被销毁，若不缓存，每次切回聊天页都要重新解码大图；
+ * 这里把解码结果按路径缓存住（LruCache，约 32MB），切 Tab/重进页面秒出。
+ */
+private val chatBgCache = object : LruCache<String, ImageBitmap>(32 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: ImageBitmap): Int =
+        value.width * value.height * 4
+}
 
 /**
  * 聊天页底图 + 遮罩。
@@ -65,7 +78,10 @@ fun ChatBackgroundLayer(raw: String, modifier: Modifier = Modifier) {
 
             is ChatBackground.File -> {
                 val bitmap by produceState<ImageBitmap?>(initialValue = null, bg.path) {
-                    value = withContext(Dispatchers.IO) { decodeChatBg(bg.path) }
+                    // 先查缓存，命中就不重新解码；miss 才走 IO 解码并写入缓存
+                    value = chatBgCache.get(bg.path) ?: withContext(Dispatchers.IO) {
+                        decodeChatBg(bg.path)?.also { chatBgCache.put(bg.path, it) }
+                    }
                 }
                 if (bitmap != null) {
                     Image(
@@ -84,12 +100,15 @@ fun ChatBackgroundLayer(raw: String, modifier: Modifier = Modifier) {
             }
         }
 
-        // 可读性遮罩：半透明 surface 覆盖（浅色=亮纱、深色=暗纱），气泡/文字保持清晰
+        // 可读性遮罩：按主题用「暗纱」而不是浅色模式的白纱（白纱会把底图洗白）；
+        // 浅色模式用极淡暗纱保底图原色，深色模式用稍浓暗纱托住白色文字。
         if (bg !is ChatBackground.None) {
+            val isDarkTheme = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+            val scrimColor = if (isDarkTheme) Color.Black.copy(alpha = 0.45f) else Color.Black.copy(alpha = 0.12f)
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)),
+                    .background(scrimColor),
             )
         }
     }
