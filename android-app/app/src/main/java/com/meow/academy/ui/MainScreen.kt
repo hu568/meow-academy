@@ -4,13 +4,16 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -25,6 +28,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import com.meow.academy.R
 import com.meow.academy.data.settings.HomeTab
 import com.meow.academy.data.settings.SettingsRepository
@@ -74,16 +79,33 @@ fun MainScreen(repository: SettingsRepository) {
     }
 
     Scaffold(
+        // 外层不重复吃系统栏 inset：每个页面自己的 Scaffold/TopAppBar 负责状态栏，
+        // 否则聊天/设置页会出现「双倍状态栏空隙」（外层垫一层 + 内层 TopAppBar 又垫一层）。
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
             // 键盘弹出时隐藏底部导航栏，避免与聊天/终端输入栏的 imePadding 冲突（输入框被顶起）
             if (!WindowInsets.isImeVisible) {
-                NavigationBar {
+                NavigationBar(modifier = Modifier.height(76.dp)) {
                     TABS.forEach { info ->
                         NavigationBarItem(
                             selected = info.tab == selectedTab,
                             onClick = { selectedTabName = info.tab.name },
-                            icon = { Icon(info.icon, contentDescription = null) },
-                            label = { Text(stringResource(info.labelRes)) },
+                            icon = {
+                                Icon(
+                                    info.icon,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(28.dp),
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = stringResource(info.labelRes),
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 2,
+                                    style = MaterialTheme.typography.labelMedium,
+                                )
+                            },
+                            alwaysShowLabel = true,
                         )
                     }
                 }

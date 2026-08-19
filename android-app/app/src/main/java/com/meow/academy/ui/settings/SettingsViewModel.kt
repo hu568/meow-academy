@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import com.meow.academy.data.settings.CHAT_BG_NONE
 import com.meow.academy.data.settings.DEFAULT_THEME_SEED_ARGB
 import com.meow.academy.data.settings.HomeTab
 import com.meow.academy.data.settings.ResidentMode
@@ -24,6 +25,10 @@ class SettingsViewModel(private val repository: SettingsRepository) : ViewModel(
     /** 自定义主题种子色（ARGB Long，CUSTOM 模式使用） */
     val themeSeedColor: StateFlow<Long> = repository.themeSeedColor
         .stateIn(viewModelScope, SharingStarted.Eagerly, DEFAULT_THEME_SEED_ARGB)
+
+    /** 聊天底图（"none" / "preset:<id>" / "file:<absPath>"） */
+    val chatBackground: StateFlow<String> = repository.chatBackground
+        .stateIn(viewModelScope, SharingStarted.Eagerly, CHAT_BG_NONE)
 
     val defaultHome: StateFlow<HomeTab> = repository.defaultHome
         .stateIn(viewModelScope, SharingStarted.Eagerly, HomeTab.CHAT)
@@ -56,6 +61,10 @@ class SettingsViewModel(private val repository: SettingsRepository) : ViewModel(
 
     fun setThemeSeedColor(argb: Long) = viewModelScope.launch {
         repository.setThemeSeedColor(argb)
+    }
+
+    fun setChatBackground(raw: String) = viewModelScope.launch {
+        repository.setChatBackground(raw)
     }
 
     fun setDefaultHome(tab: HomeTab) = viewModelScope.launch {

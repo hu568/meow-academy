@@ -230,7 +230,8 @@ fun TextBubble(text: String, status: MessageStatus) {
             modifier = Modifier
                 .widthIn(max = 320.dp)
                 .clip(RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
+                // 半透明：聊天底图透出，配合全屏遮罩保持可读
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.86f))
                 .padding(10.dp),
         ) {
             if (text.isNotBlank()) {
@@ -342,7 +343,8 @@ fun UserBubble(text: String) {
             modifier = Modifier
                 .widthIn(max = 300.dp)
                 .clip(RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp))
-                .background(MaterialTheme.colorScheme.primaryContainer)
+                // 半透明：聊天底图透出，配合全屏遮罩保持可读
+                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.90f))
                 .padding(12.dp),
         ) {
             SelectionContainer {
@@ -360,7 +362,8 @@ fun AssistantBubble(content: String, status: MessageStatus) {
             modifier = Modifier
                 .widthIn(max = 320.dp)
                 .clip(RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
+                // 半透明：聊天底图透出，配合全屏遮罩保持可读
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.86f))
                 .padding(10.dp),
         ) {
             when {

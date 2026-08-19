@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.outlined.Wallpaper
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -28,6 +29,7 @@ import com.meow.academy.data.settings.HomeTab
 import com.meow.academy.data.settings.ResidentMode
 import com.meow.academy.data.settings.SettingsRepository
 import com.meow.academy.data.settings.ThemeMode
+import com.meow.academy.data.settings.chatBackgroundLabel
 import com.meow.academy.data.settings.displayName
 import com.meow.academy.data.settings.themeSeedToHex
 import com.meow.academy.ui.components.AppTopBar
@@ -47,6 +49,7 @@ fun SettingsScreen(
 
     val themeMode by vm.themeMode.collectAsState()
     val themeSeedColor by vm.themeSeedColor.collectAsState()
+    val chatBackground by vm.chatBackground.collectAsState()
     val defaultHome by vm.defaultHome.collectAsState()
     val residentMode by vm.residentMode.collectAsState()
     val residentMinutes by vm.residentMinutes.collectAsState()
@@ -61,6 +64,7 @@ fun SettingsScreen(
 
     var showHomeDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
+    var showChatBgDialog by remember { mutableStateOf(false) }
     var showResidentDialog by remember { mutableStateOf(false) }
     var showMinutesDialog by remember { mutableStateOf(false) }
 
@@ -78,6 +82,9 @@ fun SettingsScreen(
                     onClick = { showHomeDialog = true },
                 )
             }
+
+            // ── 外观 ──
+            item { SectionHeader("外观") }
             item {
                 SettingsRow(
                     icon = Icons.Filled.Palette,
@@ -88,6 +95,14 @@ fun SettingsScreen(
                         themeMode.displayName()
                     },
                     onClick = { showThemeDialog = true },
+                )
+            }
+            item {
+                SettingsRow(
+                    icon = Icons.Outlined.Wallpaper,
+                    title = stringResource(R.string.settings_chat_background),
+                    subtitle = chatBackgroundLabel(chatBackground),
+                    onClick = { showChatBgDialog = true },
                 )
             }
 
@@ -157,6 +172,13 @@ fun SettingsScreen(
             onSelectMode = vm::setThemeMode,
             onSelectSeed = vm::setThemeSeedColor,
             onDismiss = { showThemeDialog = false },
+        )
+    }
+    if (showChatBgDialog) {
+        ChatBackgroundDialog(
+            current = chatBackground,
+            onSelect = vm::setChatBackground,
+            onDismiss = { showChatBgDialog = false },
         )
     }
     if (showResidentDialog) {

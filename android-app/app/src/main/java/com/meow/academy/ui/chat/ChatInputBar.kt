@@ -98,56 +98,64 @@ fun ChatInputArea(
     onToggleWebSearch: (Boolean) -> Unit,
     onPickFile: () -> Unit,
 ) {
+    // 外层只负责 imePadding（键盘顶起），内层才是半透明输入栏（避免背景盖到键盘区）
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .imePadding()
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .imePadding(),
     ) {
-        // 待发送队列提示（DSH 未就绪/正在生成时入队的消息，就绪后自动发出）
-        if (pendingCount > 0) {
-            Text(
-                "⏳ $pendingCount 条消息待发送，DSH 就绪后自动发出",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 12.dp, bottom = 4.dp),
-            )
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = onInputChange,
-                placeholder = { Text("和喵喵老师聊聊…") },
-                modifier = Modifier.weight(1f),
-                maxLines = 4,
-                shape = RoundedCornerShape(24.dp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { if (input.isNotBlank()) onSend() }),
-            )
-            Spacer(Modifier.width(8.dp))
-            if (isGenerating) {
-                IconButton(onClick = onStop) {
-                    Icon(Icons.Filled.Stop, contentDescription = "停止生成", tint = MaterialTheme.colorScheme.error)
-                }
-            } else {
-                IconButton(onClick = onSend, enabled = input.isNotBlank()) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送")
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                // 半透明：聊天底图透出，形成玻璃输入栏
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.72f))
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+        ) {
+            // 待发送队列提示（DSH 未就绪/正在生成时入队的消息，就绪后自动发出）
+            if (pendingCount > 0) {
+                Text(
+                    "⏳ $pendingCount 条消息待发送，DSH 就绪后自动发出",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 12.dp, bottom = 4.dp),
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = onInputChange,
+                    placeholder = { Text("和喵喵老师聊聊…") },
+                    modifier = Modifier.weight(1f),
+                    maxLines = 4,
+                    shape = RoundedCornerShape(24.dp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { if (input.isNotBlank()) onSend() }),
+                )
+                Spacer(Modifier.width(8.dp))
+                if (isGenerating) {
+                    IconButton(onClick = onStop) {
+                        Icon(Icons.Filled.Stop, contentDescription = "停止生成", tint = MaterialTheme.colorScheme.error)
+                    }
+                } else {
+                    IconButton(onClick = onSend, enabled = input.isNotBlank()) {
+                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送")
+                    }
                 }
             }
+            ChatToolbar(
+                llmModel = llmModel,
+                reasoningEffort = reasoningEffort,
+                webSearchEnabled = webSearchEnabled,
+                providers = providers,
+                availableModels = availableModels,
+                currentProvider = currentProvider,
+                onSelectModel = onSelectModel,
+                onSelectProvider = onSelectProvider,
+                onSelectReasoningEffort = onSelectReasoningEffort,
+                onToggleWebSearch = onToggleWebSearch,
+                onPickFile = onPickFile,
+            )
         }
-        ChatToolbar(
-            llmModel = llmModel,
-            reasoningEffort = reasoningEffort,
-            webSearchEnabled = webSearchEnabled,
-            providers = providers,
-            availableModels = availableModels,
-            currentProvider = currentProvider,
-            onSelectModel = onSelectModel,
-            onSelectProvider = onSelectProvider,
-            onSelectReasoningEffort = onSelectReasoningEffort,
-            onToggleWebSearch = onToggleWebSearch,
-            onPickFile = onPickFile,
-        )
     }
 }
 

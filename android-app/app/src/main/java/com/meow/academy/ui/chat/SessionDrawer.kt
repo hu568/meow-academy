@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -51,7 +52,13 @@ fun SessionDrawer(
     var renaming by remember { mutableStateOf<SessionEntity?>(null) }
     var deleting by remember { mutableStateOf<SessionEntity?>(null) }
 
-    ModalDrawerSheet {
+    ModalDrawerSheet(
+        // 只占约 85% 宽度，右侧留一条聊天页可见；半透明容器露出模糊后的聊天内容（毛玻璃）
+        modifier = Modifier
+            .fillMaxWidth(0.85f)
+            .widthIn(max = 340.dp),
+        drawerContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.80f),
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()

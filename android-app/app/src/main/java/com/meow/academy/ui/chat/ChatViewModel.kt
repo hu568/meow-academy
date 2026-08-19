@@ -102,13 +102,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         .map { it != null }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    // ── 工具栏设置（模型 / 思考强度 / 网络搜索） ──
+    // ── 工具栏设置（模型 / 思考强度 / 网络搜索 / 聊天底图） ──
     val llmModel: StateFlow<String> = settingsRepository.llmModel
         .stateIn(viewModelScope, SharingStarted.Eagerly, "deepseek-v4-flash")
     val reasoningEffort: StateFlow<String> = settingsRepository.reasoningEffort
         .stateIn(viewModelScope, SharingStarted.Eagerly, "high")
     val webSearchEnabled: StateFlow<Boolean> = settingsRepository.webSearchEnabled
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val chatBackground: StateFlow<String> = settingsRepository.chatBackground
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "none")
 
     // ── 模型管理：可切换 provider 与模型列表（M4，从 DSH RPC 读取） ──
     private val DEFAULT_MODELS = listOf("deepseek-v4-flash", "deepseek-v4-pro")

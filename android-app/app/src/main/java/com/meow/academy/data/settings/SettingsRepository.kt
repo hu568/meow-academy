@@ -8,7 +8,9 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import java.io.File
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -28,6 +30,8 @@ class SettingsRepository(private val context: Context) {
         val THEME_MODE = stringPreferencesKey("theme_mode")
         // 自定义主题的种子色（ARGB Long，0..0xFFFFFFFF；默认喵学堂粉紫）
         val THEME_SEED_COLOR = longPreferencesKey("theme_seed_color")
+        // 聊天底图："none" / "preset:<id>" / "file:<absPath>"（见 ChatBackgrounds.kt）
+        val CHAT_BACKGROUND = stringPreferencesKey("chat_background")
         val DEFAULT_HOME = stringPreferencesKey("default_home")
         val RESIDENT_MODE = stringPreferencesKey("resident_mode")
         val RESIDENT_MINUTES = intPreferencesKey("resident_minutes")
@@ -55,6 +59,11 @@ class SettingsRepository(private val context: Context) {
         prefs[Keys.THEME_SEED_COLOR] ?: DEFAULT_THEME_SEED_ARGB
     }
 
+    /** 聊天底图持久化字符串（"none" / "preset:<id>" / "file:<absPath>"，默认无背景） */
+    val chatBackground: Flow<String> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.CHAT_BACKGROUND] ?: CHAT_BG_NONE
+    }
+
     val defaultHome: Flow<HomeTab> = context.settingsDataStore.data.map { prefs ->
         prefs[Keys.DEFAULT_HOME]?.let { runCatching { HomeTab.valueOf(it) }.getOrNull() }
             ?: HomeTab.CHAT
@@ -77,6 +86,19 @@ class SettingsRepository(private val context: Context) {
     /** 保存自定义主题种子色（ARGB Long，0..0xFFFFFFFF） */
     suspend fun setThemeSeedColor(argb: Long) {
         context.settingsDataStore.edit { it[Keys.THEME_SEED_COLOR] = argb and 0xFFFFFFFFL }
+    }
+
+    /** 保存聊天底图；从自定义图片切走时顺带清理旧文件，避免私有目录堆积 */
+    suspend fun setChatBackground(raw: String) {
+        val old = context.settingsDataStore.data.first()[Keys.CHAT_BACKGROUND] ?: CHAT_BG_NONE
+        context.settingsDataStore.edit { it[Keys.CHAT_BACKGROUND] = raw }
+        if (raw != old) {
+            val oldPath = chatBackgroundFilePath(old)
+            val newPath = chatBackgroundFilePath(raw)
+            if (oldPath != null && oldPath != newPath) {
+                runCatching { File(oldPath).delete() }
+            }
+        }
     }
 
     suspend fun setDefaultHome(tab: HomeTab) {
