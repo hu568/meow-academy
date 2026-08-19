@@ -138,13 +138,14 @@ adb shell 'cp ~/runtime.bin /data/local/tmp/' && adb pull /data/local/tmp/runtim
 meow-academy/
 ├── README.md                       # 📖 本文件
 ├── PLAN.md                         # 📋 主线开发计划
+├── plan/
+│   ├── plan-phase1.md              # 📝 M2「给 Pi 套壳」细化规划
+│   └── plan-phase2.md              # 📝 M3 细化规划
 ├── docs/
 │   ├── decision-dsh-agent.md       # 🧩 方案决策：Pi → DSH 替换
 │   ├── decision-local-pi-agent.md  # 🐧 方案决策：Pi 本地化 + 终端驻留
 │   ├── design-gui.md               # 🎨 GUI 设计：信息架构 v1
 │   ├── module-structure.md         # 🗺️ 安卓端模块地图（原子化拆分后）
-│   ├── plan-phase1.md              # 📝 M2「给 Pi 套壳」细化规划
-│   ├── plan-phase2.md              # 📝 M3 细化规划
 │   └── reference/                  # 📚 RAG / Cherry Studio / RikkaHub 参考
 ├── android-app/                    # 📱 安卓端
 │   ├── app/src/main/java/com/meow/academy/
@@ -166,12 +167,12 @@ meow-academy/
 | 文档 | 内容 |
 | --- | --- |
 | [PLAN.md](PLAN.md) | 主线开发计划：功能清单、架构、RAG 流程、里程碑 |
+| [plan/plan-phase1.md](plan/plan-phase1.md) | M2「给 Pi 套壳」细化规划 + Android 关键坑记录 |
+| [plan/plan-phase2.md](plan/plan-phase2.md) | M3 会话持久化 + Chatbox 化细化规划 |
 | [docs/decision-dsh-agent.md](docs/decision-dsh-agent.md) | Pi Agent → DeepSeek Harness 替换的决策与实施 |
 | [docs/decision-local-pi-agent.md](docs/decision-local-pi-agent.md) | Pi 本地化 + 终端驻留 + 推敲 v2 决策 |
 | [docs/design-gui.md](docs/design-gui.md) | GUI 信息架构设计 v1 |
 | [docs/module-structure.md](docs/module-structure.md) | 安卓端模块地图：每个文件的职责、依赖与扩展指引 |
-| [docs/plan-phase1.md](docs/plan-phase1.md) | M2「给 Pi 套壳」细化规划 + Android 关键坑记录 |
-| [docs/plan-phase2.md](docs/plan-phase2.md) | M3 会话持久化 + Chatbox 化细化规划 |
 | [docs/reference/](docs/reference/) | RAG 算法 / Cherry Studio / RikkaHub 参考实现 |
 | [release/RELEASE_NOTES_0.1.0.md](release/RELEASE_NOTES_0.1.0.md) | 版本更新记录 |
 

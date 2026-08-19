@@ -158,6 +158,6 @@ ls -lh "$OUT_FILE"
 cat <<EOF
 
 ✅ 完成！把 runtime.bin 拷回仓库：
-   adb pull 路径见你习惯的 adb/ssh 中转（参考 docs/plan-phase1.md 七节）
+   adb pull 路径见你习惯的 adb/ssh 中转（参考 plan/plan-phase1.md 七节）
    目标：android-app/app/src/main/assets/runtime.bin
 EOF

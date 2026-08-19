@@ -2,7 +2,7 @@
 
 > 文档状态：✅ 2026-08-17 原子化拆分重构后编写
 > 背景：把大杂烩文件按「结构 / 组件 / 逻辑」拆开（类比 HTML 拆出 JS 和 CSS），同包内移动、符号不变、行为零改动，`assembleDebug` 构建通过 + 真机安装验证（com.meow.academy 0.1.0）
-> 相关文档：[AGENTS.md](../AGENTS.md)（本地约定）· [README.md](../README.md) · [decision-dsh-agent.md](decision-dsh-agent.md) · [plan-phase1.md](plan-phase1.md)
+> 相关文档：[AGENTS.md](../AGENTS.md)（本地约定）· [README.md](../README.md) · [decision-dsh-agent.md](decision-dsh-agent.md) · [plan-phase1.md](../plan/plan-phase1.md)
 
 ---
 

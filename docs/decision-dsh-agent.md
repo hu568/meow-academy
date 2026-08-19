@@ -2,7 +2,7 @@
 
 > 决策状态：✅ 已采纳（主人呜咕拍板，2026-08-13）
 > 背景：DeepSeek Harness（`dsh`）发布（0.1.0-rc.5，developer preview），主人决定把安卓 App 内置的 pi agent 换成 DSH
-> 相关文档：[PLAN.md](../PLAN.md) · [decision-local-pi-agent.md](decision-local-pi-agent.md) · [plan-phase1.md](plan-phase1.md)
+> 相关文档：[PLAN.md](../PLAN.md) · [decision-local-pi-agent.md](decision-local-pi-agent.md) · [plan-phase1.md](../plan/plan-phase1.md)
 > 2026-08-15 补充：DSH 已 fork 独立副本到仓库根 `dsh/`（gitignore，源码 92MB），`build-dsh-closure.sh` 默认从这里打闭包，与 `D:\deepseek-harness`（本机正在运行的 DSH harness）彻底解耦；改沙箱/插件都在 fork 里改，勿动 `D:\deepseek-harness`。
 > 2026-08-15 补充二（主人指示）：**真终端提前到 M2** —— meow-academy 内置持久 PTY bash，DSH 跑在真终端里（bash 子进程），聊天 JSON-RPC 改走本地 socket；同时**弃用并删除 pi-agent-backend/**（Fastify 云端后端），RAG 算法归档到 docs/reference/rag-algorithm.md。
 
