@@ -20,11 +20,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.meow.academy.data.chat.MessageStatus
 import com.meow.academy.data.chat.SessionEntity
+import com.meow.academy.ui.components.EmptyState
 import kotlinx.coroutines.launch
 
 /**
@@ -179,10 +180,10 @@ private fun ChatDetailView(
                         .padding(padding),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(
-                        "开始和喵喵老师聊聊吧～\n左上角管理会话，右上角新建",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    EmptyState(
+                        icon = Icons.Outlined.AutoAwesome,
+                        title = "和喵喵老师聊聊吧～",
+                        description = "左上角管理会话 · 右上角新建",
                     )
                 }
             } else {

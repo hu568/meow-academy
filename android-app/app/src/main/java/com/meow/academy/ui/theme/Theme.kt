@@ -8,32 +8,10 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import com.meow.academy.data.settings.DEFAULT_THEME_SEED_ARGB
 import com.meow.academy.data.settings.ThemeMode
-
-/** 自定义模式用的浅色配色（猫娘粉紫） */
-private val CustomLightColors = lightColorScheme(
-    primary = MeowPinkLight,
-    onPrimary = androidx.compose.ui.graphics.Color.White,
-    primaryContainer = MeowAccent,
-    onPrimaryContainer = androidx.compose.ui.graphics.Color.White,
-    secondary = MeowAccent,
-    background = MeowBackgroundLight,
-    surface = MeowSurfaceLight,
-    error = MeowErrorLight,
-)
-
-/** 自定义模式用的深色配色 */
-private val CustomDarkColors = darkColorScheme(
-    primary = MeowPinkDark,
-    onPrimary = androidx.compose.ui.graphics.Color(0xFF3D2A4D),
-    primaryContainer = MeowAccent,
-    onPrimaryContainer = androidx.compose.ui.graphics.Color.White,
-    secondary = MeowPinkDark,
-    background = MeowBackgroundDark,
-    surface = MeowSurfaceDark,
-    error = MeowErrorDark,
-)
 
 /**
  * 喵学堂主题入口。
@@ -42,11 +20,15 @@ private val CustomDarkColors = darkColorScheme(
  * - [ThemeMode.SYSTEM] 跟随系统深浅；Android 12+ 自动动态取色（Material You）
  * - [ThemeMode.LIGHT]  强制浅色；Android 12+ 动态取色
  * - [ThemeMode.DARK]   强制深色；Android 12+ 动态取色
- * - [ThemeMode.CUSTOM] 使用下方自定义猫娘粉紫色板（不参与动态取色），跟随系统深浅
+ * - [ThemeMode.CUSTOM] 自定义配色：用 [themeSeedColor] 种子色自动派生整套浅/深色板
+ *   （[customLightColorScheme] / [customDarkColorScheme]），跟随系统深浅
+ *
+ * @param themeSeedColor 用户自定义主题种子色（ARGB Long，仅 CUSTOM 模式使用）
  */
 @Composable
 fun MeowAcademyTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
+    themeSeedColor: Long = DEFAULT_THEME_SEED_ARGB,
     content: @Composable () -> Unit,
 ) {
     val darkTheme = when (themeMode) {
@@ -57,9 +39,11 @@ fun MeowAcademyTheme(
     }
 
     val colorScheme = when {
-        // 自定义配色：不用动态取色，用喵学堂专属色板
-        themeMode == ThemeMode.CUSTOM ->
-            if (darkTheme) CustomDarkColors else CustomLightColors
+        // 自定义配色：用户种子色 → Material You 风格深浅两套
+        themeMode == ThemeMode.CUSTOM -> {
+            val seed = Color(themeSeedColor.toInt())
+            if (darkTheme) customDarkColorScheme(seed) else customLightColorScheme(seed)
+        }
 
         // Android 12+ 动态取色（Material You）
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
@@ -75,6 +59,7 @@ fun MeowAcademyTheme(
     MaterialTheme(
         colorScheme = colorScheme,
         typography = Typography,
+        shapes = AppShapes,
         content = content,
     )
 }

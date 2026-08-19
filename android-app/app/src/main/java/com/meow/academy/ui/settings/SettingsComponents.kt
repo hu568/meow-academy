@@ -5,11 +5,14 @@ package com.meow.academy.ui.settings
  * 从 SettingsScreen.kt 原子拆出，可在其他页面复用。
  */
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
@@ -22,21 +25,18 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import com.meow.academy.ui.components.AppSectionHeader
 
-/** 分组小标题 */
+/** 分组小标题（委托通用 AppSectionHeader，带主色竖条装饰） */
 @Composable
 fun SectionHeader(title: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp),
-    )
+    AppSectionHeader(title)
 }
 
-/** 设置行（图标 + 标题 + 副标题 + 右箭头） */
+/** 设置行（圆底图标 + 标题 + 副标题 + 右箭头） */
 @Composable
 fun SettingsRow(
     icon: ImageVector,
@@ -45,7 +45,22 @@ fun SettingsRow(
     onClick: (() -> Unit)? = null,
 ) {
     ListItem(
-        leadingContent = { Icon(icon, contentDescription = null) },
+        leadingContent = {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(MaterialTheme.shapes.small)
+                    .background(MaterialTheme.colorScheme.surfaceContainerLow),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+        },
         headlineContent = { Text(title) },
         supportingContent = subtitle?.let { { Text(it) } },
         trailingContent = {

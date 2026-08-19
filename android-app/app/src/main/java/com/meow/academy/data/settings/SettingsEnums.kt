@@ -6,7 +6,7 @@ package com.meow.academy.data.settings
  * - [SYSTEM] 跟随系统深浅（Android 12+ 自动动态取色）
  * - [LIGHT]  强制浅色
  * - [DARK]   强制深色
- * - [CUSTOM] 喵学堂自定义配色（猫娘粉紫），跟随系统深浅
+ * - [CUSTOM] 自定义配色：用户种子色（theme_seed_color）自动派生整套浅/深色板，跟随系统深浅
  */
 enum class ThemeMode { SYSTEM, LIGHT, DARK, CUSTOM }
 

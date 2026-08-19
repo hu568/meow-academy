@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -25,6 +26,8 @@ class SettingsRepository(private val context: Context) {
 
     private object Keys {
         val THEME_MODE = stringPreferencesKey("theme_mode")
+        // 自定义主题的种子色（ARGB Long，0..0xFFFFFFFF；默认喵学堂粉紫）
+        val THEME_SEED_COLOR = longPreferencesKey("theme_seed_color")
         val DEFAULT_HOME = stringPreferencesKey("default_home")
         val RESIDENT_MODE = stringPreferencesKey("resident_mode")
         val RESIDENT_MINUTES = intPreferencesKey("resident_minutes")
@@ -47,6 +50,11 @@ class SettingsRepository(private val context: Context) {
             ?: ThemeMode.SYSTEM
     }
 
+    /** 自定义主题种子色（ARGB Long，仅 [ThemeMode.CUSTOM] 使用；默认喵学堂粉紫） */
+    val themeSeedColor: Flow<Long> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.THEME_SEED_COLOR] ?: DEFAULT_THEME_SEED_ARGB
+    }
+
     val defaultHome: Flow<HomeTab> = context.settingsDataStore.data.map { prefs ->
         prefs[Keys.DEFAULT_HOME]?.let { runCatching { HomeTab.valueOf(it) }.getOrNull() }
             ?: HomeTab.CHAT
@@ -64,6 +72,11 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setThemeMode(mode: ThemeMode) {
         context.settingsDataStore.edit { it[Keys.THEME_MODE] = mode.name }
+    }
+
+    /** 保存自定义主题种子色（ARGB Long，0..0xFFFFFFFF） */
+    suspend fun setThemeSeedColor(argb: Long) {
+        context.settingsDataStore.edit { it[Keys.THEME_SEED_COLOR] = argb and 0xFFFFFFFFL }
     }
 
     suspend fun setDefaultHome(tab: HomeTab) {

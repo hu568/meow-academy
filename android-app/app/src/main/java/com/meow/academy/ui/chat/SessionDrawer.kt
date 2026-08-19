@@ -7,7 +7,6 @@ package com.meow.academy.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.meow.academy.data.chat.SessionEntity
+import com.meow.academy.ui.components.EmptyStateCompact
 
 /** 会话抽屉：列表 + 新建 + 重命名/删除对话框 */
 @Composable
@@ -61,14 +62,10 @@ fun SessionDrawer(
             IconButton(onClick = onNew) { Icon(Icons.Filled.Add, contentDescription = "新建会话") }
         }
         if (sessions.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(24.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("暂无会话", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            EmptyStateCompact(
+                icon = Icons.Outlined.Forum,
+                title = "暂无会话",
+            )
         } else {
             LazyColumn {
                 items(sessions, key = { it.id }) { session ->
