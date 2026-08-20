@@ -116,6 +116,19 @@ private fun ChatDetailView(
         }
     }
 
+    // ── 流式气泡冻结快照 ──
+    // 贴底跟随：实时渲染最新 segments，并同步刷新快照；
+    // 上滑脱离：渲染冻结快照（离开底部那一刻的内容），流式在后台继续增长但不参与布局。
+    // 这样看历史时气泡高度不变，LazyColumn 不会因流式气泡长高而把历史内容顶得跳动。
+    val snapshotHolder = remember(streaming?.messageId) {
+        StreamingSegmentsSnapshot().also { it.segments = streaming?.segments }
+    }
+    val currentStreaming = streaming
+    if (isAtBottom && currentStreaming != null) {
+        snapshotHolder.segments = currentStreaming.segments
+    }
+    val displayedStreamingSegments = if (isAtBottom) currentStreaming?.segments else snapshotHolder.segments
+
     // 打开会话：默认回到底部（跟随）
     LaunchedEffect(currentId) {
         listState.scrollToItem(0)
@@ -250,7 +263,7 @@ private fun ChatDetailView(
                                 streaming?.let { s ->
                                     item(key = "streaming-${s.messageId}") {
                                         AssistantBody(
-                                            segments = s.segments,
+                                            segments = displayedStreamingSegments ?: s.segments,
                                             status = MessageStatus.STREAMING,
                                         )
                                     }
@@ -281,4 +294,9 @@ private fun ChatDetailView(
             }
         }
     }
+}
+
+/** 非快照状态的持有者：组合期间同步记录「贴底时的最新流式分段」，避免写 State 引发额外重组 */
+private class StreamingSegmentsSnapshot {
+    var segments: List<Segment>? = null
 }
