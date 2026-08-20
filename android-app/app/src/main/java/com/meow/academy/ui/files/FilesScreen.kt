@@ -4,7 +4,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -13,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
@@ -51,8 +49,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.meow.academy.data.files.FileEntry
 import com.meow.academy.data.files.FileRepository
-import com.meow.academy.data.files.FileRoot
 import com.meow.academy.data.files.FileSearchResult
+import com.meow.academy.data.files.displayName
 import com.meow.academy.ui.components.AppTopBar
 import com.meow.academy.ui.components.EmptyState
 import kotlinx.coroutines.launch
@@ -178,16 +176,25 @@ fun FilesScreen(onOpenTerminal: (String) -> Unit = {}) {
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (!searchActive) {
-                RootSwitcher(state.root, state.externalAvailable, onSwitch = { vm.switchRoot(it) })
-                Text(
-                    text = state.currentPath,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp, vertical = 2.dp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                val rootPath = remember(state.root, repository) {
+                    repository.resolveRoot(state.root)?.absolutePath ?: state.currentPath
+                }
+                EditableBreadcrumb(
+                    rootLabel = state.root.displayName(),
+                    rootPath = rootPath,
+                    path = state.currentPath,
+                    onNavigate = { path ->
+                        if (path.isBlank()) vm.navigateToInternalRoot()
+                        else vm.navigateToPath(path)
+                    },
+                )
+                ShortcutBar(
+                    shortcuts = state.shortcuts,
+                    currentPath = state.currentPath,
+                    onNavigate = { shortcut ->
+                        if (shortcut.root != null) vm.switchRoot(shortcut.root)
+                        else vm.navigateToPath(shortcut.path)
+                    },
                 )
             }
 

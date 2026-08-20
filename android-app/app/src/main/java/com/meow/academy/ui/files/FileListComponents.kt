@@ -1,15 +1,22 @@
 package com.meow.academy.ui.files
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
@@ -26,6 +33,8 @@ import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
@@ -48,14 +57,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.meow.academy.data.files.FileEntry
 import com.meow.academy.data.files.FileRepository
 import com.meow.academy.data.files.FileRoot
-import com.meow.academy.data.files.displayName
 import com.meow.academy.ui.theme.LocalFileTypeColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -200,26 +210,145 @@ fun FileListRow(
     )
 }
 
-/** 根目录切换（FilterChip：App 数据目录 / App 外部目录；外部不可用时禁用） */
+/** 面包屑分段：label 展示名 + 点击跳转的累计路径 */
+private data class BreadcrumbSegment(val label: String, val path: String)
+
+/** 把当前路径按「根目录 + 根下相对层级」拆成面包屑分段，供逐级点击跳转 */
+private fun buildBreadcrumbSegments(rootLabel: String, rootPath: String, path: String): List<BreadcrumbSegment> {
+    val normalized = File(path).absolutePath
+    val rootNormalized = File(rootPath).absolutePath
+    val segments = mutableListOf(BreadcrumbSegment(rootLabel, rootNormalized))
+    if (normalized == rootNormalized) return segments
+    val relative = normalized.removePrefix(rootNormalized).trim('/')
+    if (relative.isEmpty()) return segments
+    var current = rootNormalized
+    relative.split('/').filter { it.isNotEmpty() }.forEach { part ->
+        current = if (current.endsWith('/')) "$current$part" else "$current/$part"
+        segments += BreadcrumbSegment(part, current)
+    }
+    return segments
+}
+
+/**
+ * 可编辑面包屑：根目录 + 相对层级逐段可点击跳转；点击右侧编辑按钮可输入完整路径回车跳转。
+ * 放在文件管理上方，替代原来的纯文本路径展示（喵~）。
+ */
 @Composable
-fun RootSwitcher(
-    root: FileRoot,
-    externalAvailable: Boolean,
-    onSwitch: (FileRoot) -> Unit,
+fun EditableBreadcrumb(
+    rootLabel: String,
+    rootPath: String,
+    path: String,
+    onNavigate: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var editing by remember(path) { mutableStateOf(false) }
+    var draft by remember(path) { mutableStateOf(path) }
+
+    // 编辑态下系统返回键优先退出编辑，而不是返回上级目录
+    BackHandler(enabled = editing) { editing = false }
+
+    if (editing) {
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it },
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            singleLine = true,
+            label = { Text("输入路径") },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+            keyboardActions = KeyboardActions(onGo = {
+                val target = draft.trim()
+                onNavigate(target)
+                editing = false
+            }),
+            leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+            trailingIcon = {
+                IconButton(onClick = { editing = false }) {
+                    Icon(Icons.Outlined.Close, contentDescription = "取消编辑")
+                }
+            },
+        )
+    } else {
+        val segments = remember(path, rootLabel, rootPath) { buildBreadcrumbSegments(rootLabel, rootPath, path) }
+        Row(
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                segments.forEachIndexed { index, segment ->
+                    Text(
+                        text = segment.label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (index == segments.lastIndex) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable { onNavigate(segment.path) }
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                    )
+                    if (index != segments.lastIndex) {
+                        Text(
+                            text = "/",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 1.dp),
+                        )
+                    }
+                }
+            }
+            IconButton(
+                onClick = {
+                    editing = true
+                    draft = path
+                },
+                modifier = Modifier.size(36.dp),
+            ) {
+                Icon(
+                    Icons.Outlined.Edit,
+                    contentDescription = "编辑路径",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 快捷栏（替代原根目录切换）：根目录 + 当前根下的一级子目录，一键跳转目标文件夹。
+ * 横向可滚动；当前所在目录对应的项高亮（喵~）。
+ */
+@Composable
+fun ShortcutBar(
+    shortcuts: List<FileShortcut>,
+    currentPath: String,
+    onNavigate: (FileShortcut) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        FileRoot.entries.forEach { r ->
-            val enabled = r == FileRoot.INTERNAL || externalAvailable
+        shortcuts.forEach { shortcut ->
             FilterChip(
-                selected = root == r,
-                onClick = { if (enabled) onSwitch(r) },
-                label = { Text(r.displayName()) },
-                enabled = enabled,
+                selected = currentPath == shortcut.path,
+                onClick = { onNavigate(shortcut) },
+                label = { Text(shortcut.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             )
         }
     }

@@ -8,6 +8,7 @@ import com.meow.academy.data.files.FileEntry
 import com.meow.academy.data.files.FileRepository
 import com.meow.academy.data.files.FileRoot
 import com.meow.academy.data.files.FileSearchResult
+import com.meow.academy.data.files.displayName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -18,6 +19,13 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+
+/** 快捷栏条目：标签 + 目标路径；root 非空表示该条是根目录快捷项（切根用） */
+data class FileShortcut(
+    val label: String,
+    val path: String,
+    val root: FileRoot? = null,
+)
 
 /** 文件列表排序模式 */
 enum class FileSortMode { DEFAULT, NAME, SIZE, MODIFIED }
@@ -31,6 +39,7 @@ data class FilesUiState(
     val root: FileRoot = FileRoot.INTERNAL,
     val currentPath: String = "",               // 当前目录绝对路径
     val entries: List<FileEntry> = emptyList(),
+    val shortcuts: List<FileShortcut> = emptyList(), // 快捷栏：根 + 当前根一级子目录
     val sortMode: FileSortMode = FileSortMode.DEFAULT,
     val sortAscending: Boolean = true,
     val isMultiSelect: Boolean = false,
@@ -104,18 +113,15 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
     }
 
-    /** 切换根；EXTERNAL 不可用时忽略，同时清空搜索与多选态 */
+    /** 显式切根（快捷栏根项用）：总是跳到该根目录本身，并重置该根的目录栈 */
     fun switchRoot(root: FileRoot) {
         if (root == FileRoot.EXTERNAL && repository.resolveRoot(FileRoot.EXTERNAL) == null) return
-        if (root == _uiState.value.root) return
-        val stack = stacks.getOrPut(root) {
-            ArrayDeque<String>().apply { repository.resolveRoot(root)?.let { add(it.absolutePath) } }
-        }
-        val target = stack.lastOrNull() ?: return
+        val rootPath = repository.resolveRoot(root)?.absolutePath ?: return
+        stacks[root] = ArrayDeque<String>().apply { add(rootPath) }
         _uiState.update {
             it.copy(
                 root = root,
-                currentPath = target,
+                currentPath = rootPath,
                 isMultiSelect = false,
                 selection = emptySet(),
                 isSearching = false,
@@ -126,18 +132,24 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
     }
 
+    /** 面包屑输入为空时回 App 数据目录 */
+    fun navigateToInternalRoot() = switchRoot(FileRoot.INTERNAL)
+
     // ── 列表加载与排序 ──
 
-    /** 重新加载当前目录列表（IO 线程），按当前排序规则排序 */
+    /** 重新加载当前目录列表（IO 线程），按当前排序规则排序，同时刷新快捷栏 */
     fun refresh() {
         val path = _uiState.value.currentPath
         if (path.isBlank()) return
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
-                val entries = withContext(Dispatchers.IO) { repository.listDirectory(path) }
+                val root = _uiState.value.root
+                val (entries, shortcuts) = withContext(Dispatchers.IO) {
+                    repository.listDirectory(path) to computeShortcuts(root)
+                }
                 val sorted = sortEntries(entries, _uiState.value.sortMode, _uiState.value.sortAscending)
-                _uiState.update { it.copy(entries = sorted, isLoading = false) }
+                _uiState.update { it.copy(entries = sorted, shortcuts = shortcuts, isLoading = false) }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -148,6 +160,71 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    /** 快捷栏 / 面包屑 / 输入路径跳转：校验目录存在且在可用根内，重建该根的目录栈 */
+    fun navigateToPath(path: String) {
+        if (path.isBlank()) return
+        viewModelScope.launch {
+            val normalized = withContext(Dispatchers.IO) {
+                val f = File(path)
+                if (f.isDirectory) runCatching { f.canonicalPath }.getOrDefault(f.absolutePath) else null
+            } ?: run {
+                showSnackbar("路径不存在或不是文件夹")
+                return@launch
+            }
+            val root = FileRoot.entries.firstOrNull { r ->
+                val base = repository.resolveRoot(r)?.absolutePath ?: return@firstOrNull false
+                normalized == base || normalized.startsWith(base + File.separator)
+            } ?: run {
+                showSnackbar("路径不在可用目录内")
+                return@launch
+            }
+            stacks[root] = buildStack(root, normalized)
+            _uiState.update {
+                it.copy(
+                    root = root,
+                    currentPath = normalized,
+                    isMultiSelect = false,
+                    selection = emptySet(),
+                    isSearching = false,
+                    searchQuery = "",
+                    searchResults = emptyList(),
+                )
+            }
+            refresh()
+        }
+    }
+
+    /** 从根到目标路径重建目录栈（用于任意跳转） */
+    private fun buildStack(root: FileRoot, path: String): ArrayDeque<String> {
+        val base = repository.resolveRoot(root)?.absolutePath ?: return ArrayDeque()
+        val stack = ArrayDeque<String>().apply { add(base) }
+        var current = base
+        val relative = path.removePrefix(base).trim('/')
+        if (relative.isEmpty()) return stack
+        relative.split('/').filter { it.isNotEmpty() }.forEach { part ->
+            current = if (current == "/") "/$part" else "$current/$part"
+            stack.add(current)
+        }
+        return stack
+    }
+
+    /** 拼装快捷栏数据：根目录 + 当前根下的一级子目录（不含隐藏目录） */
+    private fun computeShortcuts(root: FileRoot): List<FileShortcut> {
+        val result = mutableListOf<FileShortcut>()
+        val internalRoot = repository.resolveRoot(FileRoot.INTERNAL)?.absolutePath
+        if (internalRoot != null) result += FileShortcut(FileRoot.INTERNAL.displayName(), internalRoot, FileRoot.INTERNAL)
+        val externalRoot = repository.resolveRoot(FileRoot.EXTERNAL)?.absolutePath
+        if (externalRoot != null) result += FileShortcut(FileRoot.EXTERNAL.displayName(), externalRoot, FileRoot.EXTERNAL)
+        val base = repository.resolveRoot(root)
+        if (base != null) {
+            base.listFiles()
+                ?.filter { it.isDirectory && !it.name.startsWith('.') }
+                ?.sortedBy { it.name.lowercase() }
+                ?.forEach { result += FileShortcut(it.name, it.absolutePath) }
+        }
+        return result
     }
 
     /** 切排序模式：更新状态并按新规则就地重排当前 entries */
