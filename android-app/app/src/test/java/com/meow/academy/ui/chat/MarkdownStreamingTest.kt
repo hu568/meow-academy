@@ -103,4 +103,42 @@ class MarkdownStreamingTest {
         assertEquals(false, isTableDelimiter("| a | b |"))
         assertEquals(false, isTableDelimiter(""))
     }
+
+    @Test
+    fun `只有表头行也解析为单行表头表格`() {
+        val table = parseStreamingTable("| A | B |")
+        assertEquals(listOf("A", "B"), table?.header)
+        assertEquals(emptyList<List<String>>(), table?.rows)
+    }
+
+    @Test
+    fun `表头加未写完分隔行仍为单行表头表格`() {
+        val table = parseStreamingTable("| A | B |\n|---")
+        assertEquals(listOf("A", "B"), table?.header)
+        assertEquals(emptyList<List<String>>(), table?.rows)
+    }
+
+    @Test
+    fun `表头加完整分隔行解析对齐`() {
+        val table = parseStreamingTable("| A | B |\n|:--- | ---:|")
+        assertEquals(listOf(StreamingCellAlign.START, StreamingCellAlign.END), table?.aligns)
+        assertEquals(emptyList<List<String>>(), table?.rows)
+    }
+
+    @Test
+    fun `表格逐行追加时已有行保持稳定`() {
+        val table = parseStreamingTable("| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4")
+        assertEquals(listOf("A", "B"), table?.header)
+        assertEquals(listOf(listOf("1", "2"), listOf("3", "4")), table?.rows)
+    }
+
+    @Test
+    fun `含竖线的普通段落不误判为表格`() {
+        assertEquals(null, parseStreamingTable("速度 | 5 m/s\n这是第二行"))
+    }
+
+    @Test
+    fun `空文本不解析为表格`() {
+        assertEquals(null, parseStreamingTable(""))
+    }
 }

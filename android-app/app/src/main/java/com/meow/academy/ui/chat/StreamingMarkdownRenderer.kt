@@ -28,21 +28,28 @@ class StreamingMarkdownRenderer {
 
     /** 渲染当前流式状态：稳定前缀（缓存）+ 活动块（每次重渲染） */
     fun render(markwon: Markwon, blocks: StreamingBlocks): Spanned {
-        if (blocks.stable.size != stableCount) {
-            stablePrefix = SpannableStringBuilder().apply {
-                blocks.stable.forEach { block ->
-                    append(renderedBlock(markwon, block))
-                    append(SEPARATOR)
-                }
-            }
-            stableCount = blocks.stable.size
-        }
-
-        val result = SpannableStringBuilder(stablePrefix ?: SpannableStringBuilder())
+        val result = SpannableStringBuilder(stableSpanned(markwon, blocks.stable))
         if (blocks.active.isNotBlank()) {
             result.append(markwon.toMarkdown(blocks.active))
         }
         return result
+    }
+
+    /** 只渲染稳定块（活动块是表格时，稳定前缀走这里；命中缓存不重解析） */
+    fun renderStable(markwon: Markwon, stable: List<String>): Spanned =
+        stableSpanned(markwon, stable)
+
+    private fun stableSpanned(markwon: Markwon, stable: List<String>): Spanned {
+        if (stable.size != stableCount) {
+            stablePrefix = SpannableStringBuilder().apply {
+                stable.forEach { block ->
+                    append(renderedBlock(markwon, block))
+                    append(SEPARATOR)
+                }
+            }
+            stableCount = stable.size
+        }
+        return stablePrefix ?: SpannableStringBuilder()
     }
 
     private fun renderedBlock(markwon: Markwon, block: String): Spanned =

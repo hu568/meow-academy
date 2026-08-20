@@ -19,7 +19,9 @@ package com.meow.academy.ui.chat
 
 import android.text.method.LinkMovementMethod
 import android.util.TypedValue
+import android.widget.TextView
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import io.noties.markwon.Markwon
 import kotlinx.coroutines.delay
 
 /** 流式渲染的刷新间隔：约 20fps，兼顾流畅度与活动块重渲染开销 */
@@ -85,10 +88,64 @@ fun MarkdownText(
     // streaming=true 时使用节流后的 rendered
     val displayedMarkdown = if (streaming) rendered else markdown
 
+    if (streaming) {
+        val blocks = remember(displayedMarkdown) { splitStreamingBlocks(displayedMarkdown) }
+        val activeTable = remember(displayedMarkdown) {
+            blocks.active.takeIf { it.isNotBlank() }?.let { parseStreamingTable(it) }
+        }
+        if (activeTable != null) {
+            // 活动块是表格：走 Compose 流式表格通道，稳定块与表格分开渲染
+            Column(modifier) {
+                if (blocks.stable.isNotEmpty()) {
+                    MarkdownStableText(
+                        stableBlocks = blocks.stable,
+                        markwon = markwon,
+                        renderer = renderer,
+                        isDark = isDark,
+                        textColorArgb = textColorArgb,
+                    )
+                }
+                StreamingTable(table = activeTable)
+            }
+        } else {
+            MarkdownTextView(
+                markdown = displayedMarkdown,
+                streaming = true,
+                markwon = markwon,
+                renderer = renderer,
+                isDark = isDark,
+                textColorArgb = textColorArgb,
+                modifier = modifier,
+            )
+        }
+    } else {
+        MarkdownTextView(
+            markdown = displayedMarkdown,
+            streaming = false,
+            markwon = markwon,
+            renderer = renderer,
+            isDark = isDark,
+            textColorArgb = textColorArgb,
+            modifier = modifier,
+        )
+    }
+}
+
+/** 非表格路径的 Markdown TextView：流式走块级半增量，最终走整篇渲染 */
+@Composable
+private fun MarkdownTextView(
+    markdown: String,
+    streaming: Boolean,
+    markwon: Markwon,
+    renderer: StreamingMarkdownRenderer,
+    isDark: Boolean,
+    textColorArgb: Int,
+    modifier: Modifier = Modifier,
+) {
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
-            android.widget.TextView(ctx).apply {
+            TextView(ctx).apply {
                 textSize = 15f
                 movementMethod = LinkMovementMethod.getInstance()
                 // 长按可选择/复制文本（先设 movementMethod 再设 isTextSelectable，链接仍可点击）
@@ -99,21 +156,51 @@ fun MarkdownText(
             view.setTextColor(textColorArgb)
             if (streaming) {
                 // 块级半增量：稳定块命中缓存，只有活动块重新解析渲染
-                val blocks = splitStreamingBlocks(displayedMarkdown)
+                val blocks = splitStreamingBlocks(markdown)
                 val spanned = renderer.render(markwon, blocks)
-                val key = "streaming:$isDark:$displayedMarkdown"
+                val key = "streaming:$isDark:$markdown"
                 if (view.getTag(TAG_MARKDOWN_TEXT) != key) {
                     markwon.setParsedMarkdown(view, spanned)
                     view.setTag(TAG_MARKDOWN_TEXT, key)
                 }
             } else {
                 // 最终整篇渲染：补空行避免「正文行后直接跟表格」时 Markwon 不识别表格
-                val normalized = normalizeTableBlocks(displayedMarkdown)
+                val normalized = normalizeTableBlocks(markdown)
                 val key = "final:$isDark:$normalized"
                 if (view.getTag(TAG_MARKDOWN_TEXT) != key) {
                     markwon.setMarkdown(view, normalized)
                     view.setTag(TAG_MARKDOWN_TEXT, key)
                 }
+            }
+        },
+    )
+}
+
+/** 流式表格上方的稳定块 TextView（只渲染已稳定块，命中 [StreamingMarkdownRenderer] 缓存） */
+@Composable
+private fun MarkdownStableText(
+    stableBlocks: List<String>,
+    markwon: Markwon,
+    renderer: StreamingMarkdownRenderer,
+    isDark: Boolean,
+    textColorArgb: Int,
+) {
+    val stableKey = remember(stableBlocks) { stableBlocks.joinToString("\n\n") }
+    AndroidView(
+        factory = { ctx ->
+            TextView(ctx).apply {
+                textSize = 15f
+                movementMethod = LinkMovementMethod.getInstance()
+                setTextIsSelectable(true)
+            }
+        },
+        update = { view ->
+            view.setTextColor(textColorArgb)
+            val spanned = renderer.renderStable(markwon, stableBlocks)
+            val key = "stable:$isDark:$stableKey"
+            if (view.getTag(TAG_MARKDOWN_TEXT) != key) {
+                markwon.setParsedMarkdown(view, spanned)
+                view.setTag(TAG_MARKDOWN_TEXT, key)
             }
         },
     )
