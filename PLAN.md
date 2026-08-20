@@ -5,7 +5,7 @@
 > 方案决策（Pi 本地化 + 终端驻留 + 推敲 v2）：见 [docs/decision-local-pi-agent.md](docs/decision-local-pi-agent.md)
 > 方案决策（M2.8 Pi Agent → DeepSeek Harness 替换 + 体积实测 + 插件化机制）：见 [docs/decision-dsh-agent.md](docs/decision-dsh-agent.md)
 > GUI 设计（信息架构 v1）：见 [docs/design-gui.md](docs/design-gui.md)
-> 阶段规划：M2 套壳 ✅ 见 [plan/plan-phase1.md](plan/plan-phase1.md)；M3 会话持久化+聊天体验 Chatbox 化 🔜 见 [plan/plan-phase2.md](plan/plan-phase2.md)
+> 阶段规划：M2 套壳 ✅ 见 [plan/plan-phase1.md](plan/plan-phase1.md)；M3 会话持久化+聊天体验 Chatbox 化 ✅ 见 [plan/plan-phase2.md](plan/plan-phase2.md)；M4 文件管理 ✅ 见 [plan/plan-phase3.md](plan/plan-phase3.md)
 
 ---
 
@@ -30,12 +30,12 @@
 - [x] 三档常驻开关（关闭 / 有限时间保活 / 一直常驻）—— M2.6 ✅
 
 ### 第二阶段 · 会话持久化 + 聊天体验 Chatbox 化（当前目标，M3；真终端已提前到 M2）
-- [ ] **会话持久化**：SQLite backend（node:sqlite 无原生依赖），App/进程重启后继续同会话，模型记得上下文
-- [ ] **聊天界面 Chatbox 化**：左侧会话抽屉 + 顶栏新会话 + 输入栏工具栏（模型 / 网络搜索 / 思考强度 / 上传文件）
-- [ ] **模型管理**：模型切换 + 思考强度（off/high/max）+ 网络搜索开关
-- [ ] **已知 bug 修复**：输入框被顶高（聊天/终端）、流式长文本抽搐
+- [x] **会话持久化**：SQLite backend（node:sqlite 无原生依赖），App/进程重启后继续同会话，模型记得上下文
+- [x] **聊天界面 Chatbox 化**：左侧会话抽屉 + 顶栏新会话 + 输入栏工具栏（模型 / 网络搜索 / 思考强度 / 上传文件）
+- [x] **模型管理**：模型切换 + 思考强度（off/high/max）+ 网络搜索开关
+- [x] **已知 bug 修复**：输入框被顶高（聊天/终端）、流式长文本抽搐
 - [x] **真终端（termux 化）**：持久 bash 进程（PTY），自由切换目录、执行代码 —— **已提前到 M2**（DSH 跑在真终端里，聊天走 socket）
-- [ ] **文件管理（数据中心）**：后移到 M4（全部文件浏览 + 打开/编辑 + 搜索 + 终端入口）
+- [x] **文件管理（数据中心）**：全部文件浏览 + 打开/编辑 + 搜索 + 导入/复制/移动/多选批量 + 多模式排序 + 终端入口（M4 ✅ 2026-08-19 实现并构建通过，真机验收待连机；[细化规划](plan/plan-phase3.md)）
 
 ### 第三阶段 · 知识库（后面再说）
 - [ ] md 知识库导入（文件选择 / 文件夹扫描）
@@ -184,7 +184,7 @@ meow-academy/
 | M2 | 给 Pi 套壳：安卓骨架 + 聊天 + 终端 + Pi 本地运行（[细化规划](plan/plan-phase1.md)） | ✅ 完成（2026-08-11：真机聊天流式/三档保活/终端全通；debug APK 105MB） |
 | M2.8 | 内置 Pi Agent 换成 DeepSeek Harness（jsonrpc 协议 + 保留流式 + 精简体积；[决策与实施计划](docs/decision-dsh-agent.md)）；真终端提前 + 弃用 pi-agent-backend（2026-08-15 主人指示） | 🔄 进行中（Kotlin 层完成；剩：socket 连接层改造 + 真终端 PTY + 真机 runtime.bin 重打与验收） |
 | M3 | 会话持久化 + 聊天体验 Chatbox 化 + 模型管理（真终端已提前到 M2；[细化规划](plan/plan-phase2.md)） | ✅ 完成（2026-08-15 真机验证：SQLite 持久化 + 抽屉/工具栏 + 模型切换/思考强度 + 网络搜索 + 工具全可用） |
-| M4 | 知识库：md 导入 + SQLite Wiki + Markdown 渲染/编辑 | 🔜 后置（主人：知识库后面再说） |
+| M4 | 文件管理（数据中心）：全部文件浏览 + 打开/编辑 + 搜索 + 导入/复制/移动/多选批量 + 多模式排序 + 终端入口（[细化规划](plan/plan-phase3.md)） | ✅ 完成（2026-08-19：M4.1–M4.8 实现、构建通过、APK 落 release/；真机验收待连机） |
 | M5 | RAG 检索 + 聊天强化 + 双模型配置 | 🔜 待开始 |
 | M6 | 联调测试 + 打包 APK（≤200MB） | 🔜 待开始 |
 | M7 | 增强功能（闪卡/进度/MCP/云同步） | 🔜 待开始 |

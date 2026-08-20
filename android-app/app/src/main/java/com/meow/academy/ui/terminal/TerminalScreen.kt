@@ -51,6 +51,7 @@ private val QUICK_COMMANDS = listOf("ls", "pwd", "echo 喵~", "uname -a", "node 
  */
 @Composable
 fun TerminalScreen(
+    initialDir: String? = null,
     vm: TerminalViewModel = viewModel(),
     onBack: (() -> Unit)? = null,
 ) {
@@ -66,7 +67,7 @@ fun TerminalScreen(
     }
 
     LaunchedEffect(Unit) {
-        vm.start()
+        vm.start(initialDir)
     }
 
     LaunchedEffect(lines) {

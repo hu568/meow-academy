@@ -43,8 +43,12 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
     /** 运行时状态（排障） */
     val runtimeState = application.runtimeManager.state
 
-    /** 连接 PTY socket 并开始读循环 */
-    fun start() {
+    /**
+     * 连接 PTY socket 并开始读循环。
+     * @param initialDir 非空时连接成功后先执行 `cd -- '<路径>'`（如文件管理页的当前浏览目录），
+     *                   null 则留在 bash 默认 cwd（filesDir 根 = DSH_CWD）。
+     */
+    fun start(initialDir: String? = null) {
         if (readJob != null) return
         readJob = viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -54,6 +58,16 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
                 s.soTimeout = 0
                 socket = s
                 _connected.value = true
+                // 连接成功、进入读循环前：自动 cd 到入口目录（单引号转义，路径含空格/中文安全）
+                if (!initialDir.isNullOrEmpty()) {
+                    val cmd = "cd -- '${initialDir.replace("'", "'\\''")}'\r"
+                    try {
+                        s.outputStream.write(cmd.toByteArray(Charsets.UTF_8))
+                        s.outputStream.flush()
+                    } catch (e: Exception) {
+                        // 断连
+                    }
+                }
                 val buf = ByteArray(4096)
                 while (true) {
                     val n = s.inputStream.read(buf)
