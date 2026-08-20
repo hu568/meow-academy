@@ -12,6 +12,8 @@ room = "2.6.1"
 ksp = "2.0.20-1.0.25"
 commonsCompress = "1.27.1"
 markwon = "4.6.2"
+prism4j = "2.0.0"
+junit = "4.13.2"
 work = "2.9.1"
 reorderable = "3.1.0"
 
@@ -43,6 +45,12 @@ markwon-core = { group = "io.noties.markwon", name = "core", version.ref = "mark
 markwon-ext-tables = { group = "io.noties.markwon", name = "ext-tables", version.ref = "markwon" }
 markwon-image = { group = "io.noties.markwon", name = "image", version.ref = "markwon" }
 markwon-linkify = { group = "io.noties.markwon", name = "linkify", version.ref = "markwon" }
+markwon-ext-latex = { group = "io.noties.markwon", name = "ext-latex", version.ref = "markwon" }
+markwon-syntax-highlight = { group = "io.noties.markwon", name = "syntax-highlight", version.ref = "markwon" }
+markwon-inline-parser = { group = "io.noties.markwon", name = "inline-parser", version.ref = "markwon" }
+prism4j = { group = "io.noties", name = "prism4j", version.ref = "prism4j" }
+prism4j-bundler = { group = "io.noties", name = "prism4j-bundler", version.ref = "prism4j" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
 reorderable = { module = "sh.calvin.reorderable:reorderable", version.ref = "reorderable" }
@@ -52,4 +60,5 @@ android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+kotlin-kapt = { id = "org.jetbrains.kotlin.kapt" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

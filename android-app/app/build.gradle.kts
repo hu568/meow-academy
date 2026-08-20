@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.kotlin.kapt)
     alias(libs.plugins.ksp)
 }
 
@@ -114,6 +115,12 @@ dependencies {
     implementation(libs.markwon.ext.tables)
     implementation(libs.markwon.image)
     implementation(libs.markwon.linkify)
+    // 公式块（LaTeX，$$…$$ 块/行内）+ 代码语法着色（Prism4j）
+    implementation(libs.markwon.ext.latex)
+    implementation(libs.markwon.syntax.highlight)
+    implementation(libs.markwon.inline.parser)
+    implementation(libs.prism4j)
+    kapt(libs.prism4j.bundler)
 
     // 保活心跳（M2.6）
     implementation(libs.androidx.work.runtime.ktx)
@@ -122,4 +129,7 @@ dependencies {
     implementation(libs.reorderable)
 
     debugImplementation(libs.androidx.ui.tooling)
+
+    // 块拆分器纯函数单测
+    testImplementation(libs.junit)
 }

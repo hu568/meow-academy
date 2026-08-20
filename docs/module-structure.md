@@ -70,7 +70,11 @@ app/src/main/java/com/meow/academy/
 | `MessageBubbles.kt` | CSS 组件 | 消息气泡家族：用户/助手气泡、思考卡片、工具调用组与卡片 |
 | `ChatInputBar.kt` | CSS 组件 | 输入栏 + 工具栏（provider/模型/思考强度下拉 + 联网开关 + 上传） |
 | `SessionDrawer.kt` | CSS 组件 | 会话抽屉 + 重命名/删除对话框 |
-| `MarkdownText.kt` | CSS 组件 | Markwon Markdown 渲染（可复用组件） |
+| `MarkdownText.kt` | CSS 组件 | Markwon Markdown 渲染（可复用组件；流式走块级半增量渲染） |
+| `MarkdownStreaming.kt` | JS 纯函数 | 流式块拆分器：稳定块 + 活动块（splitStreamingBlocks / isTableDelimiter） |
+| `DollarMath.kt` | JS 纯函数 | 单 `$…$` 行内公式匹配（matchDollarMath，供 DollarMathInlineProcessor 调用） |
+| `StreamingMarkdownRenderer.kt` | JS 渲染缓存 | 稳定块 Spanned LRU 缓存 + 稳定前缀复用 + 活动块重渲染 |
+| `MarkdownMarkwon.kt` | CSS 构建器 | Markwon 全插件实例（表格/链接/代码着色 Prism4j/LaTeX 公式）+ PrismBundle 声明 |
 
 ### ui/settings/ — 设置页 + 模型管理页
 
