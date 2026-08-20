@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material3.DrawerValue
@@ -29,6 +30,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -36,6 +38,7 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -103,13 +106,25 @@ private fun ChatDetailView(
         }
     }
 
-    // 底部锚定：聊天列表使用 reverseLayout，index 0 永远在屏幕底部。
-    // 流式气泡放在 index 0，文本变长时底部天然跟随，不需要也不应该每 token 调 scrollToItem，
-    // 否则会出现高频抽搐 / 文字重叠。
-    // 这里只在切换会话/从空会话出现第一条消息/流式开始时把滚动位置归到底部（避免复用旧会话的滚动位置；
-    // 流式开始后文本增长不再需要滚动，reverseLayout 会天然保持底部）。
-    LaunchedEffect(currentId, messages.isEmpty(), streaming != null) {
-        if (messages.isNotEmpty() || streaming != null) {
+    // ── 脱离自动滚动（Chatbox 风格）──
+    // reverseLayout 下 index 0 = 屏幕底部。贴底时列表天然跟随新内容（流式增长/新消息），
+    // 不需要也不应该每 token 调 scrollToItem（否则高频抽搐/文字重叠）；
+    // 用户上滑离开底部即脱离跟随，滑回底部即恢复跟随。
+    val isAtBottom by remember(listState) {
+        derivedStateOf {
+            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+        }
+    }
+
+    // 打开会话：默认回到底部（跟随）
+    LaunchedEffect(currentId) {
+        listState.scrollToItem(0)
+    }
+
+    // 发送新消息（流式开始）：回到底部开始跟随；
+    // 流式结束不再强制回底——尊重用户上滑看历史的脱离状态
+    LaunchedEffect(streaming != null) {
+        if (streaming != null) {
             listState.scrollToItem(0)
         }
     }
@@ -204,43 +219,61 @@ private fun ChatDetailView(
                         )
                     },
                 ) { padding ->
-                    if (messages.isEmpty() && streaming == null) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(padding),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            EmptyState(
-                                icon = Icons.Outlined.AutoAwesome,
-                                title = "和喵喵老师聊聊吧～",
-                                description = "左上角管理会话 · 右上角新建",
-                            )
-                        }
-                    } else {
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(padding),
-                            contentPadding = PaddingValues(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            reverseLayout = true,
-                        ) {
-                            // 过滤掉正在流式的 DB 行（节流落库会产生部分内容），避免与实时气泡同屏重复渲染
-                            val visible = messages.filterNot { it.id == streaming?.messageId }
-                            // reverseLayout 下 index 0 在屏幕底部：
-                            // 先放实时流式气泡（新内容），再放历史消息的倒序（越旧越往上）。
-                            streaming?.let { s ->
-                                item(key = "streaming-${s.messageId}") {
-                                    AssistantBody(
-                                        segments = s.segments,
-                                        status = MessageStatus.STREAMING,
-                                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(padding),
+                    ) {
+                        if (messages.isEmpty() && streaming == null) {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                EmptyState(
+                                    icon = Icons.Outlined.AutoAwesome,
+                                    title = "和喵喵老师聊聊吧～",
+                                    description = "左上角管理会话 · 右上角新建",
+                                )
+                            }
+                        } else {
+                            LazyColumn(
+                                state = listState,
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                reverseLayout = true,
+                            ) {
+                                // 过滤掉正在流式的 DB 行（节流落库会产生部分内容），避免与实时气泡同屏重复渲染
+                                val visible = messages.filterNot { it.id == streaming?.messageId }
+                                // reverseLayout 下 index 0 在屏幕底部：
+                                // 先放实时流式气泡（新内容），再放历史消息的倒序（越旧越往上）。
+                                streaming?.let { s ->
+                                    item(key = "streaming-${s.messageId}") {
+                                        AssistantBody(
+                                            segments = s.segments,
+                                            status = MessageStatus.STREAMING,
+                                        )
+                                    }
+                                }
+                                items(visible.asReversed(), key = { it.id }) { msg ->
+                                    MessageRow(msg)
                                 }
                             }
-                            items(visible.asReversed(), key = { it.id }) { msg ->
-                                MessageRow(msg)
+                        }
+                        // 上滑脱离跟随后出现「回到底部」：点击回到最新内容并恢复跟随
+                        if (!isAtBottom) {
+                            SmallFloatingActionButton(
+                                onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(16.dp),
+                                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                            ) {
+                                Icon(
+                                    Icons.Filled.ArrowDownward,
+                                    contentDescription = "回到底部",
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                )
                             }
                         }
                     }
