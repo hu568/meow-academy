@@ -1,9 +1,18 @@
 package com.meow.academy.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
@@ -19,12 +28,14 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
@@ -71,60 +82,91 @@ fun MainScreen(repository: SettingsRepository) {
 
     // 终端页覆盖（从设置/文件管理进入）
     var terminalOpen by rememberSaveable { mutableStateOf(false) }
-    // 真终端：bash 维护真实 cwd，入口语境由 bash 自身决定（文件管理的 cd 联动留待 M3）
+    // 入口目录：文件管理页传入当前浏览目录（自动 cd），设置页为 null（留在默认 cwd）
+    var terminalInitialDir by rememberSaveable { mutableStateOf<String?>(null) }
 
     if (terminalOpen) {
-        TerminalScreen(onBack = { terminalOpen = false })
+        TerminalScreen(initialDir = terminalInitialDir, onBack = { terminalOpen = false })
         return
     }
 
-    Scaffold(
-        // 外层不重复吃系统栏 inset：每个页面自己的 Scaffold/TopAppBar 负责状态栏，
-        // 否则聊天/设置页会出现「双倍状态栏空隙」（外层垫一层 + 内层 TopAppBar 又垫一层）。
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
-        bottomBar = {
-            // 键盘弹出时隐藏底部导航栏，避免与聊天/终端输入栏的 imePadding 冲突（输入框被顶起）
-            if (!WindowInsets.isImeVisible) {
-                NavigationBar(modifier = Modifier.height(76.dp)) {
-                    TABS.forEach { info ->
-                        NavigationBarItem(
-                            selected = info.tab == selectedTab,
-                            onClick = { selectedTabName = info.tab.name },
-                            icon = {
-                                Icon(
-                                    info.icon,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(28.dp),
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = stringResource(info.labelRes),
-                                    textAlign = TextAlign.Center,
-                                    maxLines = 2,
-                                    style = MaterialTheme.typography.labelMedium,
-                                )
-                            },
-                            alwaysShowLabel = true,
-                        )
-                    }
+    val imeVisible = WindowInsets.isImeVisible
+    val bottomPad = remember { Animatable(76f) }
+    LaunchedEffect(imeVisible) {
+        if (imeVisible) {
+            // 键盘弹出：底部占位缩到 0，输入栏贴住键盘；与导航栏下滑淡出同速
+            bottomPad.animateTo(0f, tween(durationMillis = 320, easing = FastOutSlowInEasing))
+        } else {
+            // 键盘收起：底部占位长回 76dp，输入栏回到导航栏上方；与导航栏上滑淡入同速
+            bottomPad.animateTo(76f, tween(durationMillis = 160, easing = FastOutSlowInEasing))
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            // 外层不重复吃系统栏 inset：每个页面自己的 Scaffold/TopAppBar 负责状态栏，
+            // 否则聊天/设置页会出现「双倍状态栏空隙」（外层垫一层 + 内层 TopAppBar 又垫一层）。
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            bottomBar = {},
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(bottom = bottomPad.value.dp),
+            ) {
+                when (selectedTab) {
+                    HomeTab.CHAT -> ChatScreen()
+                    HomeTab.FILES -> FilesScreen(onOpenTerminal = { dir ->
+                        terminalInitialDir = dir
+                        terminalOpen = true
+                    })
+                    HomeTab.SETTINGS -> SettingsScreen(repository, onOpenTerminal = {
+                        terminalInitialDir = null
+                        terminalOpen = true
+                    })
                 }
             }
-        },
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
+        }
+
+        // 底部导航浮层：键盘弹出时下滑淡出，键盘收起时上滑淡入。
+        // 内容区底部占位由 bottomPad 同步动画：键盘弹出时缩到 0（输入栏贴键盘），
+        // 键盘收起时长回 76dp（输入栏回导航栏上方），中间不会留出导航栏高度的空行。
+        AnimatedVisibility(
+            visible = !WindowInsets.isImeVisible,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = slideInVertically(
+                animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing),
+                initialOffsetY = { it },
+            ) + fadeIn(animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing)),
+            exit = slideOutVertically(
+                animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing),
+                targetOffsetY = { it },
+            ) + fadeOut(animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing)),
         ) {
-            when (selectedTab) {
-                HomeTab.CHAT -> ChatScreen()
-                HomeTab.FILES -> FilesScreen(onOpenTerminal = {
-                    terminalOpen = true
-                })
-                HomeTab.SETTINGS -> SettingsScreen(repository, onOpenTerminal = {
-                    terminalOpen = true
-                })
+            NavigationBar(modifier = Modifier.fillMaxWidth().height(76.dp)) {
+                TABS.forEach { info ->
+                    NavigationBarItem(
+                        selected = info.tab == selectedTab,
+                        onClick = { selectedTabName = info.tab.name },
+                        icon = {
+                            Icon(
+                                info.icon,
+                                contentDescription = null,
+                                modifier = Modifier.size(28.dp),
+                            )
+                        },
+                        label = {
+                            Text(
+                                text = stringResource(info.labelRes),
+                                textAlign = TextAlign.Center,
+                                maxLines = 2,
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                        },
+                        alwaysShowLabel = true,
+                    )
+                }
             }
         }
     }

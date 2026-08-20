@@ -45,10 +45,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.meow.academy.rpc.LlmProviderInfo
@@ -193,9 +195,15 @@ fun ChatToolbar(
             ) {
                 ProviderAvatar(currentProvider, providerLabel(currentProvider, providers), size = 40.dp)
             }
-            DropdownMenu(expanded = providerMenu, onDismissRequest = { providerMenu = false }) {
+            DropdownMenu(
+                expanded = providerMenu,
+                onDismissRequest = { providerMenu = false },
+                // 不抢主窗口焦点，避免输入框失焦导致输入法收起
+                properties = PopupProperties(focusable = false),
+            ) {
                 providers.forEach { p ->
                     DropdownMenuItem(
+                        modifier = Modifier.focusProperties { canFocus = false },
                         text = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 ProviderAvatar(p.provider, p.displayName, size = 24.dp)
@@ -218,9 +226,15 @@ fun ChatToolbar(
             ) {
                 ModelAvatar(currentProvider, modelLabel(llmModel), size = 40.dp)
             }
-            DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
+            DropdownMenu(
+                expanded = modelMenu,
+                onDismissRequest = { modelMenu = false },
+                // 不抢主窗口焦点，避免输入框失焦导致输入法收起
+                properties = PopupProperties(focusable = false),
+            ) {
                 availableModels.forEach { m ->
                     DropdownMenuItem(
+                        modifier = Modifier.focusProperties { canFocus = false },
                         text = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 ModelAvatar(currentProvider, modelLabel(m), size = 24.dp)
@@ -255,9 +269,15 @@ fun ChatToolbar(
             ) {
                 Icon(Icons.Filled.Bolt, contentDescription = null, modifier = Modifier.size(20.dp))
             }
-            DropdownMenu(expanded = effortMenu, onDismissRequest = { effortMenu = false }) {
+            DropdownMenu(
+                expanded = effortMenu,
+                onDismissRequest = { effortMenu = false },
+                // 不抢主窗口焦点，避免输入框失焦导致输入法收起
+                properties = PopupProperties(focusable = false),
+            ) {
                 REASONING_EFFORTS.forEach { e ->
                     DropdownMenuItem(
+                        modifier = Modifier.focusProperties { canFocus = false },
                         text = { Text(effortLabel(e)) },
                         onClick = { onSelectReasoningEffort(e); effortMenu = false },
                     )
@@ -307,7 +327,10 @@ private fun ToolCircleButton(
     ) {
         IconButton(
             onClick = onClick,
-            modifier = Modifier.fillMaxSize(),
+            // 工具栏按钮不参与焦点：避免点击时输入框失焦、输入法被系统收起
+            modifier = Modifier
+                .fillMaxSize()
+                .focusProperties { canFocus = false },
         ) {
             CompositionLocalProvider(LocalContentColor provides fg) {
                 content()

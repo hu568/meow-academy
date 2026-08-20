@@ -33,6 +33,10 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,11 +64,19 @@ fun ChatBackgroundDialog(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
+    // 用本地 State 承接“当前选中项”：AlertDialog 窗口内容有时不会随父级参数变化重组，
+    // 点选后立即改本地状态，保证 RadioButton 勾选效果即时刷新（持久化仍由 onSelect 负责）。
+    var selectedRaw by remember(current) { mutableStateOf(current) }
+    val choose: (String) -> Unit = { raw ->
+        selectedRaw = raw
+        onSelect(raw)
+    }
+
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             val saved = copyImageToAppStorage(context, uri)
             if (saved != null) {
-                onSelect(saved)
+                choose(saved)
             } else {
                 Toast.makeText(context, "保存图片失败，请重试", Toast.LENGTH_SHORT).show()
             }
@@ -80,7 +92,7 @@ fun ChatBackgroundDialog(
             ) {
                 BgOptionRow(
                     label = stringResource(R.string.chat_bg_none),
-                    selected = current == CHAT_BG_NONE,
+                    selected = selectedRaw == CHAT_BG_NONE,
                     preview = {
                         Box(
                             modifier = Modifier
@@ -89,12 +101,12 @@ fun ChatBackgroundDialog(
                                 .background(MaterialTheme.colorScheme.surfaceContainerHighest),
                         )
                     },
-                    onClick = { onSelect(CHAT_BG_NONE) },
+                    onClick = { choose(CHAT_BG_NONE) },
                 )
                 CHAT_BG_PRESETS.forEach { preset ->
                     BgOptionRow(
                         label = preset.name,
-                        selected = current == "preset:${preset.id}",
+                        selected = selectedRaw == "preset:${preset.id}",
                         preview = {
                             Box(
                                 modifier = Modifier
@@ -107,13 +119,13 @@ fun ChatBackgroundDialog(
                                     ),
                             )
                         },
-                        onClick = { onSelect("preset:${preset.id}") },
+                        onClick = { choose("preset:${preset.id}") },
                     )
                 }
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                 BgOptionRow(
                     label = stringResource(R.string.chat_bg_custom_image),
-                    selected = false,
+                    selected = selectedRaw.startsWith("file:"),
                     preview = {
                         Box(
                             modifier = Modifier
