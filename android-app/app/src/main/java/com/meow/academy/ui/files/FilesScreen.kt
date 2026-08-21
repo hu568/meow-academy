@@ -71,7 +71,7 @@ fun FilesScreen(onOpenTerminal: (String) -> Unit = {}) {
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // 编辑器覆盖页
+    // 编辑器覆盖页（HTML 也走同一编辑器：默认停在 WebView 预览模式，可一键切编辑）
     var editingFile by remember { mutableStateOf<FileEntry?>(null) }
     editingFile?.let { file ->
         FileEditorScreen(
@@ -79,6 +79,11 @@ fun FilesScreen(onOpenTerminal: (String) -> Unit = {}) {
             repository = repository,
             onBack = { editingFile = null },
             onSaved = {
+                editingFile = null
+                vm.refresh()
+            },
+            onRenamed = { newFile -> editingFile = newFile },
+            onDeleted = {
                 editingFile = null
                 vm.refresh()
             },
@@ -242,7 +247,7 @@ fun FilesScreen(onOpenTerminal: (String) -> Unit = {}) {
                                             vm.onNavigatedTo(entry.path)
                                         } else {
                                             when (openKind(File(entry.path), repository)) {
-                                                FileKind.TEXT, FileKind.MARKDOWN -> editingFile = entry
+                                                FileKind.TEXT, FileKind.MARKDOWN, FileKind.HTML -> editingFile = entry
                                                 FileKind.LARGE_TEXT -> scope.launch { snackbarHostState.showSnackbar("文件过大，请用终端打开") }
                                                 else -> scope.launch { snackbarHostState.showSnackbar("无法预览（二进制或未知格式）") }
                                             }

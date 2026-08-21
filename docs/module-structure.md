@@ -35,7 +35,7 @@ app/src/main/java/com/meow/academy/
 │   ├── chat/                  #   聊天页（结构/组件/模型/纯函数分文件）
 │   ├── settings/              #   设置页 + 模型管理页
 │   ├── terminal/              #   终端页（连接层 + ANSI 引擎分离）
-│   └── files/                 #   文件管理页（占位）
+│   └── files/                 #   文件管理页（列表/搜索/目录导航 + 统一编辑器：文本/Markdown/HTML 预览与编辑）
 ├── data/                      # 数据层
 │   ├── chat/                  #   Room：会话 + 消息两表
 │   └── settings/              #   DataStore：设置项 + 枚举 + 展示名映射

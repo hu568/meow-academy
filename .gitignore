@@ -2,10 +2,6 @@
 AGENTS.md
 MEMORY.md
 
-# Reasonix 本地配置
-.reasonix/
-reasonix.toml
-
 .env
 
 # release/ 只放安装包与版本更新记录；仅 RELEASE_NOTES_*.md 入库
@@ -20,7 +16,7 @@ android-app/.tmp_build*.log
 .agents/
 
 # DSH fork（本地独立副本，从 github.com/deepseek-ai/deepseek-harness fork，
-# 用于构建 runtime 闭包，与 D:\deepseek-harness 解耦；源码 92MB + node_modules 964MB，不入库）
+# 用于构建 runtime 闭包；源码 92MB + node_modules 964MB，不入库）
 /dsh/
 /dsh.rc5.bak/
 

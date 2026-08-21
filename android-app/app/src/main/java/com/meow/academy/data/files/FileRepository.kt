@@ -291,6 +291,12 @@ class FileRepository(private val context: Context) {
     fun isMarkdown(name: String): Boolean =
         name.endsWith(".md", ignoreCase = true) || name.endsWith(".markdown", ignoreCase = true)
 
+    /** HTML 判断（.html / .htm / .xhtml，不区分大小写；xml 不算，仍走文本编辑） */
+    fun isHtmlFile(name: String): Boolean =
+        name.endsWith(".html", ignoreCase = true) ||
+            name.endsWith(".htm", ignoreCase = true) ||
+            name.endsWith(".xhtml", ignoreCase = true)
+
     /** 递归复制单个文件或目录（不覆盖已存在的目标） */
     private fun copyRecursive(src: File, dest: File): Boolean =
         runCatching { src.copyRecursively(dest, overwrite = false) }.isSuccess

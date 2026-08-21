@@ -126,11 +126,12 @@ fun listKind(entry: FileEntry): FileKind = fileKindOf(entry.name, entry.isDirect
 
 /**
  * 精确分类（用于点击打开时的判定）：会读取小文件内容做二进制嗅探。
- * FOLDER 以外的取值决定打开行为（文本可编辑 / 超大文本转终端 / 二进制不可预览）。
+ * FOLDER 以外的取值决定打开行为（文本可编辑 / HTML WebView 预览 / 超大文本转终端 / 二进制不可预览）。
  */
 fun openKind(file: File, repository: FileRepository): FileKind = when {
     file.isDirectory -> FileKind.FOLDER
     repository.isMarkdown(file.name) -> FileKind.MARKDOWN
+    repository.isHtmlFile(file.name) -> FileKind.HTML
     repository.isTextFile(file) ->
         if (file.length() > FileRepository.TEXT_PREVIEW_LIMIT) FileKind.LARGE_TEXT else FileKind.TEXT
     else -> FileKind.BINARY
