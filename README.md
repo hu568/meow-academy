@@ -1,5 +1,7 @@
 # 🐾 喵仓 MeowAcademy
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+
 > 安卓端 AI 助手 App：在手机里内置完整的 **DeepSeek Harness（DSH）Agent 运行时**，
 > 聊天问答、真终端、文件数据中心三位一体，模型走云端 API。
 > 愿景是让 Markdown 笔记「会聊天、会查资料」——md 知识库 + SQLite Wiki + RAG 检索见[路线图](#️-路线图)。
@@ -11,6 +13,7 @@
 | 技术栈 | Kotlin · Jetpack Compose · Material 3 · Room · DataStore · Markwon |
 | Agent 后端 | 内置 DeepSeek Harness 运行时（真终端 PTY + 本地 socket JSON-RPC） |
 | 模型 | 云端 API（DeepSeek 官方，或任意 OpenAI 兼容自定义 Provider），无本地模型 |
+| 许可证 | [GPL-3.0](LICENSE) |
 
 ---
 
@@ -203,3 +206,13 @@ meow-academy/
 1. **知识库与 RAG（M5）**：md 文件导入 / 文件夹扫描 → SQLite Wiki（标题 / 标签 / 全文检索）→ Kotlin 端分块（~300 字 / 50 字重叠）→ bge-m3 向量化 → 余弦检索 top-5 → 回答标注引用来源
 2. **联调与打包（M6）**：体积优化（≤200MB）、混淆、正式签名 release 包
 3. **增强（M7）**：双模型配置同步、Rerank 重排序、MCP 服务器接入、语音输入 / TTS、学习进度追踪、云同步
+
+---
+
+## 📄 许可证
+
+本项目基于 [GPL-3.0](LICENSE)（GNU General Public License v3.0）发布。
+
+- 任何基于本项目的二次分发 / 修改版，须同样以 GPL-3.0 开源，并保留版权与许可声明
+- 本程序按「现状」提供，不含任何形式的担保（详见 LICENSE 第 15、16 节）
+- 内置的 DeepSeek Harness（DSH）运行时闭包（`runtime.bin`）属于上游独立项目，遵循其自身的许可条款；本仓库对 DSH 的组合配置与插件（`cordis.yml` / `meow-extensions/`）随本项目以 GPL-3.0 发布

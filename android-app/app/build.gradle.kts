@@ -1,4 +1,5 @@
 // 喵仓 MeowAcademy · app 模块
+// SPDX-License-Identifier: GPL-3.0
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
