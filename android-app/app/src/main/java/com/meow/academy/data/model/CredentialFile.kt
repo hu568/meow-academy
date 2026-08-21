@@ -6,9 +6,9 @@ import java.io.File
  * DSH credentials-local 文档的轻量读取（仅用于本地回显缓存迁移）。
  *
  * DSH 把自定义 provider 的 API Key 明文写在 `$DSH_CREDENTIALS_PATH`
- * （Android 上为 `filesDir/dsh-credentials.yaml`），格式是简单的
- * `CredentialRef: value` 映射。这里不做完整 YAML 解析，只覆盖
- * 喵学堂/DSH 写出的常规标量形态；解析失败时静默返回空，仅影响旧 Key 回显缓存迁移。
+ * （Android 上为 `filesDir/appconfig/dsh-credentials.yaml`，phase4 目录重构后），
+ * 格式是简单的 `CredentialRef: value` 映射。这里不做完整 YAML 解析，只覆盖
+ * 喵仓/DSH 写出的常规标量形态；解析失败时静默返回空，仅影响旧 Key 回显缓存迁移。
  */
 
 /** 与 meow-jsonrpc.js 的 providerCredentialRef 保持一致 */

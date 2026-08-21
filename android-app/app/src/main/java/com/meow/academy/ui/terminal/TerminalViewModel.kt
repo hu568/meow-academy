@@ -46,7 +46,7 @@ class TerminalViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 连接 PTY socket 并开始读循环。
      * @param initialDir 非空时连接成功后先执行 `cd -- '<路径>'`（如文件管理页的当前浏览目录），
-     *                   null 则留在 bash 默认 cwd（filesDir 根 = DSH_CWD）。
+     *                   null 则留在 bash 默认 cwd（workspace = DSH_CWD）。
      */
     fun start(initialDir: String? = null) {
         if (readJob != null) return

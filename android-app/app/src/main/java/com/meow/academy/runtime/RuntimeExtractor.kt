@@ -31,12 +31,36 @@ object RuntimeExtractor {
     /** 版本标记文件（存 assets runtime.bin 的字节数，用于检测是否需要重新解压） */
     const val VERSION_FILE = ".runtime-version"
 
+    /** DSH 默认工作区目录名（filesDir 下，agent 相对路径都落在这里） */
+    const val WORKSPACE_DIR = "workspace"
+
+    /** 工作区内的上传目录名 */
+    const val UPLOADS_DIR = "uploads"
+
+    /** 设置选项存放目录名（filesDir 下，后续全 JSON） */
+    const val APPCONFIG_DIR = "appconfig"
+
+    /** agent 配置目录名（filesDir 下，skills / 记忆 / 插件，MCP 未来） */
+    const val AGENTS_DIR = ".agents"
+
+    /** 创造模式生成的 DSH 插件目录（.agents 下） */
+    const val AGENTS_PLUGINS_DIR = ".agents/plugins"
+
+    /** 自定义 skills 目录（.agents 下） */
+    const val AGENTS_SKILLS_DIR = ".agents/skills"
+
+    /** 长期记忆目录（.agents 下） */
+    const val AGENTS_MEMORY_DIR = ".agents/memory"
+
     /**
      * 解压 [ASSET_NAME] 到 filesDir/[RUNTIME_DIR]。
      *
      * @param onProgress 0f..1f 的解压进度（按压缩包字节计）
      */
     suspend fun extract(context: Context, onProgress: (Float) -> Unit): File = withContext(Dispatchers.IO) {
+        // 目录重构（phase4）：解压即把 workspace/appconfig/.agents 建好（三保险之一）
+        ensureAppDirs(context)
+
         val filesDir = context.filesDir
         val targetDir = File(filesDir, RUNTIME_DIR)
         val tmpDir = File(filesDir, "$RUNTIME_DIR.tmp")
@@ -157,4 +181,46 @@ object RuntimeExtractor {
 
     /** 运行时目录 */
     fun runtimeDir(context: Context): File = File(context.filesDir, RUNTIME_DIR)
+
+    /**
+     * 幂等创建 App 业务目录（workspace / appconfig / .agents 及其子目录）。
+     *
+     * 三保险调用点：MeowAcademyApp.onCreate、extract()、DshProcessLauncher.launch()。
+     * mkdirs() 幂等，重复调用安全喵。
+     */
+    fun ensureAppDirs(context: Context) {
+        val filesDir = context.filesDir
+        val dirs = listOf(
+            File(filesDir, WORKSPACE_DIR),
+            File(filesDir, "$WORKSPACE_DIR/$UPLOADS_DIR"),
+            File(filesDir, APPCONFIG_DIR),
+            File(filesDir, AGENTS_DIR),
+            File(filesDir, AGENTS_PLUGINS_DIR),
+            File(filesDir, AGENTS_SKILLS_DIR),
+            File(filesDir, AGENTS_MEMORY_DIR),
+        )
+        dirs.forEach { it.mkdirs() }
+        Log.d(TAG, "ensureAppDirs ok")
+    }
+
+    /** workspace 目录（DSH_CWD） */
+    fun workspaceDir(context: Context): File = File(context.filesDir, WORKSPACE_DIR)
+
+    /** workspace 内的上传目录（DSH_UPLOAD_DIR） */
+    fun workspaceUploadsDir(context: Context): File = File(workspaceDir(context), UPLOADS_DIR)
+
+    /** appconfig 目录（settings / credentials） */
+    fun appConfigDir(context: Context): File = File(context.filesDir, APPCONFIG_DIR)
+
+    /** .agents 根目录 */
+    fun agentsDir(context: Context): File = File(context.filesDir, AGENTS_DIR)
+
+    /** .agents/plugins（创造模式插件） */
+    fun agentsPluginsDir(context: Context): File = File(context.filesDir, AGENTS_PLUGINS_DIR)
+
+    /** .agents/skills（自定义 skills） */
+    fun agentsSkillsDir(context: Context): File = File(context.filesDir, AGENTS_SKILLS_DIR)
+
+    /** .agents/memory（长期记忆） */
+    fun agentsMemoryDir(context: Context): File = File(context.filesDir, AGENTS_MEMORY_DIR)
 }

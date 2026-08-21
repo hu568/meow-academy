@@ -7,7 +7,7 @@ import java.io.IOException
 
 /**
  * 在 Android 应用私有目录里直接执行内置 node（Termux 版动态链接二进制），
- * 入口为喵学堂真终端宿主：node + terminal-host.js。
+ * 入口为喵仓真终端宿主：node + terminal-host.js。
  *
  * terminal-host 用 node-pty 拉起持久 bash（真终端），并在 bash 内后台启动 DSH；
  * DSH 的聊天 JSON-RPC 走本地 unix socket（DSH_JSONRPC_SOCKET），真终端数据走
@@ -39,6 +39,9 @@ object DshProcessLauncher {
         jsonRpcSocket: String,
         webSearchEnabled: Boolean = false,
     ): Process {
+        // 兜底：runtime 已解压（跳过 extract）时也确保业务目录存在（三保险之三）
+        RuntimeExtractor.ensureAppDirs(context)
+
         val runtimeDir = RuntimeExtractor.runtimeDir(context)
         val node = File(runtimeDir, "bin/node")
         val entry = File(runtimeDir, ENTRY_REL)
@@ -48,6 +51,7 @@ object DshProcessLauncher {
             )
         }
 
+        val workspaceDir = RuntimeExtractor.workspaceDir(context).absolutePath
         val command = listOf(
             "/system/bin/linker64",
             node.absolutePath,
@@ -56,11 +60,11 @@ object DshProcessLauncher {
         Log.i(TAG, "launch: " + command.joinToString(" "))
 
         val pb = ProcessBuilder(command)
-        pb.directory(context.filesDir)
+        pb.directory(RuntimeExtractor.workspaceDir(context))
         pb.environment().apply {
             // PATH：runtime/bin 里有 node/bash；/system/bin 提供 sh 等系统命令
             put("PATH", runtimeDir.absolutePath + "/bin:/system/bin:/system/xbin")
-            put("HOME", context.filesDir.absolutePath)
+            put("HOME", workspaceDir)
             // node/bash 是动态链接 Termux 库，需指向 runtime 内置的 .so
             put("LD_LIBRARY_PATH", runtimeDir.absolutePath + "/lib")
             // Termux 版 node 的 OpenSSL 默认 CA 路径在 App 沙箱不可读，重定向到 runtime 内置 CA 束
@@ -79,10 +83,13 @@ object DshProcessLauncher {
             // DSH 会话持久化（SQLite）与默认 cwd（cordis.yml 里经 DSH_SESSION_DB / DSH_CWD 读取）
             put("DSH_SESSION_DB", context.filesDir.absolutePath + "/.dsh-sessions/chat.db")
             // 可配置 provider 的 settings / credentials 文档路径（模型管理，M4）
-            put("DSH_SETTINGS_PATH", context.filesDir.absolutePath + "/dsh-settings.yaml")
-            put("DSH_CREDENTIALS_PATH", context.filesDir.absolutePath + "/dsh-credentials.yaml")
-            put("DSH_UPLOAD_DIR", context.filesDir.absolutePath + "/uploads")
-            put("DSH_CWD", context.filesDir.absolutePath)
+            // phase4：settings 迁至 appconfig/ 且 JSON 化（DSH settings-file 原生支持 .json）
+            put("DSH_SETTINGS_PATH", RuntimeExtractor.appConfigDir(context).absolutePath + "/dsh-settings.json")
+            put("DSH_CREDENTIALS_PATH", RuntimeExtractor.appConfigDir(context).absolutePath + "/dsh-credentials.yaml")
+            put("DSH_UPLOAD_DIR", RuntimeExtractor.workspaceUploadsDir(context).absolutePath)
+            put("DSH_CWD", workspaceDir)
+            // filesDir 绝对路径（cordis.yml 的 fs-local deny 用绝对路径构造敏感文件规则）
+            put("DSH_FILES_DIR", context.filesDir.absolutePath)
             // 网络搜索开关（'1' 启用；cordis.yml 里 tool-web.search 据此决定是否注册 web_search）
             put("DSH_WEB_SEARCH", if (webSearchEnabled) "1" else "0")
             if (apiKey.isNotBlank()) {

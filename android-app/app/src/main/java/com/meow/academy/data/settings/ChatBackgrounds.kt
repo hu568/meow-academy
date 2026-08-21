@@ -74,7 +74,10 @@ fun chatBackgroundLabel(raw: String?): String = when (val bg = parseChatBackgrou
     is ChatBackground.File -> "自定义图片"
 }
 
-/** 把相册图片拷贝进 App 私有目录（避免 content URI 授权失效），返回 `file:` 持久化字符串；失败返回 null */
+/**
+ * 把相册图片拷贝进 App 私有目录（避免 content URI 授权失效），返回 `file:` 持久化字符串；失败返回 null。
+ * phase4 目录重构后仍放 filesDir/chat-bg/（App UI 私有数据，不属于 agent 工作区，不进 workspace）。
+ */
 fun copyImageToAppStorage(context: Context, uri: Uri): String? = runCatching {
     val dir = File(context.filesDir, "chat-bg").apply { mkdirs() }
     val ext = when (context.contentResolver.getType(uri)) {

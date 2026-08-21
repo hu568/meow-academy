@@ -1,4 +1,4 @@
-# 喵学堂（meow-academy）组合 —— 安卓 App 内置 DSH jsonrpc 运行时
+# 喵仓（meow-academy）组合 —— 安卓 App 内置 DSH jsonrpc 运行时
 # stdout 专用于 JSON-RPC 帧：不要加载 console logger 或终端 UI。
 # 相比官方 examples/jsonrpc-agent/cordis.yml：
 #   - sdk-jsonrpc-server → meow-jsonrpc（自定义插件：包装官方 server 并新增 session/cancel、session/bash）
@@ -11,13 +11,13 @@
     maxTokensAsSuccess: true
 
 # 可配置 Provider 机制（模型管理）：settings + credentials 后端 + pi-ai 通用网关
-# settings-file 提供 settings service（provider profile 存 settings.yaml，运行时热生效）
-# credentials-local 提供 credentials service（provider apiKey 存 .credentials.yaml）
+# settings-file 提供 settings service（provider profile 存 settings.json，运行时热生效）
+# credentials-local 提供 credentials service（provider apiKey 存 dsh-credentials.yaml）
 # llm-pi-ai 承载用户自定义 OpenAI 格式 provider（空 providers = dormant，经 settings 写入才注册）
 - id: settings
   name: '@deepseek-ai/dsh-settings-file'
   config:
-    path: !!js process.env.DSH_SETTINGS_PATH ?? (process.env.DSH_CWD ?? process.cwd()) + '/dsh-settings.yaml'
+    path: !!js process.env.DSH_SETTINGS_PATH ?? (process.env.DSH_CWD ?? process.cwd()) + '/dsh-settings.json'
     watch: false
 
 - id: credentials
@@ -55,7 +55,7 @@
   config:
     includeHarnessIdentity: false
     includeRuntimeContext: false
-    persona: !!js process.env.DSH_SYSTEM_PROMPT ?? '你是一位温柔耐心的学习助教「喵喵老师」。回答要清晰有条理，适当使用 Markdown 格式，引用知识库时标注来源。你的工作目录是 App 私有数据目录（filesDir），读写文件请用相对路径（例如 test.txt，而不是 /tmp 或 /sdcard 等系统目录）；bash 工具可用于执行命令。'
+    persona: !!js process.env.DSH_SYSTEM_PROMPT ?? '你是一位温柔耐心的学习助教「喵喵老师」。回答要清晰有条理，适当使用 Markdown 格式，引用知识库时标注来源。你的工作目录是 App 私有数据目录下的 workspace（filesDir/workspace），读写文件请用相对路径（例如 test.txt，而不是 /tmp 或 /sdcard 等系统目录）；bash 工具可用于执行命令。禁止读取 appconfig/dsh-credentials.yaml 与 datastore/ 目录下的文件（包含密钥与内部数据）；dsh-settings.json 与 .dsh-sessions/chat.db 可读，但聊天记录含隐私，谨慎引用。'
     workspaceContext: false
     skills:
       enabled: false
@@ -96,10 +96,17 @@
     fetch: false
 
 # 文件能力（M3 文件管理铺路）
+# phase4：deny 规则禁止 agent 读取敏感文件（凭证 / DataStore 内部明文 key）。
+# 用 DSH_FILES_DIR 构造绝对路径，避免 cwd=workspace 时相对基准错误；文件级精确 + 目录级前缀。
 - id: fs-local
   name: '@deepseek-ai/dsh-fs-local'
   config:
     cwd: !!js process.env.DSH_CWD ?? process.cwd()
+    deny:
+      # 注意：loader 的 !!js 在 ESM 作用域求值，require 不可用；用字符串拼接构造绝对路径
+      - path: !!js (process.env.DSH_FILES_DIR ?? process.cwd()) + '/appconfig/dsh-credentials.yaml'
+      - path: !!js (process.env.DSH_FILES_DIR ?? process.cwd()) + '/datastore/meow_settings.preferences_pb'
+      - path: !!js (process.env.DSH_FILES_DIR ?? process.cwd()) + '/datastore/meow_settings.preferences_pb.journal'
 
 - id: fs-observation-policy
   name: '@deepseek-ai/dsh-fs-observation-policy'

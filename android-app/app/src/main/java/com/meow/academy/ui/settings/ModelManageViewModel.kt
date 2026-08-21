@@ -17,6 +17,7 @@ import com.meow.academy.data.model.readDshCredentialsFile
 import java.io.File
 import com.meow.academy.data.settings.SettingsRepository
 import com.meow.academy.rpc.DshParams
+import com.meow.academy.runtime.RuntimeExtractor
 import com.meow.academy.rpc.DshRpcClient
 import com.meow.academy.rpc.LlmModelInfo
 import com.meow.academy.rpc.LlmModelInput
@@ -153,10 +154,10 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
     /** 把 DSH credential 里的既有 Key 同步进本地回显缓存（仅补缺，不覆盖用户已缓存的值） */
     private suspend fun syncProviderApiKeysFromRuntime(profiles: Map<String, ProviderProfile>) {
         val cached = providerApiKeys.value
-        // 优先直接读 DSH credentials 文档（Android 上就在 filesDir/dsh-credentials.yaml），
+        // 优先直接读 DSH credentials 文档（Android 上在 appconfig/dsh-credentials.yaml），
         // 不依赖新增 RPC / 不要求重打 runtime.bin
         val fileKeys = withContext(Dispatchers.IO) {
-            readDshCredentialsFile(File(getApplication<Application>().filesDir, "dsh-credentials.yaml"))
+            readDshCredentialsFile(File(RuntimeExtractor.appConfigDir(getApplication()), "dsh-credentials.yaml"))
         }
         profiles.forEach { (key, profile) ->
             if (key == DEEPSEEK_PROVIDER) return@forEach
@@ -255,7 +256,7 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
             if (!providerApiKeys.value[provider].isNullOrEmpty()) return@launch
             val ref = providerCredentialRef(provider)
             val fromFile = withContext(Dispatchers.IO) {
-                readDshCredentialsFile(File(getApplication<Application>().filesDir, "dsh-credentials.yaml"))[ref]
+                readDshCredentialsFile(File(RuntimeExtractor.appConfigDir(getApplication()), "dsh-credentials.yaml"))[ref]
             }
             if (!fromFile.isNullOrBlank()) {
                 settingsRepository.setProviderApiKey(provider, fromFile)

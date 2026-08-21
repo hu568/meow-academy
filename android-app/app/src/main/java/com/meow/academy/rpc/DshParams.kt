@@ -9,7 +9,7 @@ import kotlinx.serialization.json.put
 /** 请求参数构造（只声明当前阶段用到的字段） */
 object DshParams {
 
-    /** initialize：进程级握手（cwd=filesDir；provider/model 决定后续所有会话的路由） */
+    /** initialize：进程级握手（cwd=workspace；provider/model 决定后续所有会话的路由） */
     fun initialize(
         cwd: String,
         provider: String,

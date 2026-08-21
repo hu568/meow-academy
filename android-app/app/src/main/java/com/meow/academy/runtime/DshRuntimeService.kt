@@ -124,8 +124,9 @@ class DshRuntimeService : Service() {
                 rpc.start()
 
                 // JSON-RPC 握手：initialize 完成前会话请求会用错 model，必须先等它成功
+                // phase4：cwd 改为 workspace（与 DSH_CWD 一致）
                 var initialized = rpc.initialize(
-                    cwd = app.filesDir.absolutePath,
+                    cwd = RuntimeExtractor.workspaceDir(app).absolutePath,
                     provider = provider,
                     model = model,
                     reasoningEffort = reasoningEffort,
@@ -134,7 +135,7 @@ class DshRuntimeService : Service() {
                     // 自定义 provider 在 settings 中不存在（数据被清等）→ 回退内置 DeepSeek
                     Log.w("DshRuntimeService", "initialize with $provider failed, fallback to deepseek-official")
                     initialized = rpc.initialize(
-                        cwd = app.filesDir.absolutePath,
+                        cwd = RuntimeExtractor.workspaceDir(app).absolutePath,
                         provider = "deepseek-official",
                         model = "deepseek-v4-flash",
                         reasoningEffort = reasoningEffort,
@@ -212,7 +213,7 @@ class DshRuntimeService : Service() {
         val manager = getSystemService(NotificationManager::class.java)
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "喵学堂运行时",
+            "喵仓运行时",
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
             description = "DeepSeek Harness 后台运行时（低优先级，不打扰）"
@@ -229,7 +230,7 @@ class DshRuntimeService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle("喵学堂 · DSH 运行时")
+            .setContentTitle("喵仓 · DSH 运行时")
             .setContentText(text)
             .setContentIntent(pending)
             .setOngoing(true)
