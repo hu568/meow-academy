@@ -1,0 +1,1645 @@
+From d09ae8cacb2f1e8ac674ff62ad808c6497188c32 Mon Sep 17 00:00:00 2001
+From: meow-academy <meow@academy.local>
+Date: Fri, 21 Aug 2026 18:43:05 +0800
+Subject: [PATCH] feat(meow): Android runtime adaptations + tavily web search +
+ meow-runtime deploy manifest
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Meow-academy (喵仓) fork patch on top of 47f943859b:
+
+- fs-local: SELinux-safe atomic publish (link -> rename); new deny rules
+- bash-local: launch bash via linker64 on Android; DEEPSEEK_API_KEY tombstone
+- llm-pi-ai: dormant routes for empty catalogs; tolerate MISSING_CREDENTIAL in discovery
+- web-search-tavily: new web search provider package (TAVILY_API_KEY)
+- bundle/base: register dsh-web-search-tavily
+- deploy/meow-runtime: pnpm deploy manifest for the Android runtime closure
+- pnpm-workspace / tsconfig.host: register the above
+---
+ deploy/meow-runtime/package.json              |  84 +++++
+ packages/bundle/base/cordis.patch.yml         |   5 +
+ packages/bundle/base/package.json             |   1 +
+ packages/fs/fs-local/src/fsio.ts              |  54 +---
+ packages/fs/fs-local/src/index.ts             |  67 +++-
+ packages/llm/llm-pi-ai/README.md              |   6 +-
+ packages/llm/llm-pi-ai/README.zh.md           |   2 +-
+ packages/llm/llm-pi-ai/src/catalog.ts         |  10 +-
+ packages/llm/llm-pi-ai/src/config.ts          |   5 +
+ packages/llm/llm-pi-ai/src/index.ts           |  11 +-
+ packages/llm/llm-pi-ai/tests/adapter.spec.ts  |   5 +-
+ .../llm/llm-pi-ai/tests/discovery.spec.ts     |  21 ++
+ .../llm-pi-ai/tests/dynamic-config.spec.ts    |  12 +-
+ packages/shell/bash-local/src/index.ts        |  16 +-
+ packages/web/web-search-tavily/README.md      |  51 +++
+ packages/web/web-search-tavily/README.zh.md   |  51 +++
+ packages/web/web-search-tavily/package.json   |  49 +++
+ packages/web/web-search-tavily/src/index.ts   |  71 +++++
+ .../web/web-search-tavily/src/invariant.ts    |  30 ++
+ .../web/web-search-tavily/src/provider.ts     | 180 +++++++++++
+ packages/web/web-search-tavily/src/types.ts   |  43 +++
+ .../web-search-tavily/tests/redirect.spec.ts  | 124 ++++++++
+ .../web-search-tavily/tests/tavily.spec.ts    | 291 ++++++++++++++++++
+ packages/web/web-search-tavily/tsconfig.json  |  30 ++
+ pnpm-workspace.yaml                           |   3 +
+ tsconfig.host.json                            |   1 +
+ 26 files changed, 1143 insertions(+), 80 deletions(-)
+ create mode 100755 deploy/meow-runtime/package.json
+ create mode 100755 packages/web/web-search-tavily/README.md
+ create mode 100755 packages/web/web-search-tavily/README.zh.md
+ create mode 100755 packages/web/web-search-tavily/package.json
+ create mode 100755 packages/web/web-search-tavily/src/index.ts
+ create mode 100755 packages/web/web-search-tavily/src/invariant.ts
+ create mode 100755 packages/web/web-search-tavily/src/provider.ts
+ create mode 100755 packages/web/web-search-tavily/src/types.ts
+ create mode 100755 packages/web/web-search-tavily/tests/redirect.spec.ts
+ create mode 100755 packages/web/web-search-tavily/tests/tavily.spec.ts
+ create mode 100755 packages/web/web-search-tavily/tsconfig.json
+
+diff --git a/deploy/meow-runtime/package.json b/deploy/meow-runtime/package.json
+new file mode 100755
+index 0000000000..52e6c08dd7
+--- /dev/null
++++ b/deploy/meow-runtime/package.json
+@@ -0,0 +1,84 @@
++{
++  "name": "meow-academy-dsh-runtime",
++  "description": "喵仓（meow-academy）安卓 App 内置 DSH jsonrpc 运行时的依赖清单：以官方 python/sdk-runtime 闭包为基，剔除 ACP/subagent 驱动/持久终端(node-pty)/sandbox 原生模块(landlock)/query/lsp/mcp 等；含 SQLite 会话持久化与 DeepSeek web 搜索。",
++  "version": "0.0.1",
++  "private": true,
++  "type": "module",
++  "dependencies": {
++    "@deepseek-ai/cordis-plugin-group": "workspace:^",
++    "@deepseek-ai/cordis-plugin-include": "workspace:^",
++    "@deepseek-ai/cordis-plugin-loader": "workspace:^",
++    "@deepseek-ai/cordis-plugin-timer": "workspace:^",
++    "@deepseek-ai/cosmokit": "workspace:^",
++    "@deepseek-ai/dsh-agent": "workspace:^",
++    "@deepseek-ai/dsh-agent-loop": "workspace:^",
++    "@deepseek-ai/dsh-agent-spine-demo": "workspace:^",
++    "@deepseek-ai/dsh-app-boot": "workspace:^",
++    "@deepseek-ai/dsh-atomic-write": "workspace:^",
++    "@deepseek-ai/dsh-attachment": "workspace:^",
++    "@deepseek-ai/dsh-shell": "workspace:^",
++    "@deepseek-ai/dsh-shell-env": "workspace:^",
++    "@deepseek-ai/dsh-bash-local": "workspace:^",
++    "@deepseek-ai/dsh-brand": "workspace:^",
++    "@deepseek-ai/dsh-compaction": "workspace:^",
++    "@deepseek-ai/dsh-compaction-basic": "workspace:^",
++    "@deepseek-ai/dsh-compaction-tool-result-pruner": "workspace:^",
++    "@deepseek-ai/dsh-credentials": "workspace:^",
++    "@deepseek-ai/dsh-credentials-local": "workspace:^",
++    "@deepseek-ai/dsh-launch-environment": "workspace:^",
++    "@deepseek-ai/dsh-fs": "workspace:^",
++    "@deepseek-ai/dsh-fs-local": "workspace:^",
++    "@deepseek-ai/dsh-fs-observation-policy": "workspace:^",
++    "@deepseek-ai/dsh-goal": "workspace:^",
++    "@deepseek-ai/dsh-goal-round-driver": "workspace:^",
++    "@deepseek-ai/dsh-invariants": "workspace:^",
++    "@deepseek-ai/dsh-sdk-jsonrpc-server": "workspace:^",
++    "@deepseek-ai/dsh-sdk-jsonrpc-demo": "workspace:^",
++    "@deepseek-ai/dsh-llm": "workspace:^",
++    "@deepseek-ai/dsh-llm-deepseek": "workspace:^",
++    "@deepseek-ai/dsh-llm-pi-ai": "workspace:^",
++    "@deepseek-ai/dsh-llm-retry": "workspace:^",
++    "@deepseek-ai/dsh-home-paths": "workspace:^",
++    "@deepseek-ai/dsh-repeat-tool-reminder": "workspace:^",
++    "@deepseek-ai/dsh-output-retention": "workspace:^",
++    "@deepseek-ai/dsh-sandbox": "workspace:^",
++    "@deepseek-ai/dsh-sandbox-policy": "workspace:^",
++    "@deepseek-ai/dsh-scope": "workspace:^",
++    "@deepseek-ai/dsh-sdk-protocol": "workspace:^",
++    "@deepseek-ai/dsh-session": "workspace:^",
++    "@deepseek-ai/dsh-session-checkpoint-policy": "workspace:^",
++    "@deepseek-ai/dsh-session-persistence": "workspace:^",
++    "@deepseek-ai/dsh-session-persistence-jsonl": "workspace:^",
++    "@deepseek-ai/dsh-session-persistence-sqlite": "workspace:^",
++    "@deepseek-ai/dsh-session-title": "workspace:^",
++    "@deepseek-ai/dsh-settings": "workspace:^",
++    "@deepseek-ai/dsh-settings-file": "workspace:^",
++    "@deepseek-ai/dsh-skill": "workspace:^",
++    "@deepseek-ai/dsh-skill-filesystem": "workspace:^",
++    "@deepseek-ai/dsh-subagent": "workspace:^",
++    "@deepseek-ai/dsh-subprocess": "workspace:^",
++    "@deepseek-ai/dsh-subprocess-local": "workspace:^",
++    "@deepseek-ai/dsh-system-prompt": "workspace:^",
++    "@deepseek-ai/dsh-timeout": "workspace:^",
++    "@deepseek-ai/dsh-tool-call-timeout-policy": "workspace:^",
++    "@deepseek-ai/dsh-token-meter": "workspace:^",
++    "@deepseek-ai/dsh-tool-bash": "workspace:^",
++    "@deepseek-ai/dsh-tool-fs": "workspace:^",
++    "@deepseek-ai/dsh-tool-goal": "workspace:^",
++    "@deepseek-ai/dsh-tool-skill": "workspace:^",
++    "@deepseek-ai/dsh-tool-str-replace-editor": "workspace:^",
++    "@deepseek-ai/dsh-tool-todo": "workspace:^",
++    "@deepseek-ai/dsh-tool-web": "workspace:^",
++    "@deepseek-ai/dsh-tools": "workspace:^",
++    "@deepseek-ai/dsh-typert-protocol": "workspace:^",
++    "@deepseek-ai/dsh-anonymous-user-id": "workspace:^",
++    "@deepseek-ai/dsh-agent-instructions": "workspace:^",
++    "@deepseek-ai/cordis": "workspace:^",
++    "@deepseek-ai/schemastery": "workspace:^",
++    "@deepseek-ai/dsh-jobs": "workspace:^",
++    "@deepseek-ai/dsh-jobs-local": "workspace:^",
++    "@deepseek-ai/dsh-tool-jobs": "workspace:^",
++    "@deepseek-ai/dsh-web": "workspace:^",
++    "@deepseek-ai/dsh-web-search-deepseek": "workspace:^"
++  }
++}
+diff --git a/packages/bundle/base/cordis.patch.yml b/packages/bundle/base/cordis.patch.yml
+index e9567d9206..7238f598d4 100644
+--- a/packages/bundle/base/cordis.patch.yml
++++ b/packages/bundle/base/cordis.patch.yml
+@@ -411,6 +411,11 @@
+       config:
+         apiKeyEnv: DEEPSEEK_API_KEY
+ 
++    - id: web-search-tavily
++      name: '@deepseek-ai/dsh-web-search-tavily'
++      config:
++        apiKeyEnv: TAVILY_API_KEY
++
+     - id: tool-web
+       name: '@deepseek-ai/dsh-tool-web'
+       config:
+diff --git a/packages/bundle/base/package.json b/packages/bundle/base/package.json
+index 706ee3202a..ecc43a3329 100644
+--- a/packages/bundle/base/package.json
++++ b/packages/bundle/base/package.json
+@@ -114,6 +114,7 @@
+     "@deepseek-ai/dsh-user-questions": "workspace:^",
+     "@deepseek-ai/dsh-web": "workspace:^",
+     "@deepseek-ai/dsh-web-search-deepseek": "workspace:^",
++    "@deepseek-ai/dsh-web-search-tavily": "workspace:^",
+     "@deepseek-ai/dsh-workflow-worker-thread": "workspace:^",
+     "@deepseek-ai/dsh-agent-instructions": "workspace:^"
+   },
+diff --git a/packages/fs/fs-local/src/fsio.ts b/packages/fs/fs-local/src/fsio.ts
+index 17bfb6115b..eff079da13 100644
+--- a/packages/fs/fs-local/src/fsio.ts
++++ b/packages/fs/fs-local/src/fsio.ts
+@@ -7,7 +7,7 @@
+ 
+ import { randomUUID } from 'node:crypto'
+ import { createReadStream } from 'node:fs'
+-import { chmod, link, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat } from 'node:fs/promises'
++import { chmod, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat } from 'node:fs/promises'
+ import type { BigIntStats, Dirent, Stats } from 'node:fs'
+ import { basename, dirname, join, resolve } from 'node:path'
+ import { TextDecoder } from 'node:util'
+@@ -22,10 +22,6 @@ function isENOENT(error: unknown): boolean {
+   return error instanceof Error && 'code' in error && error.code === 'ENOENT'
+ }
+ 
+-function isEEXIST(error: unknown): boolean {
+-  return error instanceof Error && 'code' in error && error.code === 'EEXIST'
+-}
+-
+ /**
+  * A path component that is expected to be a directory is a regular file (e.g.
+  * resolving `afile/child.txt` when `afile` is a file). Like `ENOENT`, the target
+@@ -478,43 +474,6 @@ async function removeStagingDirOrThrow(
+   throw originalError
+ }
+ 
+-async function throwGuardedCreateFailure(
+-  error: unknown,
+-  absolutePath: string,
+-  displayPath: string,
+-  inspectPublicationTarget: (path: string) => Promise<BigIntStats>,
+-): Promise<never> {
+-  let existing: BigIntStats | undefined
+-  try {
+-    existing = await inspectPublicationTarget(absolutePath)
+-  } catch (metadataError: unknown) {
+-    if (!isENOENT(metadataError) && !isENOTDIR(metadataError)) {
+-      throw new FsError(`cannot write "${displayPath}": ${errorMessage(metadataError)}`, 'FS_IO_ERROR', { cause: metadataError })
+-    }
+-  }
+-
+-  // Link errno values vary by platform and filesystem. Inspect the target entry
+-  // after failure so a collision is not confused with missing hard-link support.
+-  if (existing !== undefined) {
+-    if (!existing.isFile()) {
+-      throw new FsError(`cannot write "${displayPath}": not a regular file`, 'FS_NOT_REGULAR_FILE', { cause: error })
+-    }
+-    throw new FsError(
+-      `cannot overwrite existing "${displayPath}" without reading it first`,
+-      'FS_NOT_OBSERVED',
+-      { cause: error },
+-    )
+-  }
+-  if (isEEXIST(error)) {
+-    throw new FsError(
+-      `cannot overwrite existing "${displayPath}" without reading it first`,
+-      'FS_NOT_OBSERVED',
+-      { cause: error },
+-    )
+-  }
+-  throw new FsError(`cannot write "${displayPath}": ${errorMessage(error)}`, 'FS_IO_ERROR', { cause: error })
+-}
+-
+ /**
+  * Atomically replace a file through a private, synced staging file in the same directory.
+  * POSIX protects the staging directory and file with `0o700` and `0o600`. A new Windows file
+@@ -550,9 +509,6 @@ export async function writeFileAtomic(
+   const platform = internals.platform ?? process.platform
+   const copyFileDacl = internals.copyFileDacl ?? copyFileDaclWin32
+   const replaceFile = internals.replaceFile ?? replaceFileWin32
+-  const linkFile = internals.linkFile ?? link
+-  const inspectPublicationTarget = internals.inspectPublicationTarget
+-    ?? (path => lstat(path, { bigint: true }))
+   const removeStagingDir = internals.removeStagingDir
+     ?? (path => rm(path, { recursive: true, force: true }))
+   let handle: Awaited<ReturnType<typeof open>> | undefined
+@@ -576,11 +532,9 @@ export async function writeFileAtomic(
+ 
+     throwIfAborted(signal, 'write')
+     if (createIfAbsent !== undefined) {
+-      try {
+-        await linkFile(tempPath, absolutePath)
+-      } catch (error: unknown) {
+-        await throwGuardedCreateFailure(error, absolutePath, createIfAbsent.displayPath, inspectPublicationTarget)
+-      }
++      // Android：SELinux 禁 link()（硬链接），改用 rename() 原子发布；
++      // 失去 no-replace 语义（并发创建会覆盖），单进程 App 下由上层 expected 守卫兜底
++      await rename(tempPath, absolutePath)
+     } else if (platform === 'win32' && mode !== undefined) {
+       try {
+         await replaceFile(absolutePath, tempPath)
+diff --git a/packages/fs/fs-local/src/index.ts b/packages/fs/fs-local/src/index.ts
+index 661ef236b8..340bd83d30 100644
+--- a/packages/fs/fs-local/src/index.ts
++++ b/packages/fs/fs-local/src/index.ts
+@@ -6,6 +6,7 @@
+ 
+ import { Context } from '@deepseek-ai/cordis'
+ import { constants as bufferConstants } from 'node:buffer'
++import { realpath } from 'node:fs/promises'
+ import { isAbsolute, relative, resolve, sep } from 'node:path'
+ import { pathToFileURL } from 'node:url'
+ import z from '@deepseek-ai/schemastery'
+@@ -35,7 +36,7 @@ import {
+   streamWholeText,
+   writeFileAtomic,
+ } from './fsio.ts'
+-import type { FsIoInternals } from './fsio.ts'
++import type { FsIoInternals, LocalTarget } from './fsio.ts'
+ 
+ /** Configuration for the local filesystem backend. */
+ export interface Config {
+@@ -46,6 +47,18 @@ export interface Config {
+    * runtime's safe allocation/decode maximum. Defaults to 10 MiB.
+    */
+   diffBasisMaxBytes?: number
++  /**
++   * Sensitive paths the backend refuses to resolve, probe, or list. Each rule
++   * carries an absolute path: an exact match denies a single file, and any
++   * child of a rule denies a whole directory subtree.
++   */
++  deny?: DenyRule[]
++}
++
++/** One fs-local deny rule. */
++export interface DenyRule {
++  /** Absolute path of the sensitive file or directory subtree root. */
++  path: string
+ }
+ 
+ type ResolvedConfig = Required<Config>
+@@ -65,6 +78,7 @@ export class LocalFileSystem extends FileSystem {
+   static Config: z<Config> = z.object({
+     cwd: z.string().default(process.cwd()),
+     diffBasisMaxBytes: z.number().default(DEFAULT_DIFF_BASIS_MAX_BYTES),
++    deny: z.array(z.object({ path: z.string() })).default([]),
+   })
+ 
+   /** Validated config (schemastery applied the defaults before construction). */
+@@ -76,6 +90,9 @@ export class LocalFileSystem extends FileSystem {
+    * ordered (one wins, the rest see the new version and reject as stale). */
+   private locks = new Map<string, Promise<unknown>>()
+ 
++  /** Normalized absolute deny rules (trailing separators stripped). */
++  private readonly denyRules: string[]
++
+   constructor(ctx: Context, config: Config) {
+     super(ctx)
+     const resolved = config as ResolvedConfig
+@@ -85,6 +102,32 @@ export class LocalFileSystem extends FileSystem {
+       throw new Error(`fs-local: diffBasisMaxBytes must be a positive safe integer no greater than ${MAX_DIFF_BASIS_BYTES}`)
+     }
+     this.config = resolved
++    this.denyRules = resolved.deny.map(rule => resolve(rule.path))
++  }
++
++  /** A target is denied when it exactly matches a rule or lives under a rule's subtree. */
++  private isDenied(targetKey: string): boolean {
++    return this.denyRules.some(rule => targetKey === rule || targetKey.startsWith(rule + sep))
++  }
++
++  private denyError(displayPath: string): FsError {
++    return new FsError(`cannot access "${displayPath}": denied by fs-local deny rules`, 'FS_PERMISSION_DENIED')
++  }
++
++  /** Throw when a resolved target key matches a deny rule. */
++  private assertNotDenied(target: LocalTarget): void {
++    if (this.isDenied(target.targetKey)) throw this.denyError(target.displayPath)
++  }
++
++  /** Resolve best-effort realpath so a symlink alias to a denied file is also refused. */
++  private async assertNotDeniedPath(absolutePath: string): Promise<void> {
++    if (this.isDenied(absolutePath)) throw this.denyError(absolutePath)
++    try {
++      const real = await realpath(absolutePath)
++      if (real !== absolutePath && this.isDenied(real)) throw this.denyError(absolutePath)
++    } catch {
++      // Absent or a file-not-directory parent: the raw absolute path check above is authoritative.
++    }
+   }
+ 
+   /** Run `op` with exclusive access to `targetKey` (FIFO per key). */
+@@ -107,6 +150,7 @@ export class LocalFileSystem extends FileSystem {
+     if (opts?.signal?.aborted) throw new FsError('resolve aborted', 'FS_ABORTED')
+     const local = await resolveLocalTarget(opts?.cwd ?? this.config.cwd, path)
+     if (opts?.signal?.aborted) throw new FsError('resolve aborted', 'FS_ABORTED')
++    this.assertNotDenied(local)
+     return { targetKey: local.targetKey, displayPath: local.displayPath }
+   }
+ 
+@@ -134,7 +178,9 @@ export class LocalFileSystem extends FileSystem {
+   override async lstat(path: string, opts?: { cwd?: string }, signal?: AbortSignal): Promise<FsPathInfo | undefined> {
+     if (signal?.aborted) throw new FsError('lstat aborted', 'FS_ABORTED')
+     if (path.trim().length === 0) throw new FsError('file_path must be a non-empty string', 'FS_NOT_FOUND')
+-    const info = await probeNoFollow(resolve(opts?.cwd ?? this.config.cwd, path))
++    const absolute = resolve(opts?.cwd ?? this.config.cwd, path)
++    await this.assertNotDeniedPath(absolute)
++    const info = await probeNoFollow(absolute)
+     if (signal?.aborted) throw new FsError('lstat aborted', 'FS_ABORTED')
+     if (!info) return undefined
+     return { version: info.version, type: info.type, size: info.size }
+@@ -153,14 +199,17 @@ export class LocalFileSystem extends FileSystem {
+   }
+ 
+   override async listDir(target: FsTarget, signal?: AbortSignal): Promise<FsDirEntry[]> {
++    this.assertNotDenied(target)
+     const entries = await listDirectory({ displayPath: target.displayPath, targetKey: target.targetKey }, signal)
+-    return entries.map(entry => ({
+-      name: entry.name,
+-      type: entry.type,
+-      target: { targetKey: entry.target.targetKey, displayPath: entry.target.displayPath },
+-      ...(entry.version !== undefined ? { version: entry.version } : {}),
+-      ...(entry.size !== undefined ? { size: entry.size } : {}),
+-    }))
++    return entries
++      .filter(entry => !this.isDenied(entry.target.targetKey))
++      .map(entry => ({
++        name: entry.name,
++        type: entry.type,
++        target: { targetKey: entry.target.targetKey, displayPath: entry.target.displayPath },
++        ...(entry.version !== undefined ? { version: entry.version } : {}),
++        ...(entry.size !== undefined ? { size: entry.size } : {}),
++      }))
+   }
+ 
+   override async writeText(
+diff --git a/packages/llm/llm-pi-ai/README.md b/packages/llm/llm-pi-ai/README.md
+index 6120f8d982..c0062bc2fd 100644
+--- a/packages/llm/llm-pi-ai/README.md
++++ b/packages/llm/llm-pi-ai/README.md
+@@ -95,7 +95,7 @@ Request modalities resolve entry `input` → installed catalog entry → route `
+ 
+ `[text]` is the absence of a declaration rather than a guess at the endpoint, which is why the fallback here is conservative where the capacity fallbacks are merely plausible. Nothing interrogates a gateway for what it accepts, and the two wrong answers do not cost the same: the harness refuses an image before it is attached when a model's modalities omit one, so under-claiming costs a refusal naming the model, while over-claiming admits an image the provider then rejects mid-turn — after the message is durable, which leaves the session repeating a request that cannot succeed.
+ 
+-Resolution still fails loud, naming the offending route and model, when a route cannot be served at all: a route the catalog does not ship needs `api`, `baseURL`, and a non-empty `models` list of uniquely-identified models. That resolution runs inside the section schema, so an unserviceable profile is refused **where it is written** — `settings.mutate` answers `settings-rejected` naming the route and model — rather than being stored and then quietly disabling every route in the namespace. The settings seam keeps a namespace's last good value for an already-stored section that fails, so this cannot strand a deployment. `api` accepts the protocols in `supportedProtocols()` and is only needed when the catalog cannot supply one: a model absent from the catalog inherits the protocol its shipped siblings agree on, so adding a model to a single-protocol catalog route restates nothing.
++Resolution still fails loud, naming the offending route and model, when a route cannot be served at all: a route the catalog does not ship needs `api` and `baseURL` for its models, and a `models` entry's id must be unique. A route with no catalog defaults and an empty or absent `models` list is a configuration in progress rather than an error: it is stored **dormant** — kept on configuration surfaces but never registered for service — until a non-empty `models` list activates it. Every other unserviceable profile is refused **where it is written** — `settings.mutate` answers `settings-rejected` naming the route and model — rather than being stored and then quietly disabling every route in the namespace. The settings seam keeps a namespace's last good value for an already-stored section that fails, so this cannot strand a deployment. `api` accepts the protocols in `supportedProtocols()` and is only needed when the catalog cannot supply one: a model absent from the catalog inherits the protocol its shipped siblings agree on, so adding a model to a single-protocol catalog route restates nothing.
+ 
+ `baseURL` sets the endpoint of every model on the route, so private proxies such as `https://proxy.example.com:8443` remain supported; a catalog route that omits it keeps each catalog model's own endpoint. Naming `api` on a catalog route repoints the whole route at that protocol, which is how a deployment moves a provider between, say, Responses and Chat Completions.
+ 
+@@ -105,7 +105,7 @@ Resolution still fails loud, naming the offending route and model, when a route
+ 
+ The adapter reads its profiles through a thunk **once per operation** instead of freezing them at construction. The plugin registers the `llm-pi-ai` namespace on the optional `ctx.settings` seam with this same `Config` schema and its `cordis.yml` entry as the composition `base`, and because `providers` is a dict, the base and the user's `llm-pi-ai:` settings section merge **per provider**: a user can add a route, override one field of a composition route, or point a route at another proxy, all effective on the next request with no restart. Without a mounted settings service the entry config alone drives the adapter, unchanged.
+ 
+-Credentials resolve per stream call through `apiKeyEnv` and the optional `ctx.credentials` seam; without that seam, the adapter reads exactly the referenced environment variable. A profile naming no credential at all — and only that case — defers to pi-ai's ambient discovery. Every resolved key is trimmed and format-checked before use, so a value no HTTP header can carry is refused instead of surfacing as an opaque `fetch` `TypeError`; the refusal throws `LlmError('INVALID_CREDENTIAL')` naming the failing route and credential reference but never any part of the key. The route set and each route's captured retry policy are the registration-level facts: when either changes, the plugin replaces its registration atomically (same adapter instance, candidate set validated first), so a route another adapter already owns leaves the previous routes serving and reverting to a working configuration re-applies. Provider key order never counts as a change. A section this adapter could not serve is refused where it is written — the registered `validate` resolves the whole profile set, so `ctx.settings.mutate` rejects with the resolver's own error (the wire surface reports it as `settings-rejected`) and nothing is stored. A stored section that becomes unserviceable some other way — an external edit of `settings.yaml` — keeps the namespace's last good value at the settings seam and warns. The entry config itself still fails plugin load, and a route the llm registry refuses (one another adapter family already owns) is logged while the previously registered routes keep serving.
++Credentials resolve per stream call through `apiKeyEnv` and the optional `ctx.credentials` seam; without that seam, the adapter reads exactly the referenced environment variable. A profile naming no credential at all — and only that case — defers to pi-ai's ambient discovery. Every resolved key is trimmed and format-checked before use, so a value no HTTP header can carry is refused instead of surfacing as an opaque `fetch` `TypeError`; the refusal throws `LlmError('INVALID_CREDENTIAL')` naming the failing route and credential reference but never any part of the key. The route set and each route's captured retry policy are the registration-level facts: when either changes, the plugin replaces its registration atomically (same adapter instance, candidate set validated first), so a route another adapter already owns leaves the previous routes serving and reverting to a working configuration re-applies. Provider key order never counts as a change. A section this adapter could not serve is refused where it is written — the registered `validate` resolves the whole profile set, so `ctx.settings.mutate` rejects with the resolver's own error (the wire surface reports it as `settings-rejected`) and nothing is stored. A route whose profile resolves no models (empty `models` beside no catalog defaults) is the one exception: it is accepted and stored dormant, so a deployment can save credentials before the model list exists. A stored section that becomes unserviceable some other way — an external edit of `settings.yaml` — keeps the namespace's last good value at the settings seam and warns. The entry config itself still fails plugin load, and a route the llm registry refuses (one another adapter family already owns) is logged while the previously registered routes keep serving.
+ 
+ The adapter exposes each configured route's models through `ctx.llm.listModels(provider)`. This is provider-neutral selector metadata read from the same pi-ai `Models` collection the request path uses, so discovery does not create a second model registry. `ctx.llm.resolveModelInfo(provider, model)` performs that exact descriptor lookup once and returns its identity, context window, configured output cap, and selectable thinking levels, keeping authoritative metadata on the route-owning adapter rather than its consumers. A model's **configured** `maxTokens` becomes the seam's `defaultMaxTokens`, so a request that names no output cap carries the one the deployment chose; a value inherited from the installed catalog is the model's output *capability* and never becomes a request default on its own.
+ 
+@@ -123,7 +123,7 @@ The plugin offers `ctx.llm.registerModelDiscovery('llm-pi-ai', …)`, which answ
+ 
+ A request naming a route the **installed catalog ships is answered from that catalog**, with no network call: pi-ai's registry is the authoritative list for its own providers, and it carries the context windows and output caps a listing endpoint would not disclose. Such a route needs no `baseURL` at all. Only a route the catalog does not describe — a gateway, a self-hosted server — is interrogated over the wire, and one that names no endpoint is told to set one or enter its models by hand.
+ 
+-A draft carries the credential the user typed, if any; a route that already stored one shows a configuration surface only a redacted descriptor, so the interrogation resolves that route's `apiKeyEnv` rather than going out unauthenticated and reporting the endpoint's 401 as a wrong key. A typed key wins, being the one under test. Resolution happens only on the path that reaches the network, so a catalog route answers without touching credentials at all. A supplied or stored probe key is trimmed and format-checked the same way, so a value no HTTP header can carry is refused immediately as `LlmError('INVALID_CREDENTIAL')` instead of reaching `fetch`, where it would surface as an opaque `ByteString` failure indistinguishable from an unreachable endpoint.
++A draft carries the credential the user typed, if any; a route that already stored one shows a configuration surface only a redacted descriptor, so the interrogation resolves that route's `apiKeyEnv` rather than going out unauthenticated and reporting the endpoint's 401 as a wrong key. A typed key wins, being the one under test. Resolution happens only on the path that reaches the network, so a catalog route answers without touching credentials at all. A configured reference that resolves to nothing is treated as absent for this action rather than failing the probe: the endpoint is asked unauthenticated, so a provider that publishes its model list can be read before a key is ever stored. A supplied or stored probe key is trimmed and format-checked the same way, so a value no HTTP header can carry is refused immediately as `LlmError('INVALID_CREDENTIAL')` instead of reaching `fetch`, where it would surface as an opaque `ByteString` failure indistinguishable from an unreachable endpoint.
+ 
+ Interrogation reads `openai-completions` and `openai-responses`, whose `GET /models` shape with bearer auth is the one a gateway, a self-hosted server, and the official endpoints all agree on. Azure is excluded despite its OpenAI lineage — it authenticates with an `api-key` header and requires an `api-version` query — and Codex uses OAuth; every other protocol answers `DISCOVERY_UNSUPPORTED` so the surface falls back to hand-entry instead of an authentication failure being reported as a provider with no models. The `baseURL` is treated as a prefix rather than a URL to resolve against, so a deployment path such as `https://gateway.example/openai/v1` keeps its segments.
+ 
+diff --git a/packages/llm/llm-pi-ai/README.zh.md b/packages/llm/llm-pi-ai/README.zh.md
+index 4b47976c6c..1f44853248 100644
+--- a/packages/llm/llm-pi-ai/README.zh.md
++++ b/packages/llm/llm-pi-ai/README.zh.md
+@@ -124,7 +124,7 @@ profile 的 `models` 列表是*替换*该路由已安装 catalog，而不是扩
+ 
+ 点名了**已安装 catalog 所提供路由**的请求，直接由该 catalog 作答，完全不联网：pi-ai 的注册表才是它自家提供方的权威列表，且携带列表端点不会公布的上下文窗口与输出上限。这类路由根本不需要 `baseURL`。只有 catalog 未描述的路由——网关、自建服务——才会经协议层询问；若它也没给端点，则会被告知去设置一个或手工填写模型。
+ 
+-草稿携带的是用户当下键入的凭据（如果有）；已经存好凭据的路由，在配置界面上只呈现一个脱敏描述符，因此询问会解析该路由的 `apiKeyEnv`，而不是不带认证发出去、再把端点的 401 报成密钥不对。键入的密钥优先，因为那正是被测试的那一把。解析只发生在真正要联网的路径上，因此 catalog 路由作答时完全不会触碰凭据。用户提供或已存储的探测密钥也会经过同样的去除空白与格式校验：HTTP 标头无法承载的值会被立即以 `LlmError('INVALID_CREDENTIAL')` 拒绝，而不会传到 `fetch`——否则会呈现为一个和端点不可达难以区分的、语义不明的 `ByteString` 失败。
++草稿携带的是用户当下键入的凭据（如果有）；已经存好凭据的路由，在配置界面上只呈现一个脱敏描述符，因此询问会解析该路由的 `apiKeyEnv`，而不是不带认证发出去、再把端点的 401 报成密钥不对。键入的密钥优先，因为那正是被测试的那一把。解析只发生在真正要联网的路径上，因此 catalog 路由作答时完全不会触碰凭据。已配置但解析不到任何值的凭据引用，在这次「获取模型列表」动作里按「没有已存凭据」处理：端点会以未认证方式被询问，让公开模型列表的提供方在还没存密钥时也能被读取。用户提供或已存储的探测密钥也会经过同样的去除空白与格式校验：HTTP 标头无法承载的值会被立即以 `LlmError('INVALID_CREDENTIAL')` 拒绝，而不会传到 `fetch`——否则会呈现为一个和端点不可达难以区分的、语义不明的 `ByteString` 失败。
+ 
+ 询问只读 `openai-completions` 与 `openai-responses`，它们「`GET /models` + bearer 认证」的形状是网关、自建服务与官方端点三方一致认可的那一种。Azure 尽管出身 OpenAI 也被排除——它用 `api-key` 标头认证并要求 `api-version` 查询参数——Codex 则走 OAuth；其余协议一律以 `DISCOVERY_UNSUPPORTED` 回答，让界面回退到手工填写，而不是把认证失败报成一个没有模型的提供方。`baseURL` 按前缀而非待解析 URL 处理，因此 `https://gateway.example/openai/v1` 这类部署路径会保留其路径段。
+ 
+diff --git a/packages/llm/llm-pi-ai/src/catalog.ts b/packages/llm/llm-pi-ai/src/catalog.ts
+index 7a4ff7e8a2..193444571e 100644
+--- a/packages/llm/llm-pi-ai/src/catalog.ts
++++ b/packages/llm/llm-pi-ai/src/catalog.ts
+@@ -480,10 +480,12 @@ export function resolveRouteModels(request: RouteCatalogRequest): RouteCatalog {
+   const entries: readonly PiAiModelProfile[] = configured.length > 0
+     ? configured
+     : [...defaults.values()].map(model => ({ id: model.id, ...overrides[model.id] }))
+-  if (entries.length === 0) {
+-    invalid(provider, 'resolves no models; the installed catalog does not describe this route, so its models'
+-      + ' must be listed in configuration')
+-  }
++  // A route with neither catalog defaults nor configured entries is a
++  // configuration in progress, not an error: resolveProfiles stores it
++  // dormant (the adapter registers nothing for it), so a deployment can
++  // save provider credentials before its model list is filled in. A route
++  // that declares compat switches beside no models is still refused by the
++  // check below, which an empty list satisfies only vacuously.
+   const routeApi = sharedCatalogApi(defaults)
+   const routeCompatDefined = request.compat?.thinkingFormat !== undefined
+     || request.compat?.supportsReasoningEffort !== undefined
+diff --git a/packages/llm/llm-pi-ai/src/config.ts b/packages/llm/llm-pi-ai/src/config.ts
+index 4e8e032df0..976a2cc007 100644
+--- a/packages/llm/llm-pi-ai/src/config.ts
++++ b/packages/llm/llm-pi-ai/src/config.ts
+@@ -347,6 +347,11 @@ export function resolveProfiles(
+       defaultContextWindow: source.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW,
+       defaultMaxTokens: source.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,
+     })
++    // A route that resolves no models (no catalog defaults, and an empty or
++    // absent 'models') is stored but dormant: it keeps its place in settings
++    // and on configuration surfaces, while the adapter registers nothing for
++    // it and requests to it are refused. Filling in models later activates it.
++    if (catalog.models.length === 0) continue
+     const { apiKeyEnv, retryPolicy, models: _models, displayName: _displayName, ...rest } = source
+     resolved.set(provider, {
+       ...rest,
+diff --git a/packages/llm/llm-pi-ai/src/index.ts b/packages/llm/llm-pi-ai/src/index.ts
+index 2e550771fc..03c387b33a 100644
+--- a/packages/llm/llm-pi-ai/src/index.ts
++++ b/packages/llm/llm-pi-ai/src/index.ts
+@@ -229,13 +229,20 @@ export function apply(ctx: Context, config: Config): void {
+    * draft carries none. A route being declared for the first time names no
+    * profile yet, and a profile that names no credential defers to pi-ai's own
+    * discovery, so both answer `undefined` and the endpoint is asked
+-   * unauthenticated — the same posture a request to that route would take.
++   * unauthenticated. A route whose stored credential is missing is treated the
++   * same way: discovery may legitimately be public, so only a malformed stored
++   * credential is rejected.
+    */
+   const storedApiKey = async (provider: string | undefined): Promise<string | undefined> => {
+     if (provider === undefined) return undefined
+     const profile = profiles().get(provider)
+     if (profile === undefined) return undefined
+-    return resolveApiKey(provider, profile)
++    try {
++      return await resolveApiKey(provider, profile)
++    } catch (error) {
++      if (error instanceof LlmError && error.code === 'MISSING_CREDENTIAL') return undefined
++      throw error
++    }
+   }
+   // Interrogating an endpoint is a configuration-time action over a draft, so
+   // it is offered for the whole namespace rather than per route: the provider
+diff --git a/packages/llm/llm-pi-ai/tests/adapter.spec.ts b/packages/llm/llm-pi-ai/tests/adapter.spec.ts
+index 51ce347e9a..ff095182ab 100644
+--- a/packages/llm/llm-pi-ai/tests/adapter.spec.ts
++++ b/packages/llm/llm-pi-ai/tests/adapter.spec.ts
+@@ -701,8 +701,9 @@ describe('provider profile lifecycle', () => {
+     expect(resolveProfiles(undefined).size).toBe(0)
+     expect(() => resolveProfiles({ '': {} })).toThrow(/non-empty/)
+     // A route the installed catalog does not ship is allowed, but it has no
+-    // defaults to fall back on: it must describe its own models.
+-    expect(() => resolveProfiles({ 'not-real': {} })).toThrow(/resolves no models/)
++    // defaults to fall back on: without its own models it stays dormant —
++    // stored in settings but never registered for service.
++    expect(resolveProfiles({ 'not-real': {} }).has('not-real')).toBe(false)
+     // The pre-release array shape and its per-profile provider field fail
+     // loud with migration directions instead of half-working.
+     expect(() => resolveProfiles([{ provider: 'openai' }] as never)).toThrow(/dict keyed by provider/)
+diff --git a/packages/llm/llm-pi-ai/tests/discovery.spec.ts b/packages/llm/llm-pi-ai/tests/discovery.spec.ts
+index 18793565d7..6d3fe71914 100644
+--- a/packages/llm/llm-pi-ai/tests/discovery.spec.ts
++++ b/packages/llm/llm-pi-ai/tests/discovery.spec.ts
+@@ -178,6 +178,27 @@ describe('draft-provider model discovery', () => {
+       .toEqual(['Bearer stored-key', 'Bearer typed', undefined])
+   })
+ 
++  it('probes unauthenticated when a configured route has no stored credential', async () => {
++    const server = await listingServer({ body: JSON.stringify({ data: [{ id: 'm' }] }) })
++    const ctx = new Context()
++    await ctx.plugin(LlmRuntime)
++    Reflect.deleteProperty(process.env, 'ABSENT_FOR_DISCOVERY')
++    await ctx.plugin(LlmPiAi, {
++      providers: {
++        'acme-gateway': {
++          apiKeyEnv: 'ABSENT_FOR_DISCOVERY',
++          api: 'openai-completions',
++          baseURL: server.url,
++          models: [{ id: 'acme-large' }],
++        },
++      },
++    })
++
++    await ctx.llm.discoverModels('llm-pi-ai', { provider: 'acme-gateway', baseURL: server.url })
++
++    expect(server.headers[0]?.authorization).toBeUndefined()
++  })
++
+   it('leaves a catalog route\'s credential unresolved, having never reached the network', async () => {
+     // The catalog answers before any endpoint is asked, so a route whose
+     // profile names a credential that is not set must still answer rather than
+diff --git a/packages/llm/llm-pi-ai/tests/dynamic-config.spec.ts b/packages/llm/llm-pi-ai/tests/dynamic-config.spec.ts
+index 1019354156..55120715fd 100644
+--- a/packages/llm/llm-pi-ai/tests/dynamic-config.spec.ts
++++ b/packages/llm/llm-pi-ai/tests/dynamic-config.spec.ts
+@@ -156,16 +156,16 @@ describe('request-level dynamic profiles', () => {
+     expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['openai'])
+   })
+ 
+-  it('refuses a settings write this adapter could not serve, leaving its routes alone', async () => {
++  it('accepts a settings write for a dormant route (no models) without registering it', async () => {
+     const dir = await home()
+     const ctx = await boot(dir, { providers: { openai: {} } })
+ 
+     // Shape-valid but unserviceable: a route the catalog does not ship and
+-    // that lists no models of its own. The section schema resolves the whole
+-    // profile set, so this is refused where it is written rather than stored
+-    // and then quietly disabling every route in the namespace.
+-    await expect(ctx.settings.update(NS, { providers: { 'not-a-real-provider': {} } }))
+-      .rejects.toThrow(/resolves no models/)
++    // that lists no models of its own. The section resolves the whole profile
++    // set, so the route is stored dormant — never registered for service —
++    // rather than refused, letting a deployment save credentials before its
++    // model list is filled in.
++    await ctx.settings.update(NS, { providers: { 'not-a-real-provider': {} } })
+     expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['openai'])
+   })
+ 
+diff --git a/packages/shell/bash-local/src/index.ts b/packages/shell/bash-local/src/index.ts
+index 6c37c5b794..719ae8a0a7 100644
+--- a/packages/shell/bash-local/src/index.ts
++++ b/packages/shell/bash-local/src/index.ts
+@@ -193,7 +193,9 @@ export class LocalBashExecutor extends ShellExecutor {
+       // One explicit env map for the seam, layered so the trusted dshEnv
+       // snapshot beats both the caller's env and the terminal overrides; the
+       // subprocess service merges the whole map after its ambient scrub.
+-      env: { ...ENV_OVERRIDES, ...spec.env, ...spec.dshEnv },
++      // 喵仓：显式 tombstone 兜底过滤 DeepSeek key，即使上层 env/scrub
++      // 行为变化，bash 子进程也看不到明文 key（Node 跳过 undefined 条目）。
++      env: { ...ENV_OVERRIDES, ...spec.env, ...spec.dshEnv, DEEPSEEK_API_KEY: undefined },
+     }
+   }
+ 
+@@ -208,8 +210,16 @@ export class LocalBashExecutor extends ShellExecutor {
+     return { stdout, stderr }
+   }
+ 
++  /** Android（untrusted_app 域）不能直接 exec 私有 ELF bash，经 linker64（系统 ELF）加载 bash.bin */
++  private bashArgv(command: string): readonly string[] {
++    const bashBin = process.env.DSH_BASH_BIN
++    const linker64 = process.env.DSH_LINKER64 || '/system/bin/linker64'
++    if (bashBin) return [linker64, bashBin, '--norc', '--noprofile', '-c', command]
++    return ['bash', '-c', command]
++  }
++
+   async run(spec: ShellExecSpec): Promise<ShellRunResult> {
+-    return this.runArgv(spec, ['bash', '-c', spec.command])
++    return this.runArgv(spec, this.bashArgv(spec.command))
+   }
+ 
+   /**
+@@ -240,7 +250,7 @@ export class LocalBashExecutor extends ShellExecutor {
+   }
+ 
+   start(spec: ShellExecSpec): ShellProcess {
+-    return this.startArgv(spec, ['bash', '-c', spec.command])
++    return this.startArgv(spec, this.bashArgv(spec.command))
+   }
+ 
+   /**
+diff --git a/packages/web/web-search-tavily/README.md b/packages/web/web-search-tavily/README.md
+new file mode 100755
+index 0000000000..da0c016997
+--- /dev/null
++++ b/packages/web/web-search-tavily/README.md
+@@ -0,0 +1,51 @@
++# @deepseek-ai/dsh-web-search-tavily
++
++English | [中文](README.zh.md)
++
++A [Tavily](https://tavily.com)-backed `WebSearchProvider` for the harness [web capability seam](../web/README.md) (`ctx.web`). It calls Tavily's `POST /search` endpoint and maps the generated `answer` plus the flat `results[]` into the seam's normalized `WebSearchResult`.
++
++This is an **implementation** package: it registers a provider into `ctx.web`, it does not own the `ctx.web` key and it does not register a model-facing tool (that is `@deepseek-ai/dsh-tool-web`). Like `@deepseek-ai/dsh-llm-deepseek`, it is a function/namespace plugin (`inject: ['web']`) that registers its backend, not a default-export service.
++
++## Config
++
++| Key | Default | Meaning |
++|---|---|---|
++| `apiKey` | `$TAVILY_API_KEY` | Tavily API key. Empty/absent makes the provider unavailable. |
++| `apiKeyEnv` | `TAVILY_API_KEY` | Environment variable naming the key when `apiKey` is absent. |
++| `baseURL` | `https://api.tavily.com` | Endpoint base; `/search` is appended. An unparseable value makes the provider unavailable. |
++| `maxResults` | (unset) | Default result count when a request carries no `maxResults`. Unset sends no default. Must be a positive integer. |
++| `searchDepth` | `basic` | Retrieval depth sent as Tavily's `search_depth`: `basic` (fast, lower cost) or `advanced` (deeper crawl). |
++
++```yaml
++- id: web-search-tavily
++  name: '@deepseek-ai/dsh-web-search-tavily'
++  config:
++    apiKeyEnv: TAVILY_API_KEY
++```
++
++## Mapping
++
++Every request sends `include_answer: true`, so Tavily generates an `answer` in addition to the flat `results[]`. The non-blank `answer` maps to `content`; each result maps to a `WebSearchSource`: `url` ← `url`, `title` ← `title`, `snippet` ← the non-blank `content` excerpt, `publishedAt` ← `publishedDate`. Absent, null, or empty optional fields are omitted rather than emitted, and a result without an excerpt still returns as a URL-only source. A request's `maxResults` wins over the configured default and is sent as Tavily's `max_results` for a cost/latency optimization; the final bound is enforced by the seam. Provider failures (HTTP errors, network failure, unparseable or wrong-shape bodies) surface as `WebError` `WEB_PROVIDER_ERROR`; an aborted request surfaces as `WEB_ABORTED`. HTTP redirects are rejected before the `Location` target is contacted and surface as `WEB_PROVIDER_ERROR`.
++
++## Model Experience
++
++### Web search tool results, indirectly
++
++#### What the model sees
++
++Through [`dsh-tool-web`](../tool-web/README.md), the conversation model sees the `maxResults`-bounded URLs, titles, excerpts, and publication dates plus the generated answer as `content`, or this provider's exact failures — `Tavily search aborted`, `Tavily search request failed: <error>`, the provider message on an HTTP error, and `Tavily returned an unprocessable response body: <error>` — under the consumer's error wrapper. Provider-private fields (scores, raw content) stay outside context.
++
++#### Token effect
++
++Zero direct conversation tokens from registration. Result tokens scale with the returned sources, answer, and snippets, then the seam enforces the requested source bound; the provider account is charged Tavily's per-search rate.
++
++#### KV Cache effect
++
++Append-only; newly visible content follows the reusable request prefix and does not invalidate existing KV-cache entries.
++
++## Known Limitations and Deferred Work
++
++- **`include_answer` is always on** — the generated answer costs Tavily-side latency and tokens on every search even when a consumer ignores `content`; there is no per-request answer toggle on the seam.
++- **Only `maxResults`/`searchDepth` are exposed** — Tavily's other controls (topic, days, include/exclude domains, raw content, answer length) wait on provider-neutral Service Definition fields ([seam Agent Note](../../../.agents/notes/implemented/architecture/2026-06-24-web-capability-seam.md)).
++- **Abort classification is error-shape-based** — only a `DOMException` named `AbortError` maps to `WEB_ABORTED`; an abort carrying a custom reason (e.g. `dsh-timeout`'s `TimeoutReason`) surfaces as `WEB_PROVIDER_ERROR`.
++- **Snippet and answer lengths are Tavily's own** — excerpts are Tavily's extracted text, not provider-neutral fields; a long excerpt is bounded only by the result-truncation budget of the seam.
+diff --git a/packages/web/web-search-tavily/README.zh.md b/packages/web/web-search-tavily/README.zh.md
+new file mode 100755
+index 0000000000..90b18ce3fb
+--- /dev/null
++++ b/packages/web/web-search-tavily/README.zh.md
+@@ -0,0 +1,51 @@
++# @deepseek-ai/dsh-web-search-tavily
++
++[English](README.md) | 中文
++
++由 [Tavily](https://tavily.com) 支持的 `WebSearchProvider`，用于 harness [web 能力 seam](../web/README.md)（`ctx.web`）。它调用 Tavily 的 `POST /search` 端点，把生成的 `answer` 与扁平 `results[]` 映射为 seam 规范化的 `WebSearchResult`。
++
++这是一个**实现**包：它向 `ctx.web` 注册提供方，不拥有 `ctx.web` 键，也不注册面向模型的工具（后者属于 `@deepseek-ai/dsh-tool-web`）。与 `@deepseek-ai/dsh-llm-deepseek` 一样，它是函数／命名空间插件（`inject: ['web']`），负责注册后端，而非默认导出服务。
++
++## 配置
++
++| 配置键 | 默认值 | 含义 |
++|---|---|---|
++| `apiKey` | `$TAVILY_API_KEY` | Tavily API 密钥。为空或缺失时提供方不可用。 |
++| `apiKeyEnv` | `TAVILY_API_KEY` | 未设置 `apiKey` 时命名密钥的环境变量。 |
++| `baseURL` | `https://api.tavily.com` | 端点基址；追加 `/search`。无法解析时提供方不可用。 |
++| `maxResults` | （未设置） | 请求不含 `maxResults` 时使用的默认结果数。未设置时不发送默认值。必须是正整数。 |
++| `searchDepth` | `basic` | 以 Tavily `search_depth` 发送的检索深度：`basic`（快速、成本较低）或 `advanced`（更深入的抓取）。 |
++
++```yaml
++- id: web-search-tavily
++  name: '@deepseek-ai/dsh-web-search-tavily'
++  config:
++    apiKeyEnv: TAVILY_API_KEY
++```
++
++## 映射
++
++每个请求都发送 `include_answer: true`，因此 Tavily 除了扁平 `results[]` 之外还会生成 `answer`。非空白的 `answer` 映射为 `content`；每项结果映射为 `WebSearchSource`：`url` ← `url`、`title` ← `title`、`snippet` ← 非空白的 `content` 摘录、`publishedAt` ← `publishedDate`。缺失、为 null 或为空的可选字段会被省略而不是输出；没有摘录的结果仍以仅含 URL 的源返回。请求的 `maxResults` 优先于已配置的默认值，并作为 Tavily `max_results` 发送，以优化成本和延迟；最终上限由 seam 强制执行。提供方失败（HTTP 错误、网络失败、响应体无法解析或结构不符）以 `WebError` `WEB_PROVIDER_ERROR` 呈现；中止请求以 `WEB_ABORTED` 呈现。HTTP 重定向会在访问 `Location` 指向的目标之前被拒绝，并以 `WEB_PROVIDER_ERROR` 呈现。
++
++## 模型体验
++
++### Web 搜索工具结果（间接）
++
++#### 模型看到什么
++
++通过 [`dsh-tool-web`](../tool-web/README.md)，对话模型看到经 `maxResults` 限制的 URL、标题、摘录与发布日期，以及作为 `content` 的生成答案；或看到此提供方的确切失败——`Tavily search aborted`、`Tavily search request failed: <error>`、HTTP 错误时的提供方消息、`Tavily returned an unprocessable response body: <error>`——置于消费方的错误包装层内。提供方私有字段（score、原始内容）不进入上下文。
++
++#### Token 影响
++
++注册本身不产生任何对话 token。结果 token 随返回的源、答案与摘录规模增长，随后由 seam 强制执行请求的源上限；提供方账户按 Tavily 的每次搜索费率计费。
++
++#### KV Cache 影响
++
++仅追加；新可见内容跟随可复用的请求前缀，不会使既有 KV-cache 条目失效。
++
++## 已知限制与暂缓事项
++
++- **`include_answer` 始终开启**：即使消费方忽略 `content`，每次搜索仍会在 Tavily 侧产生生成答案的延迟与 token 成本；seam 上没有按请求开关答案的字段。
++- **只公开 `maxResults`／`searchDepth`**：Tavily 的其他控制项（topic、days、include/exclude domains、原始内容、答案长度）等待提供方无关的 Service Definition 字段（见 [seam Agent Note](../../../.agents/notes/implemented/architecture/2026-06-24-web-capability-seam.md)）。
++- **按错误形状分类中止**：只有 `DOMException` 且名为 `AbortError` 时才映射为 `WEB_ABORTED`；携带自定义原因的中止（例如 `dsh-timeout` 的 `TimeoutReason`）会呈现为 `WEB_PROVIDER_ERROR`。
++- **摘录与答案长度由 Tavily 决定**：摘录是 Tavily 提取的文本，不是提供方无关的字段；很长的摘录只受 seam 结果截断预算约束。
+diff --git a/packages/web/web-search-tavily/package.json b/packages/web/web-search-tavily/package.json
+new file mode 100755
+index 0000000000..e08d31ebad
+--- /dev/null
++++ b/packages/web/web-search-tavily/package.json
+@@ -0,0 +1,49 @@
++{
++  "name": "@deepseek-ai/dsh-web-search-tavily",
++  "description": "Tavily-backed search provider for the DeepSeek Harness web capability seam (ctx.web)",
++  "version": "0.1.0-rc.5",
++  "publishConfig": {
++    "access": "public"
++  },
++  "repository": {
++    "type": "git",
++    "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
++    "directory": "packages/web/web-search-tavily"
++  },
++  "type": "module",
++  "main": "lib/index.js",
++  "types": "lib/types/index.d.ts",
++  "exports": {
++    ".": {
++      "types": "./lib/types/index.d.ts",
++      "default": "./lib/index.js"
++    },
++    "./invariant": {
++      "types": "./lib/types/invariant.d.ts",
++      "default": "./lib/invariant.js"
++    },
++    "./src/*": "./src/*",
++    "./package.json": "./package.json"
++  },
++  "files": [
++    "lib/index.js",
++    "lib/invariant.js",
++    "lib/types/**/*.d.ts"
++  ],
++  "license": "MIT",
++  "peerDependencies": {
++    "@deepseek-ai/dsh-launch-environment": "workspace:^",
++    "@deepseek-ai/dsh-invariants": "workspace:^",
++    "@deepseek-ai/dsh-web": "workspace:^",
++    "@deepseek-ai/cordis": "workspace:^"
++  },
++  "dependencies": {
++    "@deepseek-ai/schemastery": "workspace:^"
++  },
++  "devDependencies": {
++    "@deepseek-ai/dsh-launch-environment": "workspace:^",
++    "@deepseek-ai/dsh-invariants": "workspace:^",
++    "@deepseek-ai/dsh-web": "workspace:^",
++    "@deepseek-ai/cordis": "workspace:^"
++  }
++}
+diff --git a/packages/web/web-search-tavily/src/index.ts b/packages/web/web-search-tavily/src/index.ts
+new file mode 100755
+index 0000000000..f776958576
+--- /dev/null
++++ b/packages/web/web-search-tavily/src/index.ts
+@@ -0,0 +1,71 @@
++/**
++ * `@deepseek-ai/dsh-web-search-tavily`: registers a Tavily-backed
++ * `WebSearchProvider` with `ctx.web`. A function/namespace plugin (NOT a
++ * default-export service): a search provider does not own the `ctx.web` key —
++ * it registers INTO the seam's provider registry, exactly as
++ * `@deepseek-ai/dsh-llm-deepseek` registers an adapter into `ctx.llm`. The key
++ * is owned by `@deepseek-ai/dsh-web`.
++ *
++ * @module @deepseek-ai/dsh-web-search-tavily
++ */
++
++import type { Context } from '@deepseek-ai/cordis'
++import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
++import z from '@deepseek-ai/schemastery'
++import type {} from '@deepseek-ai/dsh-web'
++import {
++  TavilySearchProvider,
++  TAVILY_DEFAULT_BASE_URL,
++  TAVILY_DEFAULT_SEARCH_DEPTH,
++} from './provider.ts'
++
++export {
++  TavilySearchProvider,
++  TAVILY_DEFAULT_BASE_URL,
++  TAVILY_DEFAULT_SEARCH_DEPTH,
++  TAVILY_PROVIDER_ID,
++} from './provider.ts'
++export type { TavilySearchProviderOptions } from './provider.ts'
++
++/** Cordis plugin name used by loader diagnostics. */
++export const name = 'web-search-tavily'
++
++/** The web seam this provider registers into. */
++export const inject = ['web']
++
++/** Environment variable naming this provider's key when config names none. */
++const DEFAULT_API_KEY_ENV = 'TAVILY_API_KEY'
++
++/** Plugin config (all optional — `apply` fills env-var and constant defaults). */
++export interface Config {
++  /** Tavily API key. Falls back to `$TAVILY_API_KEY`. Empty → provider unavailable. */
++  apiKey?: string
++  /** Environment variable naming the key; default `TAVILY_API_KEY`. */
++  apiKeyEnv?: string
++  /** Endpoint base; `/search` is appended. Defaults to the public API. */
++  baseURL?: string
++  /** Default result count when a request carries no `maxResults`. Omitted = none. */
++  maxResults?: number
++  /** Retrieval depth sent as Tavily's `search_depth`. Defaults to `basic`. */
++  searchDepth?: 'basic' | 'advanced'
++}
++
++export const Config: z<Config> = z.object({
++  apiKey: z.string().role('secret'),
++  apiKeyEnv: z.string(),
++  baseURL: z.string(),
++  maxResults: z.number().step(1).min(1),
++  searchDepth: z.union(['basic', 'advanced'] as const),
++})
++
++/** Register the Tavily search provider with `ctx.web`. */
++export function apply(ctx: Context, config: Config): void {
++  ctx.web.registerSearchProvider(new TavilySearchProvider({
++    // Every environment layer may name this key: the product trusts the
++    // project it is launched in, and the managed store is not involved here.
++    apiKey: config.apiKey ?? launchEnvironmentOf(ctx).get(config.apiKeyEnv ?? DEFAULT_API_KEY_ENV)?.value ?? '',
++    baseURL: config.baseURL ?? TAVILY_DEFAULT_BASE_URL,
++    searchDepth: config.searchDepth ?? TAVILY_DEFAULT_SEARCH_DEPTH,
++    ...config.maxResults !== undefined ? { maxResults: config.maxResults } : {},
++  }))
++}
+diff --git a/packages/web/web-search-tavily/src/invariant.ts b/packages/web/web-search-tavily/src/invariant.ts
+new file mode 100755
+index 0000000000..3fe7afa28f
+--- /dev/null
++++ b/packages/web/web-search-tavily/src/invariant.ts
+@@ -0,0 +1,30 @@
++/**
++ * Package-owned invariant companion for `@deepseek-ai/dsh-web-search-tavily`.
++ * @module @deepseek-ai/dsh-web-search-tavily/invariant
++ */
++
++/* jscpd:ignore-start */
++import type { Context } from '@deepseek-ai/cordis'
++import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
++
++const PACKAGE_NAME = '@deepseek-ai/dsh-web-search-tavily'
++
++/** Cordis companion plugin name. */
++export const name = 'web-search-tavily-invariant'
++/** Service required before the companion can reserve package ownership. */
++export const inject = ['invariants']
++
++/**
++ * No runtime invariant: this package exposes no independent event sequence or mutable data relation
++ * beyond contracts enforced at its owning seam.
++ */
++const install: InvariantInstaller = () => {}
++
++/**
++ * Register this package's invariant companion.
++ * @param ctx - Cordis context carrying the invariant service.
++ * @returns the installed registration's disposer after setup succeeds.
++ */
++export const apply = (ctx: Context): Promise<() => void> =>
++  Promise.resolve(ctx.invariants.register(PACKAGE_NAME, install))
++/* jscpd:ignore-end */
+diff --git a/packages/web/web-search-tavily/src/provider.ts b/packages/web/web-search-tavily/src/provider.ts
+new file mode 100755
+index 0000000000..d1ddcde530
+--- /dev/null
++++ b/packages/web/web-search-tavily/src/provider.ts
+@@ -0,0 +1,180 @@
++/**
++ * `TavilySearchProvider`: a `WebSearchProvider` backed by the Tavily search API
++ * (`POST /search`). It always requests Tavily's generated `answer` and maps it
++ * to `content`, maps each result's excerpt to `snippet` and its publication
++ * date to `publishedAt`, and omits absent optional fields rather than emitting
++ * them. Every entry is kept: a result without an excerpt returns with only a
++ * URL and title.
++ * @module @deepseek-ai/dsh-web-search-tavily/provider
++ */
++
++import { WebError } from '@deepseek-ai/dsh-web'
++import type {
++  WebSearchProvider,
++  WebSearchRequest,
++  WebSearchResult,
++  WebSearchSource,
++} from '@deepseek-ai/dsh-web'
++import type { TavilyError, TavilyResult, TavilySearchResponse } from './types.ts'
++
++/** Stable id this provider registers under. */
++export const TAVILY_PROVIDER_ID = 'tavily'
++
++/** Default Tavily search endpoint; `/search` is the operation. */
++export const TAVILY_DEFAULT_BASE_URL = 'https://api.tavily.com'
++
++/** Default retrieval depth: Tavily's fast, lower-cost mode. */
++export const TAVILY_DEFAULT_SEARCH_DEPTH = 'basic'
++
++/** Attribution header sent on every request. Bump with the package version. */
++const USER_AGENT = 'deepseek-harness/0.0.1'
++
++/** Resolved provider options (the plugin's `apply` supplies env-var and constant defaults). */
++export interface TavilySearchProviderOptions {
++  /** Tavily API key. Empty/absent makes the provider unavailable. */
++  apiKey: string
++  /** Endpoint base; `/search` is appended. */
++  baseURL: string
++  /** Default result count when a request carries no `maxResults`. */
++  maxResults?: number
++  /** Retrieval depth sent as Tavily's `search_depth`. */
++  searchDepth: 'basic' | 'advanced'
++}
++
++/**
++ * Map one Tavily result to a normalized source. Optional fields that are
++ * absent, null, or empty are omitted rather than emitted; the URL is always
++ * kept, so an excerpt-less result still surfaces as a source.
++ *
++ * @param result - one entry of Tavily's `results[]`.
++ * @returns the normalized source.
++ */
++export function mapTavilyResult(result: TavilyResult): WebSearchSource {
++  return {
++    url: result.url,
++    ...result.title != null && result.title.length > 0 ? { title: result.title } : {},
++    ...result.content != null && result.content.trim().length > 0 ? { snippet: result.content } : {},
++    ...result.publishedDate != null && result.publishedDate.length > 0 ? { publishedAt: result.publishedDate } : {},
++  }
++}
++
++/**
++ * Map a Tavily response envelope to a normalized search result. The generated
++ * `answer` becomes `content` when non-blank; without one, `content` is omitted.
++ *
++ * @param response - the parsed `POST /search` response body.
++ * @returns the normalized result over every returned source.
++ */
++export function mapTavilyResponse(response: TavilySearchResponse): WebSearchResult {
++  const sources = (response.results ?? []).map(mapTavilyResult)
++  const answer = response.answer?.trim()
++  // Tavily's generated answer is provider-authored prose, trusted as `content`
++  // exactly as the seam intends; the web service owns the final `maxResults`
++  // truncation, so this provider reports `truncated: false`.
++  return {
++    ...answer !== undefined && answer.length > 0 ? { content: answer } : {},
++    sources,
++    truncated: false,
++  }
++}
++
++/** The Tavily-backed search provider; HTTP redirects fail as `WEB_PROVIDER_ERROR`. */
++export class TavilySearchProvider implements WebSearchProvider {
++  readonly id = TAVILY_PROVIDER_ID
++
++  constructor(private readonly options: TavilySearchProviderOptions) {}
++
++  available(): boolean {
++    return this.options.apiKey.length > 0
++      && isValidBaseUrl(this.options.baseURL)
++      && (this.options.maxResults === undefined || isPositiveInteger(this.options.maxResults))
++  }
++
++  async search(request: WebSearchRequest, signal?: AbortSignal): Promise<WebSearchResult> {
++    // A per-request bound wins over the configured default; either may be absent.
++    const maxResults = request.maxResults ?? this.options.maxResults
++    let response: Response
++    try {
++      response = await fetch(`${this.options.baseURL}/search`, {
++        method: 'POST',
++        redirect: 'error',
++        headers: {
++          'authorization': `Bearer ${this.options.apiKey}`,
++          'content-type': 'application/json',
++          'accept': 'application/json',
++          'user-agent': USER_AGENT,
++        },
++        body: JSON.stringify({
++          query: request.query,
++          search_depth: this.options.searchDepth,
++          include_answer: true,
++          ...maxResults !== undefined ? { max_results: maxResults } : {},
++        }),
++        ...signal !== undefined ? { signal } : {},
++      })
++    } catch (error: unknown) {
++      if (isAbortError(error)) throw new WebError('Tavily search aborted', 'WEB_ABORTED', { cause: error })
++      throw new WebError(`Tavily search request failed: ${String(error)}`, 'WEB_PROVIDER_ERROR', { cause: error })
++    }
++
++    if (!response.ok) {
++      const status = response.status
++      let message = `Tavily API error (HTTP ${status})`
++      try {
++        const parsed = await response.json() as TavilyError
++        const detail = errorDetailOf(parsed)
++        if (detail !== undefined && detail.length > 0) message = detail
++      } catch (error: unknown) {
++        // An abort fired mid-body must surface as WEB_ABORTED, not be swallowed
++        // into a generic HTTP-error message — cancellation is not a provider
++        // error (the seam's cancellation contract).
++        if (isAbortError(error)) throw new WebError('Tavily search aborted', 'WEB_ABORTED', { cause: error })
++        // Otherwise: the HTTP status is already captured in `message` above; a
++        // malformed/non-JSON error body (normal for gateway 5xx/429s) can only
++        // cost a richer provider message, never the real error.
++      }
++      throw new WebError(message, 'WEB_PROVIDER_ERROR')
++    }
++
++    try {
++      const payload = await response.json() as TavilySearchResponse
++      return mapTavilyResponse(payload)
++    } catch (error: unknown) {
++      if (isAbortError(error)) throw new WebError('Tavily search aborted', 'WEB_ABORTED', { cause: error })
++      throw new WebError(`Tavily returned an unprocessable response body: ${String(error)}`, 'WEB_PROVIDER_ERROR', { cause: error })
++    }
++  }
++}
++
++/**
++ * Extract Tavily's human-readable error detail from a parsed error body.
++ * Tavily reports failures as `error` (string or object), `detail`, or
++ * `message` depending on the failing layer; the first non-empty wins.
++ * @param body - the parsed error body.
++ * @returns the detail string, or `undefined` when the body carries none.
++ */
++function errorDetailOf(body: TavilyError): string | undefined {
++  const error = body.error
++  if (typeof error === 'string' && error.length > 0) return error
++  if (typeof error === 'object' && error !== null && error.message !== undefined && error.message.length > 0) {
++    return error.message
++  }
++  if (body.detail !== undefined && body.detail.length > 0) return body.detail
++  if (body.message !== undefined && body.message.length > 0) return body.message
++  return undefined
++}
++
++/** True when `baseURL` parses as an absolute URL (a cheap local config check). */
++function isValidBaseUrl(baseURL: string): boolean {
++  return URL.canParse(baseURL)
++}
++
++/** True for a request limit that can be sent to Tavily (a positive whole number). */
++function isPositiveInteger(value: number): boolean {
++  return Number.isInteger(value) && value > 0
++}
++
++/** True for a fetch/`AbortSignal` abort, surfaced as `WEB_ABORTED`. */
++function isAbortError(error: unknown): boolean {
++  return error instanceof DOMException && error.name === 'AbortError'
++}
+diff --git a/packages/web/web-search-tavily/src/types.ts b/packages/web/web-search-tavily/src/types.ts
+new file mode 100755
+index 0000000000..4256158997
+--- /dev/null
++++ b/packages/web/web-search-tavily/src/types.ts
+@@ -0,0 +1,43 @@
++/**
++ * Wire types for the Tavily search API (`POST https://api.tavily.com/search`).
++ * Types only — no runtime code. Tavily returns an optional generated `answer`
++ * plus a flat `results[]`; each entry carries a URL, title, a query-relevant
++ * content excerpt, an optional score, and an optional publication date.
++ *
++ * @module @deepseek-ai/dsh-web-search-tavily/types
++ */
++
++/** Request body sent to Tavily's search endpoint. */
++export interface TavilySearchRequest {
++  query: string
++  /** Tavily's result-count control; the seam still enforces the bound on return. */
++  maxResults?: number
++  /** Retrieval depth: `basic` (fast, lower cost) or `advanced` (deeper crawl). */
++  searchDepth: 'basic' | 'advanced'
++  /** Ask Tavily to generate an answer from the returned results. */
++  includeAnswer: boolean
++}
++
++/** One entry of Tavily's flat `results[]`. */
++export interface TavilyResult {
++  url: string
++  title?: string | null
++  /** Query-relevant page excerpt Tavily extracts; empty for some results. */
++  content?: string | null
++  score?: number | null
++  publishedDate?: string | null
++}
++
++/** Tavily's search response envelope. */
++export interface TavilySearchResponse {
++  /** Generated answer; present only when requested (`include_answer`). */
++  answer?: string | null
++  results?: TavilyResult[]
++}
++
++/** Tavily's error response envelope (best-effort; fields vary by failure). */
++export interface TavilyError {
++  error?: string | { message?: string }
++  detail?: string
++  message?: string
++}
+diff --git a/packages/web/web-search-tavily/tests/redirect.spec.ts b/packages/web/web-search-tavily/tests/redirect.spec.ts
+new file mode 100755
+index 0000000000..52f8fcaaac
+--- /dev/null
++++ b/packages/web/web-search-tavily/tests/redirect.spec.ts
+@@ -0,0 +1,124 @@
++/**
++ * Real HTTP coverage proves whether native `fetch` contacts a cross-origin `Location`; mocked
++ * request-init assertions alone cannot observe that boundary.
++ */
++
++import { afterAll, beforeAll, describe, expect, it } from 'vitest'
++import { createServer, type IncomingMessage, type Server } from 'node:http'
++import type { AddressInfo } from 'node:net'
++import { TavilySearchProvider } from '@deepseek-ai/dsh-web-search-tavily'
++import type { TavilySearchProviderOptions } from '@deepseek-ai/dsh-web-search-tavily'
++
++/** Construct the provider over a fixed options value. */
++const searchProvider = (options: TavilySearchProviderOptions): TavilySearchProvider =>
++  new TavilySearchProvider(options)
++
++const TEST_API_KEY = 'redirect-test-key'
++const TEST_QUERY = 'private redirect query'
++const targetRequests: ReceivedRequest[] = []
++
++interface ReceivedRequest {
++  readonly body: string
++  readonly headers: IncomingMessage['headers']
++  readonly method?: string
++}
++
++let redirectOrigin: string
++let targetOrigin: string
++
++const targetServer = createServer((request, response) => {
++  void captureRequest(request).then((received) => {
++    targetRequests.push(received)
++    response.writeHead(204).end()
++  }, (error: unknown) => response.destroy(asError(error)))
++})
++
++const redirectServer = createServer((request, response) => {
++  request.resume()
++  const status = Number(new URL(request.url ?? '/', 'http://fixture.test').pathname.split('/')[1])
++  response.writeHead(status, { location: `${targetOrigin}/collect` }).end()
++})
++
++beforeAll(async () => {
++  targetOrigin = await listen(targetServer)
++  redirectOrigin = await listen(redirectServer)
++})
++
++afterAll(async () => {
++  await Promise.all([close(redirectServer), close(targetServer)])
++})
++
++describe('TavilySearchProvider redirect policy', () => {
++  it.each([301, 302, 303, 307, 308])('rejects HTTP %i before contacting Location', async (status) => {
++    targetRequests.length = 0
++    const provider = searchProvider({
++      apiKey: TEST_API_KEY,
++      baseURL: `${redirectOrigin}/${status}`,
++      searchDepth: 'basic',
++    })
++
++    await expect(provider.search({ query: TEST_QUERY }))
++      .rejects.toMatchObject({ code: 'WEB_PROVIDER_ERROR' })
++    expect(targetRequests).toHaveLength(0)
++  })
++
++  it('shows default 307 following forwards the custom credential and POST body', async () => {
++    targetRequests.length = 0
++    const body = JSON.stringify({ query: TEST_QUERY })
++    await fetch(`${redirectOrigin}/307`, {
++      method: 'POST',
++      headers: {
++        'authorization': `Bearer ${TEST_API_KEY}`,
++        'content-type': 'application/json',
++      },
++      body,
++    })
++
++    expect(targetRequests).toHaveLength(1)
++    expect(targetRequests[0]).toMatchObject({ method: 'POST', body })
++    expect(targetRequests[0]?.headers['authorization']).toBe(`Bearer ${TEST_API_KEY}`)
++  })
++})
++
++/** Read a complete request received by the redirect target. */
++function captureRequest(request: IncomingMessage): Promise<ReceivedRequest> {
++  return new Promise((resolve, reject) => {
++    const chunks: Uint8Array[] = []
++    request.on('data', (chunk: unknown) => {
++      if (typeof chunk === 'string' || chunk instanceof Uint8Array) chunks.push(Buffer.from(chunk))
++      else reject(new TypeError('unexpected HTTP request chunk'))
++    })
++    request.once('error', reject)
++    request.once('end', () => {
++      resolve({
++        ...request.method !== undefined ? { method: request.method } : {},
++        headers: request.headers,
++        body: Buffer.concat(chunks).toString('utf8'),
++      })
++    })
++  })
++}
++
++/** Listen on an ephemeral loopback port and return the server origin. */
++async function listen(server: Server): Promise<string> {
++  await new Promise<void>((resolve, reject) => {
++    server.once('error', reject)
++    server.listen(0, '127.0.0.1', resolve)
++  })
++  const address = server.address() as AddressInfo
++  return `http://127.0.0.1:${address.port}`
++}
++
++/** Close a listening fixture server after every request has settled. */
++async function close(server: Server): Promise<void> {
++  if (!server.listening) return
++  await new Promise<void>((resolve, reject) => server.close((error) => {
++    if (error === undefined) resolve()
++    else reject(error)
++  }))
++}
++
++/** Normalize an unknown fixture failure for `ServerResponse.destroy`. */
++function asError(error: unknown): Error {
++  return error instanceof Error ? error : new Error(String(error))
++}
+diff --git a/packages/web/web-search-tavily/tests/tavily.spec.ts b/packages/web/web-search-tavily/tests/tavily.spec.ts
+new file mode 100755
+index 0000000000..42d514db9d
+--- /dev/null
++++ b/packages/web/web-search-tavily/tests/tavily.spec.ts
+@@ -0,0 +1,291 @@
++import { afterEach, describe, expect, it, vi } from 'vitest'
++import { Context } from '@deepseek-ai/cordis'
++import WebRuntime from '@deepseek-ai/dsh-web'
++import { TavilySearchProvider, TAVILY_PROVIDER_ID } from '@deepseek-ai/dsh-web-search-tavily'
++import * as tavilyPlugin from '@deepseek-ai/dsh-web-search-tavily'
++import { mapTavilyResponse, mapTavilyResult } from '../src/provider.ts'
++
++const options = { apiKey: 'tvly-key', baseURL: 'https://api.tavily.test', searchDepth: 'basic' as const }
++
++function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
++  return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' }, ...init })
++}
++
++afterEach(() => {
++  vi.unstubAllGlobals()
++})
++
++describe('Tavily result mapping', () => {
++  it('maps a full result entry', () => {
++    expect(mapTavilyResult({
++      url: 'https://a.test',
++      title: 'A',
++      content: 'page excerpt',
++      publishedDate: '2026-01-01',
++    })).toEqual({ url: 'https://a.test', title: 'A', snippet: 'page excerpt', publishedAt: '2026-01-01' })
++  })
++
++  it('omits null/empty optional fields rather than emitting them', () => {
++    expect(mapTavilyResult({ url: 'https://a.test', title: null, content: '', publishedDate: null }))
++      .toEqual({ url: 'https://a.test' })
++    expect(mapTavilyResult({ url: 'https://a.test', title: '', content: '  ', publishedDate: '' }))
++      .toEqual({ url: 'https://a.test' })
++  })
++
++  it('keeps a result without an excerpt as a URL-only source', () => {
++    expect(mapTavilyResult({ url: 'https://a.test' })).toEqual({ url: 'https://a.test' })
++  })
++
++  it('maps a response answer to content', () => {
++    const result = mapTavilyResponse({
++      answer: 'The generated answer.',
++      results: [{ url: 'https://a.test', title: 'A', content: 'excerpt' }],
++    })
++    expect(result).toEqual({
++      content: 'The generated answer.',
++      sources: [{ url: 'https://a.test', title: 'A', snippet: 'excerpt' }],
++      truncated: false,
++    })
++  })
++
++  it('omits content when the answer is blank or missing', () => {
++    expect(mapTavilyResponse({ answer: '   ', results: [] }).content).toBeUndefined()
++    expect(mapTavilyResponse({ results: [] }).content).toBeUndefined()
++  })
++
++  it('tolerates a missing results array', () => {
++    expect(mapTavilyResponse({}).sources).toEqual([])
++  })
++})
++
++describe('TavilySearchProvider availability', () => {
++  it('is unavailable without a key', () => {
++    expect(new TavilySearchProvider({ ...options, apiKey: '' }).available()).toBe(false)
++  })
++
++  it('is available with a key', () => {
++    expect(new TavilySearchProvider(options).available()).toBe(true)
++  })
++
++  it('is misconfigured when the base URL is unparseable', () => {
++    expect(new TavilySearchProvider({ ...options, baseURL: 'not a url' }).available()).toBe(false)
++  })
++
++  it('is misconfigured when maxResults is set but not a positive integer', () => {
++    expect(new TavilySearchProvider({ ...options, maxResults: 0 }).available()).toBe(false)
++    expect(new TavilySearchProvider({ ...options, maxResults: 1.5 }).available()).toBe(false)
++    expect(new TavilySearchProvider({ ...options, maxResults: -1 }).available()).toBe(false)
++  })
++})
++
++describe('TavilySearchProvider request mapping', () => {
++  it('sends query, search_depth, include_answer, max_results and bearer auth', async () => {
++    const fetchMock = vi.fn(async () => jsonResponse({ results: [{ url: 'https://a.test' }] }))
++    vi.stubGlobal('fetch', fetchMock)
++
++    const provider = new TavilySearchProvider({ ...options, searchDepth: 'advanced' })
++    await provider.search({ query: 'hello', maxResults: 5 })
++
++    expect(fetchMock).toHaveBeenCalledOnce()
++    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
++    expect(url).toBe('https://api.tavily.test/search')
++    expect(init).toMatchObject({ method: 'POST', redirect: 'error' })
++    expect((init.headers as Record<string, string>)['authorization']).toBe('Bearer tvly-key')
++    expect(JSON.parse(init.body as string)).toEqual({
++      query: 'hello',
++      search_depth: 'advanced',
++      include_answer: true,
++      max_results: 5,
++    })
++  })
++
++  it('falls back to the configured maxResults when a request omits maxResults', async () => {
++    const fetchMock = vi.fn(async () => jsonResponse({ results: [] }))
++    vi.stubGlobal('fetch', fetchMock)
++    await new TavilySearchProvider({ ...options, maxResults: 7 }).search({ query: 'q' })
++    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
++    expect(JSON.parse(init.body as string)).toMatchObject({ max_results: 7 })
++  })
++
++  it('lets a request maxResults win over the configured maxResults', async () => {
++    const fetchMock = vi.fn(async () => jsonResponse({ results: [] }))
++    vi.stubGlobal('fetch', fetchMock)
++    await new TavilySearchProvider({ ...options, maxResults: 7 }).search({ query: 'q', maxResults: 2 })
++    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
++    expect(JSON.parse(init.body as string)).toMatchObject({ max_results: 2 })
++  })
++
++  it('omits max_results when neither maxResults nor a configured default is set', async () => {
++    const fetchMock = vi.fn(async () => jsonResponse({ results: [] }))
++    vi.stubGlobal('fetch', fetchMock)
++    await new TavilySearchProvider(options).search({ query: 'q' })
++    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
++    expect(JSON.parse(init.body as string)).not.toHaveProperty('max_results')
++  })
++
++  it('forwards the abort signal', async () => {
++    const fetchMock = vi.fn(async () => jsonResponse({ results: [] }))
++    vi.stubGlobal('fetch', fetchMock)
++    const controller = new AbortController()
++    await new TavilySearchProvider(options).search({ query: 'q' }, controller.signal)
++    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
++    expect(init.signal).toBe(controller.signal)
++  })
++})
++
++describe('TavilySearchProvider error handling', () => {
++  it('maps an HTTP error to WEB_PROVIDER_ERROR with the provider message', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'bad key' }, { status: 401 })))
++    await expect(new TavilySearchProvider(options).search({ query: 'q' }))
++      .rejects.toThrow(expect.objectContaining({ code: 'WEB_PROVIDER_ERROR', message: 'bad key' }))
++  })
++
++  it('reads an object error detail and the detail field', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: { message: 'nested' } }, { status: 400 })))
++    await expect(new TavilySearchProvider(options).search({ query: 'q' }))
++      .rejects.toThrow(expect.objectContaining({ message: 'nested' }))
++    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ detail: 'detail field' }, { status: 400 })))
++    await expect(new TavilySearchProvider(options).search({ query: 'q' }))
++      .rejects.toThrow(expect.objectContaining({ message: 'detail field' }))
++    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ message: 'top message' }, { status: 400 })))
++    await expect(new TavilySearchProvider(options).search({ query: 'q' }))
++      .rejects.toThrow(expect.objectContaining({ message: 'top message' }))
++  })
++
++  it('keeps a status-line message when the error body is not JSON', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () => new Response('gateway down', { status: 502 })))
++    await expect(new TavilySearchProvider(options).search({ query: 'q' }))
++      .rejects.toThrow(expect.objectContaining({ code: 'WEB_PROVIDER_ERROR', message: 'Tavily API error (HTTP 502)' }))
++  })
++
++  it('keeps the status-line message when the JSON error body carries no detail', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({}, { status: 500 })))
++    await expect(new TavilySearchProvider(options).search({ query: 'q' }))
++      .rejects.toThrow(expect.objectContaining({ message: 'Tavily API error (HTTP 500)' }))
++  })
++
++  it('maps a network failure to WEB_PROVIDER_ERROR', async () => {
++    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new TypeError('connection refused'))))
++    await expect(new TavilySearchProvider(options).search({ query: 'q' }))
++      .rejects.toThrow(expect.objectContaining({ code: 'WEB_PROVIDER_ERROR' }))
++  })
++
++  it('maps an abort to WEB_ABORTED', async () => {
++    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new DOMException('aborted', 'AbortError'))))
++    await expect(new TavilySearchProvider(options).search({ query: 'q' }))
++      .rejects.toThrow(expect.objectContaining({ code: 'WEB_ABORTED' }))
++  })
++
++  it('maps an unparseable success body to WEB_PROVIDER_ERROR', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () => new Response('not json', { status: 200 })))
++    await expect(new TavilySearchProvider(options).search({ query: 'q' }))
++      .rejects.toThrow(expect.objectContaining({ code: 'WEB_PROVIDER_ERROR' }))
++  })
++
++  it('maps a well-formed body of the wrong shape to WEB_PROVIDER_ERROR, not a raw TypeError', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ results: {} }, { status: 200 })))
++    await expect(new TavilySearchProvider(options).search({ query: 'q' }))
++      .rejects.toThrow(expect.objectContaining({ code: 'WEB_PROVIDER_ERROR' }))
++  })
++
++  it('surfaces an abort during success-body parse as WEB_ABORTED, not provider error', async () => {
++    const body = { json: () => Promise.reject(new DOMException('aborted', 'AbortError')), ok: true, status: 200 }
++    vi.stubGlobal('fetch', vi.fn(async () => body as unknown as Response))
++    await expect(new TavilySearchProvider(options).search({ query: 'q' }))
++      .rejects.toThrow(expect.objectContaining({ code: 'WEB_ABORTED' }))
++  })
++
++  it('surfaces an abort during error-body parse as WEB_ABORTED', async () => {
++    const body = { json: () => Promise.reject(new DOMException('aborted', 'AbortError')), ok: false, status: 500 }
++    vi.stubGlobal('fetch', vi.fn(async () => body as unknown as Response))
++    await expect(new TavilySearchProvider(options).search({ query: 'q' }))
++      .rejects.toThrow(expect.objectContaining({ code: 'WEB_ABORTED' }))
++  })
++})
++
++describe('web-search-tavily plugin registration', () => {
++  it('registers the provider into ctx.web (HMR-safe)', async () => {
++    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ results: [] })))
++    const ctx = new Context()
++    await ctx.plugin(WebRuntime, { searchProvider: TAVILY_PROVIDER_ID })
++    const fiber = await ctx.plugin(tavilyPlugin, { apiKey: 'tvly-key' })
++    await expect(ctx.web.search({ query: 'q' })).resolves.toMatchObject({ sources: [], truncated: false })
++    await fiber.dispose()
++    await expect(ctx.web.search({ query: 'q' }))
++      .rejects.toThrow(expect.objectContaining({ code: 'WEB_PROVIDER_CONFIGURED_MISSING' }))
++  })
++
++  it('has no default export (namespace plugin export shape)', () => {
++    expect('default' in tavilyPlugin).toBe(false)
++  })
++
++  it('threads searchDepth, maxResults and baseURL config into the request', async () => {
++    const fetchMock = vi.fn(async () => jsonResponse({ results: [] }))
++    vi.stubGlobal('fetch', fetchMock)
++    const ctx = new Context()
++    await ctx.plugin(WebRuntime, { searchProvider: TAVILY_PROVIDER_ID })
++    const fiber = await ctx.plugin(tavilyPlugin, {
++      apiKey: 'tvly-key',
++      searchDepth: 'advanced',
++      maxResults: 9,
++      baseURL: 'https://custom.tavily.test',
++    })
++    await ctx.web.search({ query: 'q' })
++    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
++    expect(url).toBe('https://custom.tavily.test/search')
++    expect(JSON.parse(init.body as string)).toMatchObject({ search_depth: 'advanced', max_results: 9 })
++    await fiber.dispose()
++  })
++
++  it('respects a custom apiKeyEnv when config supplies no literal key', async () => {
++    const prev = process.env.CUSTOM_TAVILY_KEY
++    process.env.CUSTOM_TAVILY_KEY = 'custom-env-key'
++    try {
++      const fetchMock = vi.fn(async () => jsonResponse({ results: [] }))
++      vi.stubGlobal('fetch', fetchMock)
++      const ctx = new Context()
++      await ctx.plugin(WebRuntime, { searchProvider: TAVILY_PROVIDER_ID })
++      const fiber = await ctx.plugin(tavilyPlugin, { apiKeyEnv: 'CUSTOM_TAVILY_KEY' })
++      await ctx.web.search({ query: 'q' })
++      const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
++      expect((init.headers as Record<string, string>)['authorization']).toBe('Bearer custom-env-key')
++      await fiber.dispose()
++    } finally {
++      if (prev === undefined) delete process.env.CUSTOM_TAVILY_KEY
++      else process.env.CUSTOM_TAVILY_KEY = prev
++    }
++  })
++
++  it('falls back to $TAVILY_API_KEY and the default base URL when config omits them', async () => {
++    const prev = process.env.TAVILY_API_KEY
++    process.env.TAVILY_API_KEY = 'env-key'
++    try {
++      const fetchMock = vi.fn(async () => jsonResponse({ results: [] }))
++      vi.stubGlobal('fetch', fetchMock)
++      const ctx = new Context()
++      await ctx.plugin(WebRuntime, { searchProvider: TAVILY_PROVIDER_ID })
++      const fiber = await ctx.plugin(tavilyPlugin, {})
++      await ctx.web.search({ query: 'q' })
++      const [url] = fetchMock.mock.calls[0] as unknown as [string]
++      expect(url).toBe('https://api.tavily.com/search')
++      await fiber.dispose()
++    } finally {
++      if (prev === undefined) delete process.env.TAVILY_API_KEY
++      else process.env.TAVILY_API_KEY = prev
++    }
++  })
++
++  it('is unavailable when neither config nor env supplies a key', async () => {
++    const prev = process.env.TAVILY_API_KEY
++    delete process.env.TAVILY_API_KEY
++    try {
++      const ctx = new Context()
++      await ctx.plugin(WebRuntime, { searchProvider: TAVILY_PROVIDER_ID })
++      await ctx.plugin(tavilyPlugin, {})
++      await expect(ctx.web.search({ query: 'q' }))
++        .rejects.toThrow(expect.objectContaining({ code: 'WEB_PROVIDER_CONFIGURED_UNAVAILABLE' }))
++    } finally {
++      if (prev !== undefined) process.env.TAVILY_API_KEY = prev
++    }
++  })
++})
+diff --git a/packages/web/web-search-tavily/tsconfig.json b/packages/web/web-search-tavily/tsconfig.json
+new file mode 100755
+index 0000000000..b1cb44f9cc
+--- /dev/null
++++ b/packages/web/web-search-tavily/tsconfig.json
+@@ -0,0 +1,30 @@
++{
++  "extends": "../../../tsconfig.base.json",
++  "compilerOptions": {
++    "rootDir": "src",
++    "outDir": "lib/types"
++  },
++  "include": [
++    "src"
++  ],
++  "references": [
++    {
++      "path": "../../util/launch-environment"
++    },
++    {
++      "path": "../../../vendor/cosmokit"
++    },
++    {
++      "path": "../../../vendor/cordis"
++    },
++    {
++      "path": "../../../vendor/schemastery"
++    },
++    {
++      "path": "../web"
++    },
++    {
++      "path": "../../runtime-diagnostics/invariants"
++    }
++  ]
++}
+diff --git a/pnpm-workspace.yaml b/pnpm-workspace.yaml
+index e8d8ee5bec..5a3b235490 100644
+--- a/pnpm-workspace.yaml
++++ b/pnpm-workspace.yaml
+@@ -19,6 +19,8 @@ packages:
+   # Deploy root of the single-exe build: a pure dependency manifest whose
+   # closure is what the exe bundles and what the Python runtime distributes.
+   - python/sdk-runtime
++  # 喵仓安卓运行时闭包清单（外部部署，2026-08-14 添加）
++  - deploy/meow-runtime
+ 
+ # Vendored framework packages keep their upstream semver ranges, while local
+ # builds must resolve those matching names to this workspace's pinned sources.
+@@ -67,6 +69,7 @@ minimumReleaseAgeExclude:
+   - node-addon-require-builtin-win32-ia32-msvc@0.1.4
+   - node-addon-require-builtin-win32-x64-msvc@0.1.4
+   - node-addon-require-builtin@0.1.4
++  - '@smithy/core@3.33.1'
+ 
+ patchedDependencies:
+   node-pty@1.1.0: patches/node-pty@1.1.0.patch
+diff --git a/tsconfig.host.json b/tsconfig.host.json
+index 459036247a..d8f7eb8207 100644
+--- a/tsconfig.host.json
++++ b/tsconfig.host.json
+@@ -229,6 +229,7 @@
+     { "path": "./packages/web/web-search-exa" },
+     { "path": "./packages/web/web-search-perplexity" },
+     { "path": "./packages/web/web-search-deepseek" },
++    { "path": "./packages/web/web-search-tavily" },
+     { "path": "./packages/web/web-fetch-http" },
+     { "path": "./packages/web/tool-web" },
+     { "path": "./packages/spill/spill" },
+-- 
+2.43.0
+
