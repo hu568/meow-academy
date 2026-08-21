@@ -2,6 +2,7 @@ package com.meow.academy.ui.files
 
 import android.app.Application
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.meow.academy.data.files.FileEntry
@@ -132,7 +133,7 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
         refresh()
     }
 
-    /** 面包屑输入为空时回 App 数据目录 */
+    /** 面包屑输入为空时回工作区 */
     fun navigateToInternalRoot() = switchRoot(FileRoot.INTERNAL)
 
     // ── 列表加载与排序 ──
@@ -166,17 +167,18 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
     fun navigateToPath(path: String) {
         if (path.isBlank()) return
         viewModelScope.launch {
+            // 归一化：canonical 只做安全判定，存储统一映射回与根解析一致的 absolutePath 形式，
+            // 避免 /data/user/0 ↔ /data/data symlink 差异污染 currentPath（喵~）
             val normalized = withContext(Dispatchers.IO) {
-                val f = File(path)
-                if (f.isDirectory) runCatching { f.canonicalPath }.getOrDefault(f.absolutePath) else null
+                repository.normalizeNavigationPath(path)
             } ?: run {
+                Log.w(TAG, "navigateToPath 拒绝（不存在或非目录）: [$path]")
                 showSnackbar("路径不存在或不是文件夹")
                 return@launch
             }
-            val root = FileRoot.entries.firstOrNull { r ->
-                val base = repository.resolveRoot(r)?.absolutePath ?: return@firstOrNull false
-                normalized == base || normalized.startsWith(base + File.separator)
-            } ?: run {
+            Log.d(TAG, "navigateToPath: [$path] -> [$normalized]")
+            val root = repository.resolveRootForPath(normalized) ?: run {
+                Log.w(TAG, "navigateToPath 拒绝（不在可用根内）: [$normalized]")
                 showSnackbar("路径不在可用目录内")
                 return@launch
             }
@@ -196,9 +198,9 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 从根到目标路径重建目录栈（用于任意跳转） */
+    /** 从栈底到目标路径重建目录栈（用于任意跳转；INTERNAL 时栈底可能是 workspace 或 filesDir） */
     private fun buildStack(root: FileRoot, path: String): ArrayDeque<String> {
-        val base = repository.resolveRoot(root)?.absolutePath ?: return ArrayDeque()
+        val base = repository.stackBaseFor(root, path) ?: return ArrayDeque()
         val stack = ArrayDeque<String>().apply { add(base) }
         var current = base
         val relative = path.removePrefix(base).trim('/')
@@ -417,7 +419,11 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.update { it.copy(isSearching = true, searchQuery = trimmed) }
         searchJob = viewModelScope.launch {
             delay(300)
-            val rootPath = repository.resolveRoot(_uiState.value.root)?.absolutePath ?: return@launch
+            // 搜索范围跟随当前路径实际所属的栈底（workspace 或 filesDir 系统目录区域），
+            // 与面包屑基准一致；解析不出时退回当前根
+            val rootPath = repository.stackBaseFor(_uiState.value.root, _uiState.value.currentPath)
+                ?: repository.resolveRoot(_uiState.value.root)?.absolutePath
+                ?: return@launch
             try {
                 val results = withContext(Dispatchers.IO) { repository.search(rootPath, trimmed) }
                 // 丢弃过期结果：查询已变化（或已清空）时不应用
@@ -443,4 +449,8 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
     fun consumeSnackbar() = _uiState.update { it.copy(snackbarMessage = null) }
 
     private fun showSnackbar(message: String) = _uiState.update { it.copy(snackbarMessage = message) }
+
+    companion object {
+        private const val TAG = "FilesNav"
+    }
 }

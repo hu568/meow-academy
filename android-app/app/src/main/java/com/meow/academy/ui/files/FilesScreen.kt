@@ -176,17 +176,14 @@ fun FilesScreen(onOpenTerminal: (String) -> Unit = {}) {
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (!searchActive) {
-                val rootPath = remember(state.root, repository) {
-                    repository.resolveRoot(state.root)?.absolutePath ?: state.currentPath
-                }
+                // 绝对路径面包屑：完整层级展示，filesDir/外部根内的段可点，系统前缀段仅展示
                 EditableBreadcrumb(
-                    rootLabel = state.root.displayName(),
-                    rootPath = rootPath,
                     path = state.currentPath,
                     onNavigate = { path ->
                         if (path.isBlank()) vm.navigateToInternalRoot()
                         else vm.navigateToPath(path)
                     },
+                    isNavigable = remember(repository) { { p -> repository.isWithinRoot(p) } },
                 )
                 ShortcutBar(
                     shortcuts = state.shortcuts,

@@ -3,6 +3,7 @@ package com.meow.academy.data.files
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.meow.academy.runtime.RuntimeExtractor
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -179,10 +180,76 @@ class FileRepository(private val context: Context) {
 
     // ── 非 suspend 工具方法 ──
 
-    /** 解析根目录（与 [FileRoot.resolve] 同语义）；EXTERNAL 存储不可用时返回 null */
+    /** 解析根目录（与 [FileRoot.resolve] 同语义）；INTERNAL = 工作区（filesDir/workspace），EXTERNAL 不可用时返回 null */
     fun resolveRoot(root: FileRoot): File? = when (root) {
-        FileRoot.INTERNAL -> context.filesDir
+        FileRoot.INTERNAL -> RuntimeExtractor.workspaceDir(context)
         FileRoot.EXTERNAL -> context.getExternalFilesDir(null)
+    }
+
+    /**
+     * 导航用路径归一化：校验目录存在，并把 canonical 形式映射回与 [resolveRoot] 一致的
+     * absolutePath 形式。部分设备上 /data/user/0 与 /data/data 互为符号链接，
+     * canonicalPath 会改变路径形式；若把 canonical 直接存进 currentPath，
+     * 面包屑/目录栈的前缀拼接会全部失配，拆出一堆指向不存在路径的假段（喵~）。
+     * 目录不存在或不是文件夹返回 null。
+     */
+    fun normalizeNavigationPath(path: String): String? {
+        val file = File(path)
+        if (!file.isDirectory) return null
+        val canonical = runCatching { file.canonicalPath }.getOrDefault(file.absolutePath)
+        val roots = listOfNotNull(context.filesDir, context.getExternalFilesDir(null))
+        for (root in roots) {
+            val rootAbsolute = root.absolutePath
+            val rootCanonical = runCatching { root.canonicalPath }.getOrDefault(rootAbsolute)
+            if (canonical == rootCanonical || canonical.startsWith(rootCanonical + File.separator)) {
+                val relative = canonical.removePrefix(rootCanonical).trim('/')
+                return if (relative.isEmpty()) rootAbsolute else "$rootAbsolute/$relative"
+            }
+        }
+        return canonical
+    }
+
+    /**
+     * 手动路径跳转的根判定。phase4（A-1）：workspace 与 filesDir 都属于 INTERNAL，
+     * 用户手动输入 filesDir 下的系统目录路径仍允许进入（如 .dsh-sessions）。
+     */
+    fun resolveRootForPath(path: String): FileRoot? {
+        val canonical = runCatching { File(path).canonicalPath }.getOrNull() ?: return null
+        val filesCanonical = runCatching { context.filesDir.canonicalPath }.getOrNull()
+        if (filesCanonical != null && (canonical == filesCanonical || canonical.startsWith(filesCanonical + File.separator))) {
+            return FileRoot.INTERNAL
+        }
+        val externalCanonical = context.getExternalFilesDir(null)
+            ?.let { runCatching { it.canonicalPath }.getOrNull() }
+        if (externalCanonical != null && (canonical == externalCanonical || canonical.startsWith(externalCanonical + File.separator))) {
+            return FileRoot.EXTERNAL
+        }
+        return null
+    }
+
+    /**
+     * 目录栈基准路径。INTERNAL 时优先用 workspace 作栈底；
+     * path 落在 workspace 之外的 filesDir 下（A-1 手动输入系统目录）时，以 filesDir 为栈底。
+     */
+    fun stackBaseFor(root: FileRoot, path: String): String? {
+        val canonical = runCatching { File(path).canonicalPath }.getOrNull() ?: return null
+        return when (root) {
+            FileRoot.INTERNAL -> {
+                val workspaceCanonical = resolveRoot(FileRoot.INTERNAL)
+                    ?.let { runCatching { it.canonicalPath }.getOrNull() }
+                if (workspaceCanonical != null && (canonical == workspaceCanonical || canonical.startsWith(workspaceCanonical + File.separator))) {
+                    resolveRoot(FileRoot.INTERNAL)?.absolutePath
+                } else {
+                    val filesCanonical = runCatching { context.filesDir.canonicalPath }.getOrNull()
+                    if (filesCanonical != null && (canonical == filesCanonical || canonical.startsWith(filesCanonical + File.separator))) {
+                        context.filesDir.absolutePath
+                    } else {
+                        null
+                    }
+                }
+            }
+            FileRoot.EXTERNAL -> resolveRoot(FileRoot.EXTERNAL)?.absolutePath
+        }
     }
 
     /** 路径必须在 filesDir 或 getExternalFilesDir(null) 任一根内（canonicalPath 前缀判断，防路径逃逸） */
