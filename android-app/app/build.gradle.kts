@@ -1,4 +1,4 @@
-// 喵学堂 MeowAcademy · app 模块
+// 喵仓 MeowAcademy · app 模块
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -127,6 +127,9 @@ dependencies {
 
     // 拖拽排序（长按卡片上下拖动 + 边缘自动滚动）
     implementation(libs.reorderable)
+
+    // appconfig/markdown-config.js 的 JS 求值（Rhino 解释模式，Android 兼容）
+    implementation(libs.rhino)
 
     debugImplementation(libs.androidx.ui.tooling)
 

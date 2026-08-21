@@ -16,6 +16,7 @@ prism4j = "2.0.0"
 junit = "4.13.2"
 work = "2.9.1"
 reorderable = "3.1.0"
+rhino = "1.7.15"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -54,6 +55,7 @@ junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
 reorderable = { module = "sh.calvin.reorderable:reorderable", version.ref = "reorderable" }
+rhino = { group = "org.mozilla", name = "rhino", version.ref = "rhino" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

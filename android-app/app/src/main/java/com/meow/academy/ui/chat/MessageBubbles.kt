@@ -395,39 +395,44 @@ fun AssistantBubble(content: String, status: MessageStatus) {
 @Composable
 fun ThinkingCard(thinking: String) {
     var expanded by remember { mutableStateOf(false) }
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .clickable { expanded = !expanded }
             .padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            Icons.Outlined.Science,
-            contentDescription = "思考过程",
-            modifier = Modifier.size(16.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.width(4.dp))
-        Text(
-            text = "思考过程",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-        )
-        Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-    if (expanded) {
-        SelectionContainer {
-            Text(
-                text = thinking,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 12.dp, top = 4.dp, end = 8.dp),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Outlined.Science,
+                contentDescription = "思考过程",
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = "思考过程",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (expanded) {
+            SelectionContainer {
+                Text(
+                    text = thinking,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
         }
     }
 }
@@ -446,64 +451,70 @@ fun ToolCard(tool: ToolCallInfo) {
         tool.result.isNotBlank() -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    Row(
+    val containerColor = if (tool.isError) MaterialTheme.colorScheme.errorContainer
+                         else MaterialTheme.colorScheme.surfaceContainerLow
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(
-                if (tool.isError) MaterialTheme.colorScheme.errorContainer
-                else MaterialTheme.colorScheme.surfaceContainerLow,
-            )
-            .clickable { expanded = !expanded }
+            .background(containerColor)
             .padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            toolIcon(tool.name),
-            contentDescription = tool.name,
-            modifier = Modifier.size(18.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.width(4.dp))
-        Text(
-            tool.name,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Spacer(Modifier.weight(1f))
-        Text(statusMark, color = statusColor, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.width(4.dp))
-        Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-    if (expanded) {
-        Column(modifier = Modifier.padding(start = 12.dp, top = 4.dp, end = 8.dp)) {
-            if (tool.arguments.isNotBlank()) {
-                SelectionContainer {
-                    Text(
-                        "参数：" + tool.arguments,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                    )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                toolIcon(tool.name),
+                contentDescription = tool.name,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                tool.name,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(statusMark, color = statusColor, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(4.dp))
+            Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (expanded) {
+            Column(modifier = Modifier.padding(top = 4.dp)) {
+                if (tool.arguments.isNotBlank()) {
+                    SelectionContainer {
+                        Text(
+                            "参数：" + tool.arguments,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
-            }
-            if (tool.result.isNotBlank()) {
-                SelectionContainer {
+                if (tool.result.isNotBlank()) {
+                    SelectionContainer {
+                        Text(
+                            "结果：" + tool.result.take(2000),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = if (tool.isError) MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                } else if (!tool.isError) {
                     Text(
-                        "结果：" + tool.result.take(2000),
+                        "执行中…",
                         style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = if (tool.isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 4.dp),
                     )
                 }
-            } else if (!tool.isError) {
-                Text(
-                    "执行中…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
             }
         }
     }

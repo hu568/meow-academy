@@ -1,11 +1,17 @@
 package com.meow.academy.ui.chat
 
 import android.content.Context
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.util.TypedValue
+import com.meow.academy.data.settings.MarkdownConfig
+import com.meow.academy.data.settings.themeSeedFromHex
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
 import io.noties.markwon.MarkwonPlugin
 import io.noties.markwon.ext.latex.JLatexMathNode
 import io.noties.markwon.ext.latex.JLatexMathPlugin
+import io.noties.markwon.ext.latex.JLatexMathTheme
 import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.inlineparser.InlineProcessor
 import io.noties.markwon.inlineparser.MarkwonInlineParserPlugin
@@ -44,13 +50,16 @@ internal object MarkdownPrismBundle
 /**
  * @param textSizePx LaTeX 公式字号（px）；与 TextView 正文 15sp 对应
  * @param textColorArgb LaTeX 公式文字色；跟随当前主题，避免深色模式下黑字不可见
+ * @param config appconfig/markdown-config.js 解析后的渲染配置；null 用内置默认值
  */
 fun buildMarkwon(
     context: Context,
     isDark: Boolean,
     textSizePx: Float,
     textColorArgb: Int,
+    config: MarkdownConfig? = null,
 ): Markwon {
+    val resolved = config ?: MarkdownConfig()
     val prismTheme: Prism4jTheme =
         if (isDark) Prism4jThemeDarkula.create() else Prism4jThemeDefault.create()
     val prism4j = Prism4j(MarkdownGrammarLocator())
@@ -60,6 +69,8 @@ fun buildMarkwon(
         .usePlugin(LinkifyPlugin.create())
         .usePlugin(SyntaxHighlightPlugin.create(prism4j, prismTheme))
         .usePlugin(MarkwonInlineParserPlugin.create())
+        // 动态渲染配置：列表 · / 代码块圆角 / 引用 / 链接 / 标题 / 分割线
+        .usePlugin(MarkdownConfigPlugin(context, textSizePx, resolved))
         .usePlugin(
             JLatexMathPlugin.create(
                 textSizePx,
@@ -67,7 +78,7 @@ fun buildMarkwon(
                     builder.inlinesEnabled(true)
                     // 公式解析失败（含流式未闭合）回退显示原始 LaTeX 文本
                     builder.errorHandler { _, _ -> null }
-                    builder.theme().textColor(textColorArgb)
+                    configureJLatexTheme(builder.theme(), resolved.formula, textColorArgb, context)
                 },
             ),
         )
@@ -77,6 +88,53 @@ fun buildMarkwon(
         .usePlugin(DollarMathInlinePlugin())
         .build()
 }
+
+/** 把 appconfig 的公式块配置应用到 jlatexmath 主题（圆角背景 / 内边距 / 对齐 / 颜色） */
+private fun configureJLatexTheme(
+    theme: JLatexMathTheme.Builder,
+    formula: MarkdownConfig.FormulaConfig,
+    defaultTextColorArgb: Int,
+    context: Context,
+) {
+    theme.textColor(defaultTextColorArgb)
+    formula.blockTextColor?.let { theme.blockTextColor(parseHexColor(it)) }
+    formula.inlineTextColor?.let { theme.inlineTextColor(parseHexColor(it)) }
+
+    val padding = formula.blockPaddingDp
+    theme.blockPadding(
+        JLatexMathTheme.Padding.of(
+            dpToPx(padding.left, context),
+            dpToPx(padding.top, context),
+            dpToPx(padding.right, context),
+            dpToPx(padding.bottom, context),
+        ),
+    )
+    theme.blockFitCanvas(formula.blockFitCanvas)
+    theme.blockHorizontalAlignment(formula.blockAlign.coerceIn(0, 2))
+
+    // 块公式背景圆角：只有给了背景色才设置，否则保持主题默认（无背景）
+    if (formula.blockBackground != null) {
+        val bgColor = parseHexColor(formula.blockBackground)
+        val cornerPx = dpToPx(formula.blockCornerRadiusDp, context).toFloat()
+        theme.blockBackgroundProvider {
+            GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = cornerPx
+                setColor(bgColor)
+            }
+        }
+    }
+}
+
+private fun parseHexColor(hex: String): Int =
+    themeSeedFromHex(hex)?.toInt() ?: Color.TRANSPARENT
+
+private fun dpToPx(value: Float, context: Context): Int =
+    TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_DIP,
+        value,
+        context.resources.displayMetrics,
+    ).toInt()
 
 /**
  * 单 `$…$` 行内公式处理器。

@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,6 +35,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import com.meow.academy.MeowAcademyApp
+import com.meow.academy.data.settings.resolveMarkdownConfig
 import io.noties.markwon.Markwon
 import kotlinx.coroutines.delay
 
@@ -65,10 +68,14 @@ fun MarkdownText(
             context.resources.displayMetrics,
         )
     }
-    val markwon = remember(context, isDark, textColorArgb, textSizePx) {
-        buildMarkwon(context, isDark, textSizePx, textColorArgb)
+    // appconfig/markdown-config.js：仓库只存原始 JS 配置，这里按当前主题解析成具体值
+    val app = context.applicationContext as MeowAcademyApp
+    val configRaw by app.markdownConfigRepository.config.collectAsState()
+    val config = remember(configRaw, isDark) { resolveMarkdownConfig(configRaw, isDark) }
+    val markwon = remember(context, config, isDark, textColorArgb, textSizePx) {
+        buildMarkwon(context, isDark, textSizePx, textColorArgb, config)
     }
-    val renderer = remember(isDark, textColorArgb) { StreamingMarkdownRenderer() }
+    val renderer = remember(config, isDark, textColorArgb) { StreamingMarkdownRenderer() }
 
     // 流式节流：state 每次 delta 都会触发重组，但只按固定间隔把最新文本写进 TextView
     var rendered by remember { mutableStateOf(markdown) }
