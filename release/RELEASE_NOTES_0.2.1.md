@@ -1,7 +1,5 @@
 # 版本更新记录
 
-> `release/` 只存放安装包与本更新记录，其他文件（截图、调试脚本）一律放 `.tmp/`。
-
 ## [0.2.1] - 2026-08-21（debug）
 
 第三个 debug 包（约 80MB）。核心变更：**内置 DSH 运行时从 rc.5 升级到 `dsh-v0.1.1-rc.1`**（819 commits / 54 feats，上游 2026-08-21 tag）。fork 全部源码改动已固化为 patch 入库（`android-app/runtime-assets/dsh-fork/`，基线 `528c682e06`）。
@@ -25,3 +23,5 @@
 - 真机验收：initialize 握手 ✓ 模型列表 ✓ 聊天流式 / 工具六件套 / resume 请按需复测
 
 安装：`adb install -r release/meow-academy-0.2.1-debug.apk`
+
+**Full Changelog**: https://github.com/hu568/meow-academy/compare/meow-academy-0.2.0-debug...v0.2.1

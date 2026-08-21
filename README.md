@@ -197,7 +197,7 @@ meow-academy/
 | [docs/notes/meow-dynamic-architecture-note.md](docs/notes/meow-dynamic-architecture-note.md) | 动态架构笔记：Markdown 渲染 JS 化等 |
 | [docs/notes/embedded-dsh-capabilities.md](docs/notes/embedded-dsh-capabilities.md) | 内置 DSH 运行时能力盘点 |
 | [docs/reference/](docs/reference/) | RAG 算法 / Cherry Studio / RikkaHub 参考实现 |
-| [release/RELEASE_NOTES_0.2.0.md](release/RELEASE_NOTES_0.2.0.md) | 版本更新记录（最新） |
+| [release/RELEASE_NOTES_0.2.1.md](release/RELEASE_NOTES_0.2.1.md) | 版本更新记录（最新） |
 
 ---
 
