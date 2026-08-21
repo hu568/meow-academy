@@ -22,6 +22,7 @@ android-app/.tmp_build*.log
 # DSH fork（本地独立副本，从 github.com/deepseek-ai/deepseek-harness fork，
 # 用于构建 runtime 闭包，与 D:\deepseek-harness 解耦；源码 92MB + node_modules 964MB，不入库）
 /dsh/
+/dsh.rc5.bak/
 
 # 开发时的细化计划文档（本地工作文档，不入库）
 /plan/

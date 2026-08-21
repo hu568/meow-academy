@@ -8,24 +8,33 @@ fork 出来的**本地源码副本，整体 gitignore 不入库**。本目录把
 
 | 项 | 值 |
 |---|---|
-| 上游基线 commit | `47f943859bef60e4160492346772ded9b24f765a` |
-| 基线日期 | 2026-08-13（Merge PR #2519 feat/npm-public） |
-| 对应版本 | 0.1.0-rc.5（与真机 runtime.bin 内各包 package.json 一致） |
+| 上游基线 | tag `dsh-v0.1.1-rc.1`（commit `528c682e06`） |
+| 基线日期 | 2026-08-21 升级（2026-08-13 首次 fork 于 `47f943859b` = 0.1.0-rc.5） |
+| 对应版本 | 0.1.1-rc.1 |
 
-> 基线定位方法：fork 无 git 历史，用「全树 blob 匹配率扫描」锁定——4542 个源码文件中
-> 该提交匹配 4490 个（98.9%），断崖式领先第二名，即 fork 当时的拷贝点。
+> 升级记录（2026-08-21）：rc.5 → v0.1.1-rc.1（819 commits）。fs/bash/tavily/deploy 零冲突重放；
+> llm-pi-ai dormant 三处手工合并；新增 koffi 惰性加载适配（见下）；`@smithy/core` pin 已不需要
+> （新版 lockfile 自洽）。计划与过程见 `plan/plan-dsh-upgrade-rc1.md`。
 
-## patch 内容（0001-meow-fork-on-deepseek-harness-47f943859b.patch）
+## patch 内容（0001-meow-fork-on-deepseek-harness-dsh-v0.1.1-rc.1.patch）
 
 ### Android 存活适配
-- **`packages/fs/fs-local/src/fsio.ts`** — 原子写「创建新文件」分支由 `link()` 硬链接发布改为
-  `rename()`（SELinux 禁 untrusted_app 域 `link()`，否则 write/create 工具 EACCES）。
+- **`packages/fs/fs-local/src/fsio.ts`** — guarded-create 发布原语由 `link()` 改为
+  「`lstat()` 探测 → 命中即抛 EEXIST → `rename()` 发布」（SELinux 禁 untrusted_app 域
+  `link()`）。探测保住 no-replace 契约：竞争者保留、`FS_NOT_OBSERVED` /
+  `FS_NOT_REGULAR_FILE` 错误映射与上游 link() 语义完全一致（上游 rc.1 的全套
+  竞争测试原样通过），仅存探测→发布的极小 TOCTOU 窗口，单进程 App 可接受。
 - **`packages/fs/fs-local/src/index.ts`** — 新增 `deny` 配置（`{path}[]`，文件精确 + 目录前缀），
   在 `resolve()` / `lstat()`（含 realpath 防符号链接绕过）/ `listDir()` 三处拦截，
   命中抛 `FS_PERMISSION_DENIED`。
 - **`packages/shell/bash-local/src/index.ts`** — ① `DSH_BASH_BIN` 存在时经
   `[linker64, bash, --norc, --noprofile, -c]` 拉起 bash（untrusted_app 不能直接 exec 私有 ELF）；
   ② spawn env 追加 `DEEPSEEK_API_KEY: undefined` tombstone，bash 子进程拿不到明文 key。
+- **`packages/subprocess/subprocess-local/src/windows-inspector.ts`** — koffi 原生绑定改为
+  首次调用惰性解析（type-only import + `createRequire`）。新版引入的 Windows 进程检查器在
+  模块顶层就触达 koffi 原生绑定，而 koffi 无 Android/bionic arm64 prebuilt——静态 import
+  会让 `dsh-subprocess-local` 在 Android 上插件树加载即崩（真机实测）。Linux 检查器纯走
+  `/proc`，不受影响。
 
 ### llm-pi-ai 模型管理配合（dormant 路由）
 - **`src/catalog.ts` / `src/config.ts`** — 无 catalog 默认且 `models` 为空的路由不再报错，
@@ -37,6 +46,8 @@ fork 出来的**本地源码副本，整体 gitignore 不入库**。本目录把
 ### 新包 web-search-tavily
 - **`packages/web/web-search-tavily/`**（src ×4 + tests ×2 + README ×2 + package.json + tsconfig）
   Tavily 网络搜索 provider（`TAVILY_API_KEY`）。
+- **`tests/redirect.spec.ts`** — 平台对照组测试随 undici 安全策略更新：新版 undici 跨源重定向
+  会剥离 Authorization（body 仍转发），故「显式拒绝 redirect」仍是唯一同时护住两者的姿态。
 - **`packages/bundle/base/cordis.patch.yml` + `package.json`** — 注册 `dsh-web-search-tavily`。
 - **`tsconfig.host.json`** — 加 project reference。
 
@@ -44,22 +55,24 @@ fork 出来的**本地源码副本，整体 gitignore 不入库**。本目录把
 - **`deploy/meow-runtime/package.json`** — pnpm deploy 清单：以官方 python/sdk-runtime 闭包为基，
   剔除 ACP/subagent 驱动/node-pty/sandbox 原生模块(landlock)/query/lsp/mcp 等；
   含 SQLite 会话持久化与 DeepSeek web 搜索。**这是打闭包的输入，必须存在。**
-- **`pnpm-workspace.yaml`** — 注册 `deploy/meow-runtime` + pin `@smithy/core@3.33.1`。
+- **`pnpm-workspace.yaml`** — 注册 `deploy/meow-runtime`。（旧版的 `@smithy/core` pin 已删：
+  v0.1.1-rc.1 lockfile 自行解析到 3.24.7，无需豁免。）
 
 ## 从零复现 runtime.bin
 
 ```bash
-# 0. 前置：PC 有 node + pnpm；安卓侧需 JDK 17 + Android SDK + 真机（Termux 打包用）
+# 0. 前置：PC 有 node + pnpm（node ^22.19||>=24）；安卓侧需 JDK 17 + Android SDK + 真机（Termux 打包用）
 git clone https://github.com/deepseek-ai/deepseek-harness dsh
 cd dsh
-git checkout 47f943859bef60e4160492346772ded9b24f765a
-git apply ../android-app/runtime-assets/dsh-fork/0001-meow-fork-on-deepseek-harness-47f943859b.patch
+git checkout dsh-v0.1.1-rc.1
+git apply ../android-app/runtime-assets/dsh-fork/0001-meow-fork-on-deepseek-harness-dsh-v0.1.1-rc.1.patch
 pnpm install          # lockfile 由 install 重新生成（patch 不含 pnpm-lock.yaml）
 
-# 1. PC 打 DSH 闭包（产物 .tmp/dsh-closure.tar.gz）
+# 1. PC 构建并打 DSH 闭包（产物 .tmp/dsh-closure.tar.gz）
+npm run build:lib     # workspace 包 files 字段只发布 lib/，必须先构建
 cd .. && bash android-app/runtime-assets/build-dsh-closure.sh
 
-# 2. 推到真机 Termux 打 runtime.bin（见仓库根 AGENTS.md「重打 runtime」两步）
+# 2. 推到真机 Termux 打 runtime.bin（ssh 或 adb 均可，见 AGENTS.md「重打 runtime」）
 adb push .tmp/dsh-closure.tar.gz android-app/runtime-assets/build-runtime.sh \
     android-app/runtime-assets/dns-shim.js /data/local/tmp/
 adb shell 'cp /data/local/tmp/* ~/ && chmod +x ~/build-runtime.sh && ~/build-runtime.sh ~/dsh-closure.tar.gz'
@@ -74,11 +87,24 @@ cd android-app && ./gradlew clean assembleDebug
 `runtime-assets/terminal-host.js`、`runtime-assets/dns-shim.js`、
 `runtime-assets/tools/fix-closure-links.mjs`、`runtime-assets/build-*.sh`。
 
+## 已知环境坑（复现时必读）
+
+- **WSL/Linux 上 node-prune 会误伤 workspace**：`build-dsh-closure.sh` 的 node-prune 步骤在
+  产物上裁剪 doc/ 时，会经由文件共享机制把 workspace 里 `yaml@2.9.0/dist/doc/` 十个文件一并
+  删掉（TS 编译用 .d.ts 还在、运行时 require .js 缺失——症状是后续 lint/typecheck 过但运行时
+  崩 `Cannot find '../doc/directives.js'`）。脚本已内置自愈步骤（从完整产物反向补回，幂等）。
+- **PC 冒烟测不出平台原生模块问题**：koffi/node-pty 等在 PC x64 上能加载，Termux arm64+bionic
+  才暴露。跨平台改动务必以真机启动为准。
+- **替换 runtime.bin 后必须 `./gradlew clean assembleDebug`**：增量打包会让 APK 膨胀一倍
+  （~70MB 零填充垃圾），clean 后恢复正常体积。
+- **上游 SQLite SCHEMA_VERSION 15→17 硬守卫**：升级后旧版 App 写下的 `.dsh-sessions/chat.db`
+  必须移除（DSH 侧 resume 上下文不可续聊为预期；界面 Room 聊天历史不受影响）。
+
 ## 升级上游时
 
 1. 新基线上重放本 patch（冲突则手工合并）；
 2. 全量对比 fork 与新基线，重新生成 patch 并**更新本 README 的基线 commit**；
-3. 重跑 `pnpm install` + 闭包脚本 + 真机打包验证。
+3. 重跑 `pnpm install` + `npm run build:lib` + 闭包脚本 + 真机打包验证。
 
 ## 已知非源码差异（不入 patch，属本地产物）
 

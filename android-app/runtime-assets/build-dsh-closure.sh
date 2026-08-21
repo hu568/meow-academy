@@ -57,6 +57,19 @@ if command -v npm >/dev/null 2>&1; then
     echo "  ⚠ node-prune 失败/超时，继续（体积会偏大）"
 fi
 
+# ── 2.6 WSL 自愈：node-prune 在产物上裁剪 doc/ 时会把 workspace 里
+#       yaml@2.9.0 的 dist/doc/ 十个文件一并删掉（文件共享波及源，
+#       2026-08-21 实测），而裁剪后产物里的拷贝仍是完整的——反向补回，
+#       保证本机后续 typecheck/lint/构建不受损。幂等。
+for y in "$DSH_ROOT"/node_modules/.pnpm/yaml@*/node_modules/yaml; do
+  if [ -f "$DEPLOY_DIR/node_modules/yaml/dist/doc/directives.js" ] && [ ! -f "$y/dist/doc/directives.js" ]; then
+    echo "» 自愈：补回 pnpm deploy 误删的 yaml dist/doc（$y）…"
+    rm -rf "$y/dist"
+    cp -r "$DEPLOY_DIR/node_modules/yaml/dist" "$y/dist"
+  fi
+done
+
+
 # ── 3. 拷入喵仓组合（cordis.yml + meow-extensions）──
 echo "» 拷入 dsh/ 组合…"
 cp -r "$DSH_DIR" "$DEPLOY_DIR/dsh"

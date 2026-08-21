@@ -1,26 +1,39 @@
-From d09ae8cacb2f1e8ac674ff62ad808c6497188c32 Mon Sep 17 00:00:00 2001
+From 08af4b3a4b206368305d056f5b7902abfe60a933 Mon Sep 17 00:00:00 2001
 From: meow-academy <meow@academy.local>
-Date: Fri, 21 Aug 2026 18:43:05 +0800
+Date: Fri, 21 Aug 2026 20:12:43 +0800
 Subject: [PATCH] feat(meow): Android runtime adaptations + tavily web search +
  meow-runtime deploy manifest
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
-Meow-academy (喵仓) fork patch on top of 47f943859b:
+喵仓（meow-academy）安卓内置 DSH 运行时的全部 fork 改动，基线 dsh-v0.1.1-rc.1。
+复现链路见 android-app/runtime-assets/dsh-fork/README.md。
 
-- fs-local: SELinux-safe atomic publish (link -> rename); new deny rules
-- bash-local: launch bash via linker64 on Android; DEEPSEEK_API_KEY tombstone
-- llm-pi-ai: dormant routes for empty catalogs; tolerate MISSING_CREDENTIAL in discovery
-- web-search-tavily: new web search provider package (TAVILY_API_KEY)
-- bundle/base: register dsh-web-search-tavily
-- deploy/meow-runtime: pnpm deploy manifest for the Android runtime closure
-- pnpm-workspace / tsconfig.host: register the above
+Android 运行时适配（untrusted_app SELinux 域限制）:
+- fs-local: writeFileAtomic 的 guarded-create 发布原语改为「lstat 探测 +
+  EEXIST 上报 + rename()」——SELinux 禁 link()，探测保住 no-replace 契约
+  （竞争者保留、FS_NOT_OBSERVED/FS_NOT_REGULAR_FILE 映射与上游语义一致）
+- fs-local: deny 规则（{path}[]，resolve/lstat/listDir 三处拦截，
+  FS_PERMISSION_DENIED）；fsio.ts 覆盖已有文件的 rename 路径本就可用
+- bash-local: DSH_BASH_BIN/DSH_LINKER64 存在时经 linker64 拉起 bash
+  （untrusted_app 不能 exec 私有 ELF/shebang wrapper）；env 显式
+  DEEPSEEK_API_KEY: undefined tombstone 双保险
+
+llm-pi-ai dormant 路由（模型管理先存凭证后填模型的配置中态）:
+- catalog.ts: 空 models 不再 invalid()，放行为 dormant route
+- config.ts: resolveProfiles 对空 models continue（保留 settings 占位）
+- index.ts: storedApiKey 捕获 MISSING_CREDENTIAL 返回 undefined
+- README/README.zh 规格段 + adapter/discovery/dynamic-config spec
+
+新增 packages/web/web-search-tavily（TAVILY_API_KEY，redirect 全拒绝策略）;
+bundle/base 注册 + tsconfig.host.json 引用 + deploy/meow-runtime 闭包清单
++ pnpm-workspace.yaml 注册行。
 ---
  deploy/meow-runtime/package.json              |  84 +++++
  packages/bundle/base/cordis.patch.yml         |   5 +
  packages/bundle/base/package.json             |   1 +
- packages/fs/fs-local/src/fsio.ts              |  54 +---
+ packages/fs/fs-local/src/fsio.ts              |  29 +-
  packages/fs/fs-local/src/index.ts             |  67 +++-
  packages/llm/llm-pi-ai/README.md              |   6 +-
  packages/llm/llm-pi-ai/README.zh.md           |   2 +-
@@ -31,6 +44,7 @@ Meow-academy (喵仓) fork patch on top of 47f943859b:
  .../llm/llm-pi-ai/tests/discovery.spec.ts     |  21 ++
  .../llm-pi-ai/tests/dynamic-config.spec.ts    |  12 +-
  packages/shell/bash-local/src/index.ts        |  16 +-
+ .../subprocess-local/src/windows-inspector.ts |  62 ++--
  packages/web/web-search-tavily/README.md      |  51 +++
  packages/web/web-search-tavily/README.zh.md   |  51 +++
  packages/web/web-search-tavily/package.json   |  49 +++
@@ -38,12 +52,12 @@ Meow-academy (喵仓) fork patch on top of 47f943859b:
  .../web/web-search-tavily/src/invariant.ts    |  30 ++
  .../web/web-search-tavily/src/provider.ts     | 180 +++++++++++
  packages/web/web-search-tavily/src/types.ts   |  43 +++
- .../web-search-tavily/tests/redirect.spec.ts  | 124 ++++++++
+ .../web-search-tavily/tests/redirect.spec.ts  | 127 ++++++++
  .../web-search-tavily/tests/tavily.spec.ts    | 291 ++++++++++++++++++
  packages/web/web-search-tavily/tsconfig.json  |  30 ++
- pnpm-workspace.yaml                           |   3 +
+ pnpm-workspace.yaml                           |   2 +
  tsconfig.host.json                            |   1 +
- 26 files changed, 1143 insertions(+), 80 deletions(-)
+ 27 files changed, 1205 insertions(+), 57 deletions(-)
  create mode 100755 deploy/meow-runtime/package.json
  create mode 100755 packages/web/web-search-tavily/README.md
  create mode 100755 packages/web/web-search-tavily/README.zh.md
@@ -163,7 +177,7 @@ index e9567d9206..7238f598d4 100644
        name: '@deepseek-ai/dsh-tool-web'
        config:
 diff --git a/packages/bundle/base/package.json b/packages/bundle/base/package.json
-index 706ee3202a..ecc43a3329 100644
+index 8b7058446f..6aeadfba31 100644
 --- a/packages/bundle/base/package.json
 +++ b/packages/bundle/base/package.json
 @@ -114,6 +114,7 @@
@@ -175,7 +189,7 @@ index 706ee3202a..ecc43a3329 100644
      "@deepseek-ai/dsh-agent-instructions": "workspace:^"
    },
 diff --git a/packages/fs/fs-local/src/fsio.ts b/packages/fs/fs-local/src/fsio.ts
-index 17bfb6115b..eff079da13 100644
+index 17bfb6115b..f06caf82e9 100644
 --- a/packages/fs/fs-local/src/fsio.ts
 +++ b/packages/fs/fs-local/src/fsio.ts
 @@ -7,7 +7,7 @@
@@ -187,86 +201,68 @@ index 17bfb6115b..eff079da13 100644
  import type { BigIntStats, Dirent, Stats } from 'node:fs'
  import { basename, dirname, join, resolve } from 'node:path'
  import { TextDecoder } from 'node:util'
-@@ -22,10 +22,6 @@ function isENOENT(error: unknown): boolean {
-   return error instanceof Error && 'code' in error && error.code === 'ENOENT'
- }
- 
--function isEEXIST(error: unknown): boolean {
--  return error instanceof Error && 'code' in error && error.code === 'EEXIST'
--}
--
- /**
-  * A path component that is expected to be a directory is a regular file (e.g.
-  * resolving `afile/child.txt` when `afile` is a file). Like `ENOENT`, the target
-@@ -478,43 +474,6 @@ async function removeStagingDirOrThrow(
+@@ -478,6 +478,22 @@ async function removeStagingDirOrThrow(
    throw originalError
  }
  
--async function throwGuardedCreateFailure(
--  error: unknown,
--  absolutePath: string,
--  displayPath: string,
--  inspectPublicationTarget: (path: string) => Promise<BigIntStats>,
--): Promise<never> {
--  let existing: BigIntStats | undefined
--  try {
--    existing = await inspectPublicationTarget(absolutePath)
--  } catch (metadataError: unknown) {
--    if (!isENOENT(metadataError) && !isENOTDIR(metadataError)) {
--      throw new FsError(`cannot write "${displayPath}": ${errorMessage(metadataError)}`, 'FS_IO_ERROR', { cause: metadataError })
--    }
--  }
--
++// Android (meow fork): SELinux denies link(), so the default guarded-create
++// publication probes the target and reports EEXIST to the shared failure
++// mapper instead of hard-linking; on an absent target rename() publishes.
++async function publishCreateNoReplace(tempPath: string, absolutePath: string): Promise<void> {
++  try {
++    await lstat(absolutePath, { bigint: true })
++  } catch (probeError: unknown) {
++    if (!isENOENT(probeError) && !isENOTDIR(probeError)) throw probeError
++    await rename(tempPath, absolutePath)
++    return
++  }
++  const eexist: NodeJS.ErrnoException = new Error(`EEXIST: file exists: ${absolutePath}`)
++  eexist.code = 'EEXIST'
++  throw eexist
++}
++
+ async function throwGuardedCreateFailure(
+   error: unknown,
+   absolutePath: string,
+@@ -493,8 +509,9 @@ async function throwGuardedCreateFailure(
+     }
+   }
+ 
 -  // Link errno values vary by platform and filesystem. Inspect the target entry
 -  // after failure so a collision is not confused with missing hard-link support.
--  if (existing !== undefined) {
--    if (!existing.isFile()) {
--      throw new FsError(`cannot write "${displayPath}": not a regular file`, 'FS_NOT_REGULAR_FILE', { cause: error })
--    }
--    throw new FsError(
--      `cannot overwrite existing "${displayPath}" without reading it first`,
--      'FS_NOT_OBSERVED',
--      { cause: error },
--    )
--  }
--  if (isEEXIST(error)) {
--    throw new FsError(
--      `cannot overwrite existing "${displayPath}" without reading it first`,
--      'FS_NOT_OBSERVED',
--      { cause: error },
--    )
--  }
--  throw new FsError(`cannot write "${displayPath}": ${errorMessage(error)}`, 'FS_IO_ERROR', { cause: error })
--}
--
- /**
-  * Atomically replace a file through a private, synced staging file in the same directory.
-  * POSIX protects the staging directory and file with `0o700` and `0o600`. A new Windows file
-@@ -550,9 +509,6 @@ export async function writeFileAtomic(
++  // Publication errno values vary by platform and filesystem. Inspect the target
++  // entry after failure so a collision is not confused with missing support for
++  // the no-replace primitive.
+   if (existing !== undefined) {
+     if (!existing.isFile()) {
+       throw new FsError(`cannot write "${displayPath}": not a regular file`, 'FS_NOT_REGULAR_FILE', { cause: error })
+@@ -526,7 +543,7 @@ async function throwGuardedCreateFailure(
+  * inert as a mode on Windows but identifies replacement security semantics.
+  * @param signal - cancellation checked before final publication.
+  * @param internals - Test hook for pinning temp names and observing the staged file.
+- * @param createIfAbsent - when provided, publish with a hard-link no-replace
++ * @param createIfAbsent - when provided, publish with a no-replace
+  * primitive; a concurrent creator's file is preserved and this write is
+  * rejected with `FS_NOT_OBSERVED` using the supplied display path.
+  */
+@@ -550,7 +567,7 @@ export async function writeFileAtomic(
    const platform = internals.platform ?? process.platform
    const copyFileDacl = internals.copyFileDacl ?? copyFileDaclWin32
    const replaceFile = internals.replaceFile ?? replaceFileWin32
 -  const linkFile = internals.linkFile ?? link
--  const inspectPublicationTarget = internals.inspectPublicationTarget
--    ?? (path => lstat(path, { bigint: true }))
++  const linkFile = internals.linkFile ?? publishCreateNoReplace
+   const inspectPublicationTarget = internals.inspectPublicationTarget
+     ?? (path => lstat(path, { bigint: true }))
    const removeStagingDir = internals.removeStagingDir
-     ?? (path => rm(path, { recursive: true, force: true }))
-   let handle: Awaited<ReturnType<typeof open>> | undefined
-@@ -576,11 +532,9 @@ export async function writeFileAtomic(
+@@ -576,6 +593,8 @@ export async function writeFileAtomic(
  
      throwIfAborted(signal, 'write')
      if (createIfAbsent !== undefined) {
--      try {
--        await linkFile(tempPath, absolutePath)
--      } catch (error: unknown) {
--        await throwGuardedCreateFailure(error, absolutePath, createIfAbsent.displayPath, inspectPublicationTarget)
--      }
-+      // Android：SELinux 禁 link()（硬链接），改用 rename() 原子发布；
-+      // 失去 no-replace 语义（并发创建会覆盖），单进程 App 下由上层 expected 守卫兜底
-+      await rename(tempPath, absolutePath)
-     } else if (platform === 'win32' && mode !== undefined) {
++      // Android (meow fork): the default publication is a probed rename —
++      // SELinux denies link(); injected linkFile seams keep upstream semantics.
        try {
-         await replaceFile(absolutePath, tempPath)
+         await linkFile(tempPath, absolutePath)
+       } catch (error: unknown) {
 diff --git a/packages/fs/fs-local/src/index.ts b/packages/fs/fs-local/src/index.ts
 index 661ef236b8..340bd83d30 100644
 --- a/packages/fs/fs-local/src/index.ts
@@ -403,10 +399,10 @@ index 661ef236b8..340bd83d30 100644
  
    override async writeText(
 diff --git a/packages/llm/llm-pi-ai/README.md b/packages/llm/llm-pi-ai/README.md
-index 6120f8d982..c0062bc2fd 100644
+index 19dbcfa90d..2787b8faba 100644
 --- a/packages/llm/llm-pi-ai/README.md
 +++ b/packages/llm/llm-pi-ai/README.md
-@@ -95,7 +95,7 @@ Request modalities resolve entry `input` → installed catalog entry → route `
+@@ -102,7 +102,7 @@ Request modalities resolve entry `input` → installed catalog entry → route `
  
  `[text]` is the absence of a declaration rather than a guess at the endpoint, which is why the fallback here is conservative where the capacity fallbacks are merely plausible. Nothing interrogates a gateway for what it accepts, and the two wrong answers do not cost the same: the harness refuses an image before it is attached when a model's modalities omit one, so under-claiming costs a refusal naming the model, while over-claiming admits an image the provider then rejects mid-turn — after the message is durable, which leaves the session repeating a request that cannot succeed.
  
@@ -415,7 +411,7 @@ index 6120f8d982..c0062bc2fd 100644
  
  `baseURL` sets the endpoint of every model on the route, so private proxies such as `https://proxy.example.com:8443` remain supported; a catalog route that omits it keeps each catalog model's own endpoint. Naming `api` on a catalog route repoints the whole route at that protocol, which is how a deployment moves a provider between, say, Responses and Chat Completions.
  
-@@ -105,7 +105,7 @@ Resolution still fails loud, naming the offending route and model, when a route
+@@ -112,7 +112,7 @@ Resolution still fails loud, naming the offending route and model, when a route
  
  The adapter reads its profiles through a thunk **once per operation** instead of freezing them at construction. The plugin registers the `llm-pi-ai` namespace on the optional `ctx.settings` seam with this same `Config` schema and its `cordis.yml` entry as the composition `base`, and because `providers` is a dict, the base and the user's `llm-pi-ai:` settings section merge **per provider**: a user can add a route, override one field of a composition route, or point a route at another proxy, all effective on the next request with no restart. Without a mounted settings service the entry config alone drives the adapter, unchanged.
  
@@ -424,7 +420,7 @@ index 6120f8d982..c0062bc2fd 100644
  
  The adapter exposes each configured route's models through `ctx.llm.listModels(provider)`. This is provider-neutral selector metadata read from the same pi-ai `Models` collection the request path uses, so discovery does not create a second model registry. `ctx.llm.resolveModelInfo(provider, model)` performs that exact descriptor lookup once and returns its identity, context window, configured output cap, and selectable thinking levels, keeping authoritative metadata on the route-owning adapter rather than its consumers. A model's **configured** `maxTokens` becomes the seam's `defaultMaxTokens`, so a request that names no output cap carries the one the deployment chose; a value inherited from the installed catalog is the model's output *capability* and never becomes a request default on its own.
  
-@@ -123,7 +123,7 @@ The plugin offers `ctx.llm.registerModelDiscovery('llm-pi-ai', …)`, which answ
+@@ -130,7 +130,7 @@ The plugin offers `ctx.llm.registerModelDiscovery('llm-pi-ai', …)`, which answ
  
  A request naming a route the **installed catalog ships is answered from that catalog**, with no network call: pi-ai's registry is the authoritative list for its own providers, and it carries the context windows and output caps a listing endpoint would not disclose. Such a route needs no `baseURL` at all. Only a route the catalog does not describe — a gateway, a self-hosted server — is interrogated over the wire, and one that names no endpoint is told to set one or enter its models by hand.
  
@@ -434,10 +430,10 @@ index 6120f8d982..c0062bc2fd 100644
  Interrogation reads `openai-completions` and `openai-responses`, whose `GET /models` shape with bearer auth is the one a gateway, a self-hosted server, and the official endpoints all agree on. Azure is excluded despite its OpenAI lineage — it authenticates with an `api-key` header and requires an `api-version` query — and Codex uses OAuth; every other protocol answers `DISCOVERY_UNSUPPORTED` so the surface falls back to hand-entry instead of an authentication failure being reported as a provider with no models. The `baseURL` is treated as a prefix rather than a URL to resolve against, so a deployment path such as `https://gateway.example/openai/v1` keeps its segments.
  
 diff --git a/packages/llm/llm-pi-ai/README.zh.md b/packages/llm/llm-pi-ai/README.zh.md
-index 4b47976c6c..1f44853248 100644
+index 334c6c3166..1b2a6c9e25 100644
 --- a/packages/llm/llm-pi-ai/README.zh.md
 +++ b/packages/llm/llm-pi-ai/README.zh.md
-@@ -124,7 +124,7 @@ profile 的 `models` 列表是*替换*该路由已安装 catalog，而不是扩
+@@ -131,7 +131,7 @@ pi-ai 依据提供方 id 与 baseURL 决定每个请求的形状：系统提示
  
  点名了**已安装 catalog 所提供路由**的请求，直接由该 catalog 作答，完全不联网：pi-ai 的注册表才是它自家提供方的权威列表，且携带列表端点不会公布的上下文窗口与输出上限。这类路由根本不需要 `baseURL`。只有 catalog 未描述的路由——网关、自建服务——才会经协议层询问；若它也没给端点，则会被告知去设置一个或手工填写模型。
  
@@ -447,10 +443,10 @@ index 4b47976c6c..1f44853248 100644
  询问只读 `openai-completions` 与 `openai-responses`，它们「`GET /models` + bearer 认证」的形状是网关、自建服务与官方端点三方一致认可的那一种。Azure 尽管出身 OpenAI 也被排除——它用 `api-key` 标头认证并要求 `api-version` 查询参数——Codex 则走 OAuth；其余协议一律以 `DISCOVERY_UNSUPPORTED` 回答，让界面回退到手工填写，而不是把认证失败报成一个没有模型的提供方。`baseURL` 按前缀而非待解析 URL 处理，因此 `https://gateway.example/openai/v1` 这类部署路径会保留其路径段。
  
 diff --git a/packages/llm/llm-pi-ai/src/catalog.ts b/packages/llm/llm-pi-ai/src/catalog.ts
-index 7a4ff7e8a2..193444571e 100644
+index 1e9b126dd5..4f6e81daf4 100644
 --- a/packages/llm/llm-pi-ai/src/catalog.ts
 +++ b/packages/llm/llm-pi-ai/src/catalog.ts
-@@ -480,10 +480,12 @@ export function resolveRouteModels(request: RouteCatalogRequest): RouteCatalog {
+@@ -816,10 +816,12 @@ export function resolveRouteModels(request: RouteCatalogRequest): RouteCatalog {
    const entries: readonly PiAiModelProfile[] = configured.length > 0
      ? configured
      : [...defaults.values()].map(model => ({ id: model.id, ...overrides[model.id] }))
@@ -465,13 +461,13 @@ index 7a4ff7e8a2..193444571e 100644
 +  // that declares compat switches beside no models is still refused by the
 +  // check below, which an empty list satisfies only vacuously.
    const routeApi = sharedCatalogApi(defaults)
-   const routeCompatDefined = request.compat?.thinkingFormat !== undefined
-     || request.compat?.supportsReasoningEffort !== undefined
+   // Vocabulary before protocols: a withheld or undeclared switch is refused
+   // wherever it is written, so it cannot look applied on a route whose models
 diff --git a/packages/llm/llm-pi-ai/src/config.ts b/packages/llm/llm-pi-ai/src/config.ts
-index 4e8e032df0..976a2cc007 100644
+index 62d49a58ee..e54384c36d 100644
 --- a/packages/llm/llm-pi-ai/src/config.ts
 +++ b/packages/llm/llm-pi-ai/src/config.ts
-@@ -347,6 +347,11 @@ export function resolveProfiles(
+@@ -415,6 +415,11 @@ export function resolveProfiles(
        defaultContextWindow: source.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW,
        defaultMaxTokens: source.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,
      })
@@ -484,10 +480,10 @@ index 4e8e032df0..976a2cc007 100644
      resolved.set(provider, {
        ...rest,
 diff --git a/packages/llm/llm-pi-ai/src/index.ts b/packages/llm/llm-pi-ai/src/index.ts
-index 2e550771fc..03c387b33a 100644
+index 846509f8c6..daff49680d 100644
 --- a/packages/llm/llm-pi-ai/src/index.ts
 +++ b/packages/llm/llm-pi-ai/src/index.ts
-@@ -229,13 +229,20 @@ export function apply(ctx: Context, config: Config): void {
+@@ -237,13 +237,20 @@ export function apply(ctx: Context, config: Config): void {
     * draft carries none. A route being declared for the first time names no
     * profile yet, and a profile that names no credential defers to pi-ai's own
     * discovery, so both answer `undefined` and the endpoint is asked
@@ -511,10 +507,10 @@ index 2e550771fc..03c387b33a 100644
    // Interrogating an endpoint is a configuration-time action over a draft, so
    // it is offered for the whole namespace rather than per route: the provider
 diff --git a/packages/llm/llm-pi-ai/tests/adapter.spec.ts b/packages/llm/llm-pi-ai/tests/adapter.spec.ts
-index 51ce347e9a..ff095182ab 100644
+index a36a180f7d..21d529b2fd 100644
 --- a/packages/llm/llm-pi-ai/tests/adapter.spec.ts
 +++ b/packages/llm/llm-pi-ai/tests/adapter.spec.ts
-@@ -701,8 +701,9 @@ describe('provider profile lifecycle', () => {
+@@ -745,8 +745,9 @@ describe('provider profile lifecycle', () => {
      expect(resolveProfiles(undefined).size).toBe(0)
      expect(() => resolveProfiles({ '': {} })).toThrow(/non-empty/)
      // A route the installed catalog does not ship is allowed, but it has no
@@ -559,10 +555,10 @@ index 18793565d7..6d3fe71914 100644
      // The catalog answers before any endpoint is asked, so a route whose
      // profile names a credential that is not set must still answer rather than
 diff --git a/packages/llm/llm-pi-ai/tests/dynamic-config.spec.ts b/packages/llm/llm-pi-ai/tests/dynamic-config.spec.ts
-index 1019354156..55120715fd 100644
+index 3decff3749..1ba4a7cd69 100644
 --- a/packages/llm/llm-pi-ai/tests/dynamic-config.spec.ts
 +++ b/packages/llm/llm-pi-ai/tests/dynamic-config.spec.ts
-@@ -156,16 +156,16 @@ describe('request-level dynamic profiles', () => {
+@@ -182,16 +182,16 @@ describe('request-level dynamic profiles', () => {
      expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['openai'])
    })
  
@@ -627,6 +623,141 @@ index 6c37c5b794..719ae8a0a7 100644
    }
  
    /**
+diff --git a/packages/subprocess/subprocess-local/src/windows-inspector.ts b/packages/subprocess/subprocess-local/src/windows-inspector.ts
+index 7280cbb9ee..9343dad316 100644
+--- a/packages/subprocess/subprocess-local/src/windows-inspector.ts
++++ b/packages/subprocess/subprocess-local/src/windows-inspector.ts
+@@ -10,7 +10,20 @@
+  */
+ 
+ import { spawnSync } from 'node:child_process'
+-import koffi from 'koffi'
++import { createRequire } from 'node:module'
++import type koffi from 'koffi'
++
++let cachedKoffi: typeof koffi | undefined
++/**
++ * Lazy koffi accessor: the module top level of `koffi` resolves its native
++ * binding immediately, and no prebuilt exists for Android/bionic arm64, so a
++ * static import would break plugin load on every platform that ships this
++ * package (meow fork, 2026-08-21). Resolving here defers that load to the
++ * first Win32 inspection, which only happens on Windows.
++ */
++function koffiRef(): typeof koffi {
++  return cachedKoffi ??= createRequire(import.meta.url)('koffi')
++}
+ import type { SubprocessTerminalSignal } from '@deepseek-ai/dsh-subprocess'
+ import type { ProcessIdentity, ProcessInspector } from './process-inspector.ts'
+ 
+@@ -171,7 +184,12 @@ interface Win32Bindings {
+   closeHandle(handle: NativePtr): number
+ }
+ 
+-const PVOID: ReturnType<typeof koffi.pointer> = koffi.pointer('void')
++let cachedPvVoid: ReturnType<typeof koffi.pointer> | undefined
++/** Lazy void-pointer type: see koffiRef for why this is not a module constant. */
++function pvVoid(): ReturnType<typeof koffi.pointer> {
++  if (cachedPvVoid === undefined) cachedPvVoid = koffiRef().pointer('void')
++  return cachedPvVoid
++}
+ 
+ /**
+  * Resolve the koffi Win32 struct types once. Registration is lazy and cached
+@@ -182,20 +200,20 @@ const PVOID: ReturnType<typeof koffi.pointer> = koffi.pointer('void')
+ function win32Structs(): { PROCESSENTRY32W: ReturnType<typeof koffi.struct>; FILETIME: ReturnType<typeof koffi.struct> } {
+   if (cachedStructs !== undefined) return cachedStructs
+   // koffi PROCESSENTRY32W layout (tlhelp32.h); the size assert pins the x64 layout.
+-  const PROCESSENTRY32W = koffi.struct('PROCESSENTRY32W', {
++  const PROCESSENTRY32W = koffiRef().struct('PROCESSENTRY32W', {
+     dwSize: 'uint32',
+     cntUsage: 'uint32',
+     th32ProcessID: 'uint32',
+-    th32DefaultHeapID: PVOID,
++    th32DefaultHeapID: pvVoid(),
+     th32ModuleID: 'uint32',
+     cCntThreads: 'uint32',
+     th32ParentProcessID: 'uint32',
+     pcPriClassBase: 'int32',
+     dwFlags: 'uint32',
+-    szExeFile: koffi.array('char16', 260),
++    szExeFile: koffiRef().array('char16', 260),
+   })
+   // koffi FILETIME layout (minwinbase.h): two 32-bit halves of the 64-bit timestamp.
+-  const FILETIME = koffi.struct('FILETIME', {
++  const FILETIME = koffiRef().struct('FILETIME', {
+     dwLowDateTime: 'uint32',
+     dwHighDateTime: 'uint32',
+   })
+@@ -225,26 +243,26 @@ let cachedBindings: Win32Bindings | undefined
+ function win32Bindings(): Win32Bindings {
+   if (cachedBindings !== undefined) return cachedBindings
+   const { PROCESSENTRY32W, FILETIME } = win32Structs()
+-  const kernel32 = koffi.load('kernel32.dll')
++  const kernel32 = koffiRef().load('kernel32.dll')
+   const bind = (
+     name: string,
+     result: ReturnType<typeof koffi.pointer> | string,
+     args: Array<ReturnType<typeof koffi.pointer> | string>,
+   ): unknown => kernel32.func('__stdcall', name, result, args)
+   cachedBindings = {
+-    createToolhelp32Snapshot: bind('CreateToolhelp32Snapshot', PVOID, ['uint32', 'uint32']),
+-    process32FirstW: bind('Process32FirstW', 'int', [PVOID, koffi.pointer(PROCESSENTRY32W)]),
+-    process32NextW: bind('Process32NextW', 'int', [PVOID, koffi.pointer(PROCESSENTRY32W)]),
+-    openProcess: bind('OpenProcess', PVOID, ['uint32', 'int', 'uint32']),
++    createToolhelp32Snapshot: bind('CreateToolhelp32Snapshot', pvVoid(), ['uint32', 'uint32']),
++    process32FirstW: bind('Process32FirstW', 'int', [pvVoid(), koffiRef().pointer(PROCESSENTRY32W)]),
++    process32NextW: bind('Process32NextW', 'int', [pvVoid(), koffiRef().pointer(PROCESSENTRY32W)]),
++    openProcess: bind('OpenProcess', pvVoid(), ['uint32', 'int', 'uint32']),
+     getProcessTimes: bind('GetProcessTimes', 'int', [
+-      PVOID,
+-      koffi.pointer(FILETIME),
+-      koffi.pointer(FILETIME),
+-      koffi.pointer(FILETIME),
+-      koffi.pointer(FILETIME),
++      pvVoid(),
++      koffiRef().pointer(FILETIME),
++      koffiRef().pointer(FILETIME),
++      koffiRef().pointer(FILETIME),
++      koffiRef().pointer(FILETIME),
+     ]),
+-    waitForSingleObject: bind('WaitForSingleObject', 'uint32', [PVOID, 'uint32']),
+-    closeHandle: bind('CloseHandle', 'int', [PVOID]),
++    waitForSingleObject: bind('WaitForSingleObject', 'uint32', [pvVoid(), 'uint32']),
++    closeHandle: bind('CloseHandle', 'int', [pvVoid()]),
+   } as unknown as Win32Bindings
+   return cachedBindings
+ }
+@@ -257,7 +275,7 @@ function win32Bindings(): Win32Bindings {
+  * @returns the branded allocation pointer.
+  */
+ function allocNative(type: Parameters<typeof koffi.alloc>[0], count: number): NativePtr {
+-  const value: unknown = koffi.alloc(type, count)
++  const value: unknown = koffiRef().alloc(type, count)
+   return value as NativePtr
+ }
+ 
+@@ -271,10 +289,10 @@ function snapshotWindowsProcesses(bindings: Win32Bindings): ProcessEntry[] {
+   const entries: ProcessEntry[] = []
+   try {
+     const entry = allocNative(PROCESSENTRY32W, 1)
+-    koffi.encode(entry, 'uint32', PROCESSENTRY32W.size)
++    koffiRef().encode(entry, 'uint32', PROCESSENTRY32W.size)
+     let ok = bindings.process32FirstW(snapshot, entry)
+     while (ok !== 0) {
+-      const record = koffi.decode(entry, PROCESSENTRY32W) as {
++      const record = koffiRef().decode(entry, PROCESSENTRY32W) as {
+         th32ProcessID: number
+         th32ParentProcessID: number
+       }
+@@ -301,7 +319,7 @@ function windowsProcessState(bindings: Win32Bindings, pid: number): WindowsProce
+        cannot be staged deterministically; the absent-process path is covered and the caller
+        treats undefined as a detector miss. */
+     if (bindings.getProcessTimes(handle, creation, exit, kernel, user) === 0) return undefined
+-    const record = koffi.decode(creation, FILETIME) as { dwLowDateTime: number; dwHighDateTime: number }
++    const record = koffiRef().decode(creation, FILETIME) as { dwLowDateTime: number; dwHighDateTime: number }
+     const wait = bindings.waitForSingleObject(handle, 0)
+     /* v8 ignore next -- an opened process handle has exactly one of these two
+        zero-time wait states; an unexpected Win32 failure is an unreadable process. */
 diff --git a/packages/web/web-search-tavily/README.md b/packages/web/web-search-tavily/README.md
 new file mode 100755
 index 0000000000..da0c016997
@@ -1146,10 +1277,10 @@ index 0000000000..4256158997
 +}
 diff --git a/packages/web/web-search-tavily/tests/redirect.spec.ts b/packages/web/web-search-tavily/tests/redirect.spec.ts
 new file mode 100755
-index 0000000000..52f8fcaaac
+index 0000000000..fb3fdbc91b
 --- /dev/null
 +++ b/packages/web/web-search-tavily/tests/redirect.spec.ts
-@@ -0,0 +1,124 @@
+@@ -0,0 +1,127 @@
 +/**
 + * Real HTTP coverage proves whether native `fetch` contacts a cross-origin `Location`; mocked
 + * request-init assertions alone cannot observe that boundary.
@@ -1214,7 +1345,7 @@ index 0000000000..52f8fcaaac
 +    expect(targetRequests).toHaveLength(0)
 +  })
 +
-+  it('shows default 307 following forwards the custom credential and POST body', async () => {
++  it('shows the platform default 307 following strips the credential but still forwards the POST body', async () => {
 +    targetRequests.length = 0
 +    const body = JSON.stringify({ query: TEST_QUERY })
 +    await fetch(`${redirectOrigin}/307`, {
@@ -1228,7 +1359,10 @@ index 0000000000..52f8fcaaac
 +
 +    expect(targetRequests).toHaveLength(1)
 +    expect(targetRequests[0]).toMatchObject({ method: 'POST', body })
-+    expect(targetRequests[0]?.headers['authorization']).toBe(`Bearer ${TEST_API_KEY}`)
++    // Newer undici strips Authorization on cross-origin redirects (credential-leak
++    // hardening) yet still resends the body — so rejecting redirects outright, as
++    // the provider does above, remains the only posture that protects both.
++    expect(targetRequests[0]?.headers['authorization']).toBeUndefined()
 +  })
 +})
 +
@@ -1608,7 +1742,7 @@ index 0000000000..b1cb44f9cc
 +  ]
 +}
 diff --git a/pnpm-workspace.yaml b/pnpm-workspace.yaml
-index e8d8ee5bec..5a3b235490 100644
+index ec6cfd3af9..1dbcea0360 100644
 --- a/pnpm-workspace.yaml
 +++ b/pnpm-workspace.yaml
 @@ -19,6 +19,8 @@ packages:
@@ -1620,19 +1754,11 @@ index e8d8ee5bec..5a3b235490 100644
  
  # Vendored framework packages keep their upstream semver ranges, while local
  # builds must resolve those matching names to this workspace's pinned sources.
-@@ -67,6 +69,7 @@ minimumReleaseAgeExclude:
-   - node-addon-require-builtin-win32-ia32-msvc@0.1.4
-   - node-addon-require-builtin-win32-x64-msvc@0.1.4
-   - node-addon-require-builtin@0.1.4
-+  - '@smithy/core@3.33.1'
- 
- patchedDependencies:
-   node-pty@1.1.0: patches/node-pty@1.1.0.patch
 diff --git a/tsconfig.host.json b/tsconfig.host.json
-index 459036247a..d8f7eb8207 100644
+index f37b98ea57..fc51a17aae 100644
 --- a/tsconfig.host.json
 +++ b/tsconfig.host.json
-@@ -229,6 +229,7 @@
+@@ -241,6 +241,7 @@
      { "path": "./packages/web/web-search-exa" },
      { "path": "./packages/web/web-search-perplexity" },
      { "path": "./packages/web/web-search-deepseek" },
@@ -1640,6 +1766,3 @@ index 459036247a..d8f7eb8207 100644
      { "path": "./packages/web/web-fetch-http" },
      { "path": "./packages/web/tool-web" },
      { "path": "./packages/spill/spill" },
--- 
-2.43.0
-
