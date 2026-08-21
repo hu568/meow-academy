@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * terminal-host —— 喵学堂真终端宿主（node 侧）。
+ * terminal-host —— 喵仓真终端宿主（node 侧）。
  *
  * 用 node-pty（Android fork @mmmbuto/node-pty-android-arm64）fork 一个持久 bash（真终端），
  * 挂到 PTY 上；通过本地 unix socket 双向转发 PTY 裸字节流给 Kotlin 终端页；

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">喵学堂</string>
+    <string name="app_name">喵仓</string>
 
     <!-- 底部导航 -->
     <string name="tab_chat">聊天</string>

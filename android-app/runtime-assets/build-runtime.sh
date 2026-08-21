@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# build-runtime.sh —— 打包喵学堂运行时（DSH 版，阶段 1）
+# build-runtime.sh —— 打包喵仓运行时（DSH 版，阶段 1）
 #
 # 在真机 Termux 上运行（需 nodejs-lts + binutils + bash）：
 #   1. 拷贝 node + bash 二进制及其 Termux 动态库（cp -L 解引用 symlink）

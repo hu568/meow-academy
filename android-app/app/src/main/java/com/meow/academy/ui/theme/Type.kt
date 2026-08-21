@@ -5,7 +5,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.sp
 
 /**
- * 喵学堂全局排版规范（Material You 细节打磨）。
+ * 喵仓全局排版规范（Material You 细节打磨）。
  *
  * 以 Material 3 默认 Typography 为基底（display/headline/title/body/label 全套层级
  * 均使用 M3 规范字重与字号），仅微调正文行高让长文本阅读更透气。

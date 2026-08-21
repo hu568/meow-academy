@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 喵学堂 WSL 构建环境（source 本文件后即可构建）：
+# 喵仓 WSL 构建环境（source 本文件后即可构建）：
 #   source scripts/dev-env-wsl.sh
 # 然后：cd android-app && ./gradlew assembleDebug
 #

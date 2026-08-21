@@ -15,7 +15,7 @@ import com.meow.academy.data.settings.DEFAULT_THEME_SEED_ARGB
 import com.meow.academy.data.settings.ThemeMode
 
 /**
- * 喵学堂主题入口。
+ * 喵仓主题入口。
  *
  * 四种模式：
  * - [ThemeMode.SYSTEM] 跟随系统深浅；Android 12+ 自动动态取色（Material You）

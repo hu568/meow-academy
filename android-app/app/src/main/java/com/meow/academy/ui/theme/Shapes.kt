@@ -5,7 +5,7 @@ import androidx.compose.material3.Shapes
 import androidx.compose.ui.unit.dp
 
 /**
- * 喵学堂全局圆角规范（Material You 风格，比 M3 默认更圆润）。
+ * 喵仓全局圆角规范（Material You 风格，比 M3 默认更圆润）。
  *
  * - extraSmall 6dp：小胶囊/状态点
  * - small      10dp：输入框、小型组件

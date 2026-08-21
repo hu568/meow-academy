@@ -28,7 +28,7 @@ class SettingsRepository(private val context: Context) {
 
     private object Keys {
         val THEME_MODE = stringPreferencesKey("theme_mode")
-        // 自定义主题的种子色（ARGB Long，0..0xFFFFFFFF；默认喵学堂粉紫）
+        // 自定义主题的种子色（ARGB Long，0..0xFFFFFFFF；默认喵仓粉紫）
         val THEME_SEED_COLOR = longPreferencesKey("theme_seed_color")
         // 聊天底图："none" / "preset:<id>" / "file:<absPath>"（见 ChatBackgrounds.kt）
         val CHAT_BACKGROUND = stringPreferencesKey("chat_background")
@@ -54,7 +54,7 @@ class SettingsRepository(private val context: Context) {
             ?: ThemeMode.SYSTEM
     }
 
-    /** 自定义主题种子色（ARGB Long，仅 [ThemeMode.CUSTOM] 使用；默认喵学堂粉紫） */
+    /** 自定义主题种子色（ARGB Long，仅 [ThemeMode.CUSTOM] 使用；默认喵仓粉紫） */
     val themeSeedColor: Flow<Long> = context.settingsDataStore.data.map { prefs ->
         prefs[Keys.THEME_SEED_COLOR] ?: DEFAULT_THEME_SEED_ARGB
     }

@@ -1,5 +1,5 @@
 /**
- * meow-jsonrpc —— 喵学堂自定义 JSON-RPC 插件。
+ * meow-jsonrpc —— 喵仓自定义 JSON-RPC 插件。
  *
  * 不 fork DSH 源码：复用官方导出的 HarnessSdkJsonRpcServer（标准方法
  * initialize / session/prompt / shutdown 与 session.event / session.status 通知）
@@ -27,7 +27,7 @@ export const name = 'meow-jsonrpc'
 /** 需要 agents（cancel/官方 server 建会话）与 shell（终端命令）两个服务 */
 export const inject = ['agents', 'shell']
 
-/** 插件配置：全部可选，缺省值即喵学堂部署形态 */
+/** 插件配置：全部可选，缺省值即喵仓部署形态 */
 export const Config = z.object({
   /** max-token 结束的回合按成功上报（与官方部署一致：手机上宁可按成功展示） */
   maxTokensAsSuccess: z.boolean().default(true),
@@ -82,7 +82,7 @@ async function clampReasoningEffort(llm, provider, model, effort) {
 }
 
 /**
- * 喵学堂版 SDK server：官方标准方法全部走 super，仅扩展三个自定义方法。
+ * 喵仓版 SDK server：官方标准方法全部走 super，仅扩展三个自定义方法。
  */
 class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
   /** @param ctx 启动后的 Cordis 上下文（提供 agents / shell 服务） */

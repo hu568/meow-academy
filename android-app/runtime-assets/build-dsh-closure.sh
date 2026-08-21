@@ -57,7 +57,7 @@ if command -v npm >/dev/null 2>&1; then
     echo "  ⚠ node-prune 失败/超时，继续（体积会偏大）"
 fi
 
-# ── 3. 拷入喵学堂组合（cordis.yml + meow-extensions）──
+# ── 3. 拷入喵仓组合（cordis.yml + meow-extensions）──
 echo "» 拷入 dsh/ 组合…"
 cp -r "$DSH_DIR" "$DEPLOY_DIR/dsh"
 
