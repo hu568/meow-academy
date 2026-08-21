@@ -1,6 +1,6 @@
 # 内置 DSH 能力探讨笔记（嵌入式 DSH 自举 / 插件化 / 模式创作）
 
-> 本文档是 2026-08 讨论记录：喵学堂 App 内置的 DSH 后端，
+> 本文档是 2026-08 讨论记录：喵仓 App 内置的 DSH 后端，
 > 与 PC 上完整版 DSH 在「插件化 / 自打包 runtime / 自创模式」三个维度上的能力边界。
 
 ## 1. 内置 DSH 是怎么跑的（现状）
@@ -41,7 +41,7 @@
 
 - PC 上的「记忆模式」是主人用「创造模式」（=`cordis` agent preset）创作的：依赖
   `dsh-agent-presets`（复制/挂载/校验）+ Web UI + 会话内检查工具，注入 SOUL.md / USER.md / MEMORY.md。
-- 喵学堂闭包清单 **没有 `dsh-agent-presets`**，Web UI 全家桶未打包；
+- 喵仓闭包清单 **没有 `dsh-agent-presets`**，Web UI 全家桶未打包；
   `cordis.yml` 中 agent-spine-demo `skills: enabled: false`，也未挂 `agent-instructions` 行。
 - 因此内置 DSH 是「能跑 Agent」，不是「能造 Agent 的 Agent」——不能复刻创造模式的创作-挂载流程。
 - 但它同一引擎自带 `dsh-agent-instructions`、文件工具、bash、技能加载器、SQLite 会话记忆，

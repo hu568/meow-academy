@@ -1,4 +1,4 @@
-// 喵学堂 MeowAcademy · 根构建脚本
+// 喵仓 MeowAcademy · 根构建脚本
 plugins {
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.kotlin.android) apply false

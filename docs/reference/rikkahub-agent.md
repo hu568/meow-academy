@@ -1,6 +1,6 @@
 # 🐈 RikkaHub 移动端 Agent 框架参考
 
-> 喵学堂安卓端设计蓝本 | 整理：樱茈 | 2026-08-10
+> 喵仓安卓端设计蓝本 | 整理：樱茈 | 2026-08-10
 > 参考源码: `github.com/rikkahub/rikkahub` (本体) + `wanxiaoT/rikkahubx` (带知识库分支) + `ExTV/rikkahub-agent`
 
 ---
@@ -18,7 +18,7 @@
 | Agent | proot Linux 工作区 + 工具系统 + MCP |
 | 后台 | WorkManager / AlarmManager |
 
-## 二、分层架构（喵学堂照搬）
+## 二、分层架构（喵仓照搬）
 
 ```
 ui/                        # UI 层
@@ -194,9 +194,9 @@ private suspend fun generateEmbeddings(provider, texts, model): List<FloatArray>
 - 通知读取/摘要/转发（白名单制）
 - Tasker / ADB 通过 External Automation Intent API 派发任务
 
-## 五、映射到喵学堂
+## 五、映射到喵仓
 
-| rikkahub 特性 | 喵学堂落地 |
+| rikkahub 特性 | 喵仓落地 |
 |---|---|
 | Kotlin + Compose + Material You | ✅ 直接采用 |
 | KnowledgeService + DAO + 模型 | ✅ 照搬(精简为 md 优先) |

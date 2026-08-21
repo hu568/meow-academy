@@ -70,11 +70,13 @@ app/src/main/java/com/meow/academy/
 | `MessageBubbles.kt` | CSS 组件 | 消息气泡家族：用户/助手气泡、思考卡片、工具调用组与卡片 |
 | `ChatInputBar.kt` | CSS 组件 | 输入栏 + 工具栏（provider/模型/思考强度下拉 + 联网开关 + 上传） |
 | `SessionDrawer.kt` | CSS 组件 | 会话抽屉 + 重命名/删除对话框 |
-| `MarkdownText.kt` | CSS 组件 | Markwon Markdown 渲染（可复用组件；流式走块级半增量渲染） |
+| `MarkdownText.kt` | CSS 组件 | Markwon Markdown 渲染（可复用组件；流式走块级半增量渲染；收集 appconfig 渲染配置并随主题/配置重建） |
 | `MarkdownStreaming.kt` | JS 纯函数 | 流式块拆分器：稳定块 + 活动块（splitStreamingBlocks / isTableDelimiter） |
 | `DollarMath.kt` | JS 纯函数 | 单 `$…$` 行内公式匹配（matchDollarMath，供 DollarMathInlineProcessor 调用） |
 | `StreamingMarkdownRenderer.kt` | JS 渲染缓存 | 稳定块 Spanned LRU 缓存 + 稳定前缀复用 + 活动块重渲染 |
-| `MarkdownMarkwon.kt` | CSS 构建器 | Markwon 全插件实例（表格/链接/代码着色 Prism4j/LaTeX 公式）+ PrismBundle 声明 |
+| `MarkdownMarkwon.kt` | CSS 构建器 | Markwon 全插件实例（表格/链接/代码着色 Prism4j/LaTeX 公式）+ 公式块圆角背景配置 + PrismBundle 声明 |
+| `MarkdownConfigPlugin.kt` | CSS 构建器 | 把 MarkdownConfig 应用到 Markwon 主题（· 大小/颜色、引用/链接/标题/分割线）+ 注册圆角代码块 Span 工厂 |
+| `RoundedCodeBlockSpan.kt` | CSS 组件 | 圆角代码块 Span（整块一个圆角，不是每行）+ SpanFactory |
 
 ### ui/settings/ — 设置页 + 模型管理页
 
@@ -104,7 +106,7 @@ app/src/main/java/com/meow/academy/
 ### data/ 与 runtime/（未拆分，保持单职责）
 
 - `data/chat/` — Room：`ChatDatabase` / `ChatDao` / `ChatEntities`（会话+消息，`segmentsJson` 存步骤序列）
-- `data/settings/` — DataStore：`SettingsRepository`（主题/默认首页/常驻/模型配置）+ `SettingsEnums`
+- `data/settings/` — DataStore：`SettingsRepository`（主题/默认首页/常驻/模型配置）+ `SettingsEnums` + `MarkdownConfig`（JS 渲染配置数据类/解析器）+ `MarkdownConfigRepository`（Rhino 求值 appconfig/markdown-config.js + FileObserver 热更）
 - `data/model/` — 模型目录缓存（前后端解耦）：`ModelCatalogRepository`（DataStore 存 settingsDescribe result JSON）+ `ModelCatalog`（ProviderProfile/ModelProfile 模型与解析）
 - `runtime/` — `RuntimeManager`（状态机 + Mutex）、`DshRuntimeService`（前台服务 + initialize 握手）、`DshProcessLauncher`（linker64 拉起）、`RuntimeExtractor`（解压 assets）、`DshKeepAliveWorker`（心跳 ping）、`AppLifecycleObserver`
 
@@ -130,6 +132,11 @@ ModelManageScreen ──▶ ModelManageViewModel ──▶ DshRpcClient(llm/sett
         │                        │
         ├─ ProviderDetailScreen  └─ ModelManageModels(共享数据)
         └─ ProviderForms/ModelListTab/ModelManageDialogs
+
+Markdown 渲染配置链路（2026-08-21）：
+appconfig/markdown-config.js ──▶ MarkdownConfigRepository(Rhino 求值 + FileObserver 热更)
+        ──▶ StateFlow<MarkdownConfigRaw> ──▶ MarkdownText(resolveMarkdownConfig 按主题解析)
+        ──▶ buildMarkwon(MarkdownConfigPlugin + 公式块圆角配置) ──▶ Markwon 渲染
 ```
 
 ## 五、给未来开发者的扩展指引

@@ -1,4 +1,4 @@
-# 🐾 喵学堂 MeowAcademy · 项目开发计划
+# 🐾 喵仓 MeowAcademy · 项目开发计划
 
 > 安卓辅助学习软件 | DeepSeek Harness 智能后端（原 Pi Agent，已切换）| md 知识库 + SQLite Wiki + RAG 向量检索
 > 计划制定：樱茈猫娘助手 | 2026-08-10
@@ -11,12 +11,12 @@
 
 ## 一、项目定位
 
-**喵学堂**是一款安卓辅助学习软件：把 Markdown 笔记变成"会聊天、会查资料"的智能学习助手。
+**喵仓**是一款安卓辅助学习软件：把 Markdown 笔记变成"会聊天、会查资料"的智能学习助手。
 
 - 📁 **知识存储**：全部用 Markdown 文件（主人最爱）
 - 🗄️ **Wiki 索引**：SQLite 存结构化索引（标题/标签/链接）
 - 🔍 **RAG 检索**：向量数据库检索知识片段（参考 Cherry Studio 实现）
-- 🤖 **智能后端**：DeepSeek Harness（DSH jsonrpc 运行时 + 喵学堂 cordis.yml 组合，见 M2.8）
+- 🤖 **智能后端**：DeepSeek Harness（DSH jsonrpc 运行时 + 喵仓 cordis.yml 组合，见 M2.8）
 - 📱 **UI 参考**：RikkaHub（Kotlin + Jetpack Compose + Material You）
 
 ## 二、功能清单
@@ -105,7 +105,7 @@ flowchart TD
 | 数据 | Room (SQLite) | Wiki 索引 + 向量 JSON 存储 |
 | RAG | Kotlin 实现（暂定） | 分块(300字) → 调 embedding → 余弦检索 top-k |
 | 网络 | 进程内 JSON-RPC 管道 | DshRpcClient ↔ DSH jsonrpc（非 HTTP） |
-| 本地运行时 | Termux runtime + Node.js + DSH closure（pnpm deploy）+ 喵学堂 cordis.yml | Agent 编排本地运行（Cordis 插件化组合），模型走云端 API |
+| 本地运行时 | Termux runtime + Node.js + DSH closure（pnpm deploy）+ 喵仓 cordis.yml | Agent 编排本地运行（Cordis 插件化组合），模型走云端 API |
 | 驻留 | 三档常驻开关 + 前台服务 + WorkManager | 关闭 / 有限保活 / 一直常驻 |
 | 模型 | DeepSeek v4-flash | 问答（支持 reasoning） |
 | 嵌入 | SiliconFlow bge-m3 | 免费向量化（1024维） |

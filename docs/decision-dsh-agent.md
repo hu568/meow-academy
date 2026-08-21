@@ -46,7 +46,7 @@ jsonrpc 协议的事件流（`session.event` + `session.status`）与 pi 的 mes
   │ 内置 Termux runtime（meow-runtime/，打包逻辑复用）│
   │  ├─ bin/node（Termux node ≥22.19，真机 26.4 ✓）│
   │  ├─ lib/…  DSH deploy closure（精简后 ~15MB 解压）│
-  │  ├─ dsh/cordis.yml          喵学堂组合（插件清单）  │
+  │  ├─ dsh/cordis.yml          喵仓组合（插件清单）  │
   │  ├─ dsh/meow-extensions/    自定义插件（相对路径）  │
   │  │   ├─ cancel（session/cancel → agent.cancel）│
   │  │   └─ bash（session/bash → shell 执行）      │
@@ -57,7 +57,7 @@ jsonrpc 协议的事件流（`session.event` + `session.status`）与 pi 的 mes
                  DeepSeek API（deepseek-v4-flash）
 ```
 
-**喵学堂 cordis.yml 组合**（参考 `examples/jsonrpc-agent/cordis.yml` + `minimal.cordis.yml` 精简）：
+**喵仓 cordis.yml 组合**（参考 `examples/jsonrpc-agent/cordis.yml` + `minimal.cordis.yml` 精简）：
 
 - `dsh-sdk-jsonrpc-server`（协议服务器）＋ `meow-extensions`（自定义 cancel/bash）
 - `dsh-llm-deepseek`（`DEEPSEEK_API_KEY` / 可选 `DEEPSEEK_BASE_URL`；模型 deepseek-v4-flash）
@@ -76,7 +76,7 @@ jsonrpc 协议的事件流（`session.event` + `session.status`）与 pi 的 mes
 | 组合 | 解压 | gzip 后（runtime.bin 同款单流压缩） |
 |---|---|---|
 | 官方完整 closure（含 web/搜索/subagent/持久终端/pi-ai 全链） | 165.8 MB | — |
-| **喵学堂清单实测（2026-08-14 复测，deploy/meow-runtime）**：去 web、搜索、ACP、subagent 驱动、hooks、plan/goal 命令、workflow、持久终端（node-pty）、**sandbox 原生模块（landlock）**、sqlite/query、lsp/mcp、pi-ai SDK 链 | **78.6 MB** | **19.1 MB**（node_modules+dsh 单流 gzip；修复逃逸链接后、node-prune 前） |
+| **喵仓清单实测（2026-08-14 复测，deploy/meow-runtime）**：去 web、搜索、ACP、subagent 驱动、hooks、plan/goal 命令、workflow、持久终端（node-pty）、**sandbox 原生模块（landlock）**、sqlite/query、lsp/mcp、pi-ai SDK 链 | **78.6 MB** | **19.1 MB**（node_modules+dsh 单流 gzip；修复逃逸链接后、node-prune 前） |
 
 **大头明细**（砍掉的部分）：
 
@@ -110,7 +110,7 @@ jsonrpc 协议的事件流（`session.event` + `session.status`）与 pi 的 mes
 
 ### 阶段 0：PC PoC（✅ 全部完成，2026-08-14）
 
-1. ✅ **体积实测**：见 §三。喵学堂清单 `deploy/meow-runtime` 复测 **78.6MB 解压 / 19.1MB gzip**。
+1. ✅ **体积实测**：见 §三。喵仓清单 `deploy/meow-runtime` 复测 **78.6MB 解压 / 19.1MB gzip**。
 2. ✅ **npm 发布确认**：包已发布但版本混杂（jsonrpc-server 0.0.1-rc.5 / app-boot 0.1.0-rc.6 / llm-deepseek 0.0.1-rc.1 …），不可靠 → **采用 checkout `pnpm deploy` 路径**（验证可行，且新发现必须 `--config.link-workspace-packages=false` 让 workspace 包按 files 字段真实拷贝）。
 3. ✅ **协议验证**（`.tmp/dsh-poc/client.mjs`，全绿）：initialize / session/prompt 逐 token 流式（text-delta+reasoning-delta）/ turn/end reason / session.status idle / 工具调用卡片（tool/call+tool/result）/ shutdown。
 4. ✅ **插件验证**：meow-extensions（meow-jsonrpc 插件）实现并验证 `session/cancel`（turn/end reason=aborted ✓）、`session/bash`（流式增量 session.bashOutput + exitCode ✓）、`session/bashCancel` ✓、`ping` ✓；「增删插件」流程验证通过（加 hello 插件条目 → 重启出现标记；删条目 → 标记消失）。
@@ -154,7 +154,7 @@ jsonrpc 协议的事件流（`session.event` + `session.status`）与 pi 的 mes
 | `android-app/runtime-assets/build-runtime.sh` | 改：node+bash 二进制、DSH 闭包解包、CA/DNS shim 保留 | ✅ |
 | `android-app/runtime-assets/build-dsh-closure.sh` | 新增：PC 侧一键生成闭包（deploy → 链接归一化 → node-prune → tar.gz） | ✅ |
 | `android-app/runtime-assets/tools/fix-closure-links.mjs` | 新增：闭包链接归一化（逃逸链接 → 闭包内相对链接） | ✅ |
-| `android-app/runtime-assets/dsh/cordis.yml` | 新增：喵学堂组合（插件清单） | ✅ |
+| `android-app/runtime-assets/dsh/cordis.yml` | 新增：喵仓组合（插件清单） | ✅ |
 | `android-app/runtime-assets/dsh/meow-extensions/meow-jsonrpc.js` | 新增：cancel/bash/bashCancel/ping/resume 插件（相对路径引用） | ✅ |
 | `android-app/app/src/main/assets/runtime.bin` | 重新生成（gitignore；真机 Termux 步骤） | ⏳ 待真机 |
 | `rpc/RpcModels.kt` | 重写 → `rpc/DshProtocol.kt`（旧文件删除） | ✅ |

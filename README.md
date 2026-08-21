@@ -1,11 +1,11 @@
-# 🐾 喵学堂 MeowAcademy
+# 🐾 喵仓 MeowAcademy
 
 > 把 Markdown 笔记变成"会聊天、会查资料"的安卓辅助学习软件。
 > **md 知识库 + SQLite Wiki + RAG 向量检索 + DeepSeek Harness（DSH）智能后端**
 
 | 状态 | 信息 |
 | --- | --- |
-| 最新版本 | `0.1.0`（debug） |
+| 最新版本 | `0.2.0`（debug） |
 | 平台 | Android 8.0+（minSdk 26 / targetSdk 34） |
 | 技术栈 | Kotlin · Jetpack Compose · Material 3 · Room · DSH JSON-RPC |
 | 后端 | 内置 DeepSeek Harness 运行时（真终端 PTY + 本地 socket） |
@@ -23,7 +23,7 @@
 - ⚙️ **模型管理**：运行时切换模型、思考强度（off / high / max）、可配置自定义 Provider（OpenAI 兼容格式）
 - 🔋 **三档常驻策略**：关闭 / 有限时间保活 / 一直常驻（前台服务 + WorkManager JSON-RPC 心跳）
 - 🎨 **Material You**：浅色 / 深色 / 跟随系统，动态取色
-- 📖 **Markdown 渲染**：Markwon（表格 / 图片 / 链接）
+- 📖 **Markdown 渲染**：Markwon（表格 / 图片 / LaTeX 公式 / 代码着色），**JS 驱动外观**——`appconfig/markdown-config.js` 可热更公式块圆角背景、`-` 的 · 大小、代码块圆角等，**AI（DSH）改 JS 即可实时改前端效果**
 
 > 📁 知识库（md 导入 + SQLite Wiki + RAG 检索）在后续里程碑规划中，见 [路线图](#-路线图)。
 
@@ -64,7 +64,7 @@ flowchart TD
 
 > 🗺️ 每个源码模块的职责与协作关系见 [docs/module-structure.md](docs/module-structure.md)（2026-08-17 原子化拆分后的模块地图）。
 
-**DSH 组合与插件**：`android-app/runtime-assets/dsh/cordis.yml` 定义了喵学堂的 Agent 组合（llm-deepseek / bash / agent-spine / 可配置 Provider 等）；`meow-extensions/meow-jsonrpc.js` 是自定义 Cordis 插件，扩展了官方 jsonrpc server（`session/cancel`、`session/bash`、`session/setModel`、`ping`、`agents.resume()` 跨进程会话恢复）。
+**DSH 组合与插件**：`android-app/runtime-assets/dsh/cordis.yml` 定义了喵仓的 Agent 组合（llm-deepseek / bash / agent-spine / 可配置 Provider 等）；`meow-extensions/meow-jsonrpc.js` 是自定义 Cordis 插件，扩展了官方 jsonrpc server（`session/cancel`、`session/bash`、`session/setModel`、`ping`、`agents.resume()` 跨进程会话恢复）。
 
 ---
 
@@ -101,12 +101,12 @@ cd android-app
 ./gradlew assembleDebug
 ```
 
-构建产物自动同步到 `release/meow-academy-0.1.0-debug.apk`（约 89MB，内置 DSH 运行时 `runtime.bin` 约 67MB）。
+构建产物自动同步到 `release/meow-academy-0.2.0-debug.apk`（约 87MB，内置 DSH 运行时 `runtime.bin` 约 67MB）。
 
 ### 安装到真机
 
 ```bash
-adb install -r release/meow-academy-0.1.0-debug.apk
+adb install -r release/meow-academy-0.2.0-debug.apk
 ```
 
 首次启动会自动解压内置运行时并拉起 DSH 进程，**需在设置页填入 `DEEPSEEK_API_KEY`**（或通过模型管理配置自定义 Provider）后即可对话。
