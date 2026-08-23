@@ -18,10 +18,4 @@
 - 🔧 `ChatSegmentJson` 不再为纯空白 delta 新建 Reasoning / Text 空段
 - 🔧 聊天附件逻辑统一收敛到 `ChatAttachments.kt`（引用 id / Markdown 链接 / 发送文本构造），图片渲染走 `![文件名](路径)`
 
-**⚠️ 升级须知：**
-
-- 本次仅升级 App 代码，runtime.bin 未变（`attachImages` / `imageLimits` RPC 在 0.2.2 基线已随 runtime 就绪）
-- 图片发送依赖模型侧多模态能力：模型管理里请确认目标模型带「多模态」角标（如 `deepseek-v4-flash-vision-exp`），没有则自动走文本回退
-- 真机验收建议：聊天发图（含压缩超限大图）✓ 图片块点击全屏预览（缩放/旋转）✓ 文件管理缩略图与图片浮窗 ✓ 不支持图片的模型回退 ✓
-
 **Full Changelog**: https://github.com/hu568/meow-academy/compare/v0.2.2...v0.2.3
