@@ -364,6 +364,7 @@ private fun ChatDetailView(
             feature = dashboardFeature,
             onFeatureChange = { dashboardFeature = it },
             onClose = { dashboardOpen = false },
+            onOpen = { dashboardOpen = true },
             modelPanel = {
                 ModelManagePanel(
                     currentProvider = currentProvider,
