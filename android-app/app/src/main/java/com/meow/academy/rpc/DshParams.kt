@@ -64,6 +64,11 @@ object DshParams {
     /** session/bashCancel：中止正在运行的终端命令 */
     fun bashCancel(requestId: String): JsonObject = buildJsonObject { put("requestId", requestId) }
 
+    /** session/stats：读某会话的调用量统计 */
+    fun sessionStats(sessionId: String): JsonObject = buildJsonObject {
+        put("sessionId", sessionId)
+    }
+
     /** shutdown：让服务端优雅退出 */
     fun shutdown(): JsonObject = buildJsonObject { }
 

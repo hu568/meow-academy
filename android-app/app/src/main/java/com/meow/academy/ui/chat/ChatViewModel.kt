@@ -14,6 +14,7 @@ import com.meow.academy.data.chat.MessageEntity
 import com.meow.academy.data.chat.MessageRole
 import com.meow.academy.data.chat.MessageStatus
 import com.meow.academy.data.chat.SessionEntity
+import com.meow.academy.data.chat.SessionUsageStats
 import com.meow.academy.rpc.DshChunkTypes
 import com.meow.academy.rpc.DshConnectionState
 import com.meow.academy.rpc.DshEventTypes
@@ -145,6 +146,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val _pendingCount = MutableStateFlow(0)
     val pendingCount: StateFlow<Int> = _pendingCount.asStateFlow()
 
+    // ── 当前会话调用量（右侧功能看板 · M6） ──
+    private val _sessionUsageStats = MutableStateFlow<SessionUsageStats?>(null)
+    val sessionUsageStats: StateFlow<SessionUsageStats?> = _sessionUsageStats.asStateFlow()
+
     init {
         // ① 前端解耦：立即用本地缓存渲染工具栏（无缓存则回退内置 DeepSeek），
         //    不等 DSH 后端加载完成——控件一进页面就是完整可用的
@@ -163,6 +168,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             runtimeManager.state.collect { s ->
                 if (s is RuntimeState.Running) {
                     refreshModelCatalog()
+                    refreshUsageStats()
                     launch { flushPending() }
                 }
             }
@@ -233,17 +239,37 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun openSession(id: Long) {
         _currentSessionId.value = id
+        // 切换会话先清旧统计，避免新会话还没有 stats 时面板显示上一会话数字
+        _sessionUsageStats.value = null
     }
 
     /** 返回会话列表 */
     fun closeSession() {
         _currentSessionId.value = null
+        _sessionUsageStats.value = null
+    }
+
+    /**
+     * 刷新当前会话调用量统计。
+     * 无会话 → 置 null；DSH 未就绪 / RPC 失败 / stats 缺失 → 保留旧值（面板仍可点“刷新”重试）。
+     */
+    fun refreshUsageStats() {
+        viewModelScope.launch {
+            val sessionId = _currentSessionId.value ?: run {
+                _sessionUsageStats.value = null
+                return@launch
+            }
+            val rpc = runtimeManager.rpcClient ?: client ?: return@launch
+            val result = rpc.sessionStats(dshSessionIdOf(sessionId)) ?: return@launch
+            SessionUsageStats.parse(result)?.let { _sessionUsageStats.value = it }
+        }
     }
 
     fun newSession() {
         viewModelScope.launch {
             val id = dao.insertSession(SessionEntity(title = DEFAULT_SESSION_TITLE))
             _currentSessionId.value = id
+            _sessionUsageStats.value = null
         }
     }
 
@@ -578,6 +604,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             else -> persist(state, MessageStatus.DONE)
         }
         _streaming.value = null
+        // 回合结束后的调用量已有新数据（流结束后即读持久化日志）
+        refreshUsageStats()
         // 队列可能还有待发送（生成中用户又发了消息）→ 触发补发
         viewModelScope.launch { flushPending() }
     }

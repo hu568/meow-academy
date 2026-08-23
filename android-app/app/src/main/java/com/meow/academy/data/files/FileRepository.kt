@@ -5,9 +5,16 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.meow.academy.runtime.RuntimeExtractor
 import java.io.File
+import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+
+/** 文件去重导入结果：duplicated=true 表示命中 uploads 里已有相同内容文件，直接复用不复制 */
+data class ImportResult(
+    val file: File,
+    val duplicated: Boolean,
+)
 
 /**
  * 文件管理数据层（M4）：纯 java.io.File 操作，不经过任何 DSH 进程。
@@ -142,6 +149,36 @@ class FileRepository(private val context: Context) {
                 true
             }.getOrDefault(false)
         }
+    }
+
+    /**
+     * 聊天上传专用：先算内容 SHA-256，在 [targetDir] 里找相同内容的文件。
+     * - 内容相同（哪怕名字不同）→ 复用已有文件，不重复存储；
+     * - 内容不同但名字相同 → 自动追加 " (n)" 序号，两个文件都在 uploads 里保留。
+     *
+     * @return 实际引用的文件 + 是否命中已有文件；失败返回 null。
+     * 全程流式读/写，不把文件内容整块读进内存（二进制、大文件安全喵）。
+     */
+    suspend fun importDeduplicated(uri: Uri, targetDir: String): ImportResult? = withContext(Dispatchers.IO) {
+        runCatching {
+            val dir = File(targetDir)
+            if (!dir.isDirectory) return@withContext null
+            val hash = sha256Uri(uri) ?: return@withContext null
+            val existing = dir.listFiles()
+                ?.asSequence()
+                ?.filter { it.isFile }
+                ?.firstOrNull { sha256File(it) == hash }
+            if (existing != null) return@withContext ImportResult(existing, duplicated = true)
+
+            val baseName = queryDisplayName(uri) ?: uri.lastPathSegment ?: return@withContext null
+            if (!isValidName(baseName)) return@withContext null
+            val dest = uniqueDest(dir, baseName)
+            val input = context.contentResolver.openInputStream(uri) ?: return@withContext null
+            input.use { source ->
+                dest.outputStream().use { output -> source.copyTo(output) }
+            }
+            ImportResult(dest, duplicated = false)
+        }.getOrNull()
     }
 
     /**
@@ -301,6 +338,53 @@ class FileRepository(private val context: Context) {
     private fun copyRecursive(src: File, dest: File): Boolean =
         runCatching { src.copyRecursively(dest, overwrite = false) }.isSuccess
 
+    /** SAF Uri 内容 SHA-256（流式计算，不会把整个文件读进内存） */
+    private fun sha256Uri(uri: Uri): String? = runCatching {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val input = context.contentResolver.openInputStream(uri) ?: return null
+        input.use { source ->
+            val buffer = ByteArray(HASH_BUFFER_SIZE)
+            while (true) {
+                val read = source.read(buffer)
+                if (read < 0) break
+                if (read > 0) digest.update(buffer, 0, read)
+            }
+        }
+        digest.digest().joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+    }.getOrNull()
+
+    /** 本地文件内容 SHA-256（流式计算） */
+    private fun sha256File(file: File): String? = runCatching {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(HASH_BUFFER_SIZE)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                if (read > 0) digest.update(buffer, 0, read)
+            }
+        }
+        digest.digest().joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+    }.getOrNull()
+
+    /** 目标目录内不冲突的文件；冲突时按 "原名 (n).ext" 追加序号（喵~） */
+    private fun uniqueDest(dir: File, baseName: String): File {
+        var dest = File(dir, baseName)
+        if (!dest.exists()) return dest
+        val dot = baseName.lastIndexOf('.')
+        var index = 1
+        while (true) {
+            val candidate = if (dot > 0) {
+                "${baseName.substring(0, dot)} ($index)${baseName.substring(dot)}"
+            } else {
+                "$baseName ($index)"
+            }
+            dest = File(dir, candidate)
+            if (!dest.exists()) return dest
+            index++
+        }
+    }
+
     /** 从 SAF Uri 查询 DISPLAY_NAME；查询失败返回 null */
     private fun queryDisplayName(uri: Uri): String? {
         var name: String? = null
@@ -331,6 +415,9 @@ class FileRepository(private val context: Context) {
 
         /** 文本嗅探读取字节数（8KB） */
         private const val TEXT_SNIFF_BYTES = 8 * 1024
+
+        /** SHA-256 分块读取缓冲区（64KB，平衡大文件哈希速度与内存占用） */
+        private const val HASH_BUFFER_SIZE = 64 * 1024
 
         /** 超过该大小的无扩展名/未知扩展名文件不再嗅探（视为二进制） */
         private const val TEXT_SNIFF_SMALL_FILE_LIMIT = 64L * 1024

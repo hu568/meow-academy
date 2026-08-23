@@ -29,6 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -60,11 +61,11 @@ fun MarkdownText(
     markdown: String,
     modifier: Modifier = Modifier,
     streaming: Boolean = false,
+    textColor: Color = MaterialTheme.colorScheme.onSurface,
 ) {
     val context = LocalContext.current
     // 取实际应用主题的深浅（强制深色/浅色也生效），不能只看系统
     val isDark = LocalDarkTheme.current
-    val textColor = MaterialTheme.colorScheme.onSurface
     val textColorArgb = textColor.toArgb()
     // LaTeX 公式字号与 TextView 正文 15sp 对齐；主题/文字色变化时重建 Markwon 与缓存
     val textSizePx = remember(context) {

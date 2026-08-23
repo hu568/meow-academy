@@ -335,7 +335,7 @@ fun ToolGroup(segments: List<Segment>, status: MessageStatus) {
     }
 }
 
-/** 用户消息气泡（右侧，主色容器） */
+/** 用户消息气泡（右侧，主色容器）：走 Markdown 渲染，上传附件引用会显示成可点击链接 */
 @Composable
 fun UserBubble(text: String) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -347,8 +347,15 @@ fun UserBubble(text: String) {
                 .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.90f))
                 .padding(12.dp),
         ) {
-            SelectionContainer {
-                Text(text = text, style = MaterialTheme.typography.bodyLarge)
+            if (text.isNotBlank()) {
+                MarkdownText(
+                    text,
+                    textColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            } else {
+                SelectionContainer {
+                    Text("", style = MaterialTheme.typography.bodyLarge)
+                }
             }
         }
     }

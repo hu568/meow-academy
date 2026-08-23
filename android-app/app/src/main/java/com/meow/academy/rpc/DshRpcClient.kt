@@ -229,6 +229,10 @@ class DshRpcClient(
     suspend fun settingsDescribe(ns: String? = null, timeoutMs: Long = 15_000): JsonObject? =
         request("settings/describe", DshParams.settingsDescribe(ns), timeoutMs)?.result
 
+    /** session/stats：读某会话的调用量统计（无会话/未持久化时 result.stats=null） */
+    suspend fun sessionStats(sessionId: String, timeoutMs: Long = 15_000): JsonObject? =
+        request("session/stats", DshParams.sessionStats(sessionId), timeoutMs)?.result
+
     /** settings/setProvider：写 provider profile + credential */
     suspend fun settingsSetProvider(
         provider: String,

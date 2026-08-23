@@ -21,3 +21,6 @@ fun JsonObject.bool(key: String): Boolean? = (this[key] as? JsonPrimitive)?.cont
 
 /** 便捷扩展：读 JsonObject 里的整数字段（非 primitive 返回 null，绝不抛异常） */
 fun JsonObject.int(key: String): Int? = (this[key] as? JsonPrimitive)?.contentOrNull?.toIntOrNull()
+
+/** 便捷扩展：读 JsonObject 里的长整数字段（非 primitive 返回 null，绝不抛异常） */
+fun JsonObject.long(key: String): Long? = (this[key] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()

@@ -7,6 +7,7 @@ package com.meow.academy.ui.chat
  */
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,12 +25,15 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
@@ -50,6 +54,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -57,33 +62,30 @@ import com.meow.academy.rpc.LlmProviderInfo
 import com.meow.academy.ui.settings.ModelAvatar
 import com.meow.academy.ui.settings.ProviderAvatar
 
+/**
+ * 待发送附件（上传后在输入框上方预览）。
+ * 输入框内用 `[refId]` 引用，发送时由 ChatScreen 替换成 `[文件名](路径)` Markdown。
+ */
+data class PendingAttachment(
+    val refId: String,
+    val displayName: String,
+    val path: String,
+)
+
 /** DeepSeek 可切换模型（输入栏工具栏下拉；deepseek-chat/reasoner 已弃用，仅 v4 系列有效） */
 private val DEEPSEEK_MODELS = listOf("deepseek-v4-flash", "deepseek-v4-pro")
 
 /** 思考强度档位（llm-deepseek 合法值域 off/high/max） */
 private val REASONING_EFFORTS = listOf("off", "high", "max")
 
-private fun modelLabel(model: String): String = when (model) {
-    "deepseek-v4-flash" -> "v4-flash"
-    "deepseek-v4-pro" -> "v4-pro"
-    else -> model
-}
-
-private fun providerLabel(provider: String, providers: List<LlmProviderInfo>): String =
-    providers.firstOrNull { it.provider == provider }?.displayName ?: provider
-
-private fun effortLabel(effort: String): String = when (effort) {
-    "off" -> "关闭思考"
-    "high" -> "高"
-    "max" -> "最强"
-    else -> effort
-}
-
 /** 输入栏：文本框 + 发送/停止 + 下方工具栏 */
 @Composable
 fun ChatInputArea(
     input: String,
     onInputChange: (String) -> Unit,
+    attachments: List<PendingAttachment> = emptyList(),
+    onPickAttachment: (PendingAttachment) -> Unit = {},
+    onRemoveAttachment: (PendingAttachment) -> Unit = {},
     isGenerating: Boolean,
     pendingCount: Int,
     llmModel: String,
@@ -121,6 +123,48 @@ fun ChatInputArea(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 12.dp, bottom = 4.dp),
                 )
+            }
+            // 待发送附件：输入框上方预览（(文件名) + 可移除），下方分隔线与输入框隔开
+            if (attachments.isNotEmpty()) {
+                Column(modifier = Modifier.padding(start = 8.dp, bottom = 4.dp)) {
+                    attachments.forEach { att ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onPickAttachment(att) },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                Icons.Filled.Add,
+                                contentDescription = "插入引用 ${att.displayName}",
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Text(
+                                "(${att.displayName})",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(start = 4.dp),
+                            )
+                            IconButton(
+                                onClick = { onRemoveAttachment(att) },
+                                modifier = Modifier.size(24.dp),
+                            ) {
+                                Icon(
+                                    Icons.Filled.Close,
+                                    contentDescription = "移除附件 ${att.displayName}",
+                                    modifier = Modifier.size(14.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+                HorizontalDivider(modifier = Modifier.padding(bottom = 4.dp))
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
