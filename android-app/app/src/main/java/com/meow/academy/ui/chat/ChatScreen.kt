@@ -288,7 +288,7 @@ private fun ChatDetailView(
                             availableModels = availableModels,
                             currentProvider = currentProvider,
                             onSend = {
-                                vm.sendMessage(buildMessageWithAttachments(input, attachments))
+                                vm.sendMessage(input, attachments)
                                 input = ""
                                 attachments = emptyList()
                             },
@@ -416,39 +416,6 @@ private fun ChatDetailView(
             },
         )
     }
-}
-
-/**
- * 生成附件引用 id：按扩展名 + 序号，例如 文件.md → md1、第二个 md → md2；
- * 无扩展名用 file1 / file2。
- */
-private fun nextAttachmentRefId(attachments: List<PendingAttachment>, displayName: String): String {
-    val ext = displayName.substringAfterLast('.', "").lowercase().ifEmpty { "file" }
-    val count = attachments.count { it.refId.startsWith(ext) }
-    return "$ext${count + 1}"
-}
-
-/**
- * 发送前把输入框里的 `[refId]` 引用替换成 Markdown 文件链接 `[文件名](路径)`。
- * 如果引用标记被用户删掉，把该附件链接追加到消息末尾，避免附件静默丢失（喵~）。
- */
-private fun buildMessageWithAttachments(input: String, attachments: List<PendingAttachment>): String {
-    var text = input
-    attachments.forEach { att ->
-        val ref = "[${att.refId}]"
-        val link = markdownFileLink(att.displayName, att.path)
-        text = if (ref in text) text.replace(ref, link) else "$text\n\n$link"
-    }
-    return text.trim()
-}
-
-/**
- * 把上传文件转成聊天里的 Markdown 链接 `[文件名](路径)`。
- * 路径含空格 / 括号时用 `<…>` 包裹链接目标，保证 Markwon 能完整渲染（喵~）。
- */
-private fun markdownFileLink(name: String, path: String): String {
-    val target = if (path.any { it.isWhitespace() || it == '(' || it == ')' }) "<$path>" else path
-    return "[$name]($target)"
 }
 
 /** 非快照状态的持有者：组合期间同步记录「贴底时的最新流式分段」，避免写 State 引发额外重组 */

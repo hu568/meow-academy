@@ -334,6 +334,10 @@ class FileRepository(private val context: Context) {
             name.endsWith(".htm", ignoreCase = true) ||
             name.endsWith(".xhtml", ignoreCase = true)
 
+    /** 图片判断：扩展名白名单命中即真（用于点击打开浮窗预览，喵~） */
+    fun isImageFile(name: String): Boolean =
+        name.substringAfterLast('.', "").lowercase() in IMAGE_EXTENSIONS
+
     /** 递归复制单个文件或目录（不覆盖已存在的目标） */
     private fun copyRecursive(src: File, dest: File): Boolean =
         runCatching { src.copyRecursively(dest, overwrite = false) }.isSuccess

@@ -18,9 +18,11 @@ import com.meow.academy.data.chat.SessionUsageStats
 import com.meow.academy.rpc.DshChunkTypes
 import com.meow.academy.rpc.DshConnectionState
 import com.meow.academy.rpc.DshEventTypes
+import com.meow.academy.rpc.DshParams
 import com.meow.academy.rpc.DshNotifMethods
 import com.meow.academy.rpc.DshRpcClient
 import com.meow.academy.rpc.DshTurnEndKinds
+import com.meow.academy.rpc.LlmModelInfo
 import com.meow.academy.rpc.LlmProviderInfo
 import com.meow.academy.rpc.str
 import com.meow.academy.runtime.RuntimeState
@@ -122,6 +124,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val _availableModels = MutableStateFlow(DEFAULT_MODELS)
     val availableModels: StateFlow<List<String>> = _availableModels.asStateFlow()
 
+    /** modelId → 模型信息（含 inputModalities），发送图片时判断当前模型是否支持视觉 */
+    private val _modelCatalog = MutableStateFlow<Map<String, LlmModelInfo>>(emptyMap())
+    private val modelCatalogMap: Map<String, LlmModelInfo> get() = _modelCatalog.value
+
     /** 当前 provider（DataStore "deepseek" → DSH 路由 "deepseek-official"） */
     val currentProvider: StateFlow<String> = settingsRepository.llmProvider
         .map { if (it == "deepseek") "deepseek-official" else it }
@@ -133,7 +139,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private data class PendingMessage(
         val roomSessionId: Long,
         val assistantMessageId: Long,
+        /** 原始用户输入（不含附件转成的 Markdown；展示文本已单独落库） */
         val text: String,
+        val attachments: List<PendingAttachment> = emptyList(),
     )
 
     /** 待发送队列（进程内；App 被杀后由 cleanupStaleStreaming 兜底把占位标 ERROR） */
@@ -315,6 +323,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 发送消息：落库用户消息 → 建 assistant 流式消息 → 订阅事件流 → session/prompt → 收集事件流。
      *
+     * 附件处理：
+     * - 图片附件 → 先读文件转 base64 → session/attachImages 拿 durable refs →
+     *   session/prompt 的 contentBlocks 里放 image 块，让模型真正「看到」图片；
+     * - 其他附件 → 转 Markdown 链接拼入文本块；
+     * - 图片上传/attach 失败 → 回退为 Markdown 文本方式发送（模型看不到图，但不丢消息）。
+     *
      * 前端解耦：DSH 未就绪或当前正在生成时**不报错、不丢弃**，而是入待发送队列，
      * DSH 就绪后（或当前条生成结束）由 [flushPending] 串行自动补发。
      *
@@ -322,17 +336,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      * turn/start / 首条 assistant/chunk 紧随其后（可能早于 send() 返回），
      * 若 send 后才订阅会漏掉开场事件（SharedFlow replay=0）。
      */
-    fun sendMessage(text: String) {
-        val trimmed = text.trim()
-        if (trimmed.isEmpty()) return
+    fun sendMessage(text: String, attachments: List<PendingAttachment> = emptyList()) {
+        // 展示文本：图片和文件都转 Markdown（Room 落库、UI 渲染用）
+        val displayText = buildMessageWithAttachments(text, attachments)
+        if (displayText.isBlank()) return
 
         viewModelScope.launch {
             val sessionId = _currentSessionId.value
                 ?: dao.insertSession(SessionEntity(title = DEFAULT_SESSION_TITLE)).also { _currentSessionId.value = it }
-            autoTitleSession(sessionId, trimmed)
+            autoTitleSession(sessionId, displayText)
             dao.touchSession(sessionId)
 
-            dao.insertMessage(MessageEntity(sessionId = sessionId, role = MessageRole.USER, content = trimmed))
+            dao.insertMessage(MessageEntity(sessionId = sessionId, role = MessageRole.USER, content = displayText))
 
             val assistantId = dao.insertMessage(
                 MessageEntity(
@@ -345,11 +360,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val rpc = runtimeManager.rpcClient
             if (rpc == null || _streaming.value != null) {
                 // 未就绪或正在生成 → 入队（不丢消息），就绪后自动补发
-                enqueue(PendingMessage(roomSessionId = sessionId, assistantMessageId = assistantId, text = trimmed))
+                enqueue(PendingMessage(roomSessionId = sessionId, assistantMessageId = assistantId, text = text, attachments = attachments))
                 return@launch
             }
             client = rpc
-            runStream(assistantId, sessionId, dshSessionIdOf(sessionId), rpc, trimmed)
+            runStream(assistantId, sessionId, dshSessionIdOf(sessionId), rpc, text, attachments)
         }
     }
 
@@ -382,7 +397,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 if (rpc.state.value !is DshConnectionState.Running) return
                 val msg = pendingQueue.removeFirst()
                 _pendingCount.value = pendingQueue.size
-                runStream(msg.assistantMessageId, msg.roomSessionId, dshSessionIdOf(msg.roomSessionId), rpc, msg.text)
+                runStream(msg.assistantMessageId, msg.roomSessionId, dshSessionIdOf(msg.roomSessionId), rpc, msg.text, msg.attachments)
             }
         } finally {
             flushing.set(false)
@@ -437,6 +452,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val p = currentProvider.value
             val models = c.llmModels(p) ?: emptyList()
             _availableModels.value = if (models.isEmpty()) DEFAULT_MODELS else models.map { it.id }
+            _modelCatalog.value = models.associateBy { it.id }
         }
     }
 
@@ -490,6 +506,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         dshSessionId: String,
         rpc: DshRpcClient,
         promptText: String,
+        attachments: List<PendingAttachment> = emptyList(),
     ) {
         var state = StreamingState(messageId = assistantId)
         _streaming.value = state
@@ -575,8 +592,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
 
-                // ③ 主路径：发 session/prompt 等待受理确认（事件由收集子协程处理）
-                val accepted = rpc.prompt(dshSessionId, promptText, timeoutMs = 15_000)
+                // ③ 主路径：构造 contentBlocks（图片走 attachImages + image 块），发 session/prompt 等待受理确认
+                val blocks = buildContentBlocks(promptText, attachments, rpc)
+                val accepted = if (blocks != null) {
+                    rpc.prompt(dshSessionId, blocks, timeoutMs = 15_000)
+                } else {
+                    // 图片上传/attach 失败 → 回退 Markdown 文本方式（模型看不到图但不丢消息）
+                    rpc.prompt(dshSessionId, buildMessageWithAttachments(promptText, attachments), timeoutMs = 15_000)
+                }
                 if (!accepted) {
                     errorMsg = "prompt 被拒绝（运行时异常或断连）"
                     collector.cancel() // 受理失败时显式取消收集，否则 coroutineScope 会永久等待
@@ -608,6 +631,70 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         refreshUsageStats()
         // 队列可能还有待发送（生成中用户又发了消息）→ 触发补发
         viewModelScope.launch { flushPending() }
+    }
+
+    /**
+     * 构造发送给 DSH 的 contentBlocks：
+     * - 非图片附件 → Markdown 链接拼入 text 块；
+     * - 图片附件 → 读文件转 base64 → session/attachImages 拿 durable refs → image 块。
+     *
+     * @return null 表示图片准备/上传失败，调用方应回退为纯文本发送（模型看不到图但不丢消息）。
+     */
+    private suspend fun buildContentBlocks(
+        promptText: String,
+        attachments: List<PendingAttachment>,
+        rpc: DshRpcClient,
+    ): List<DshParams.ContentBlock>? {
+        // 只把后端支持的图片（jpeg/png/webp/gif）走 attachImages；bmp/svg 等按普通附件 Markdown 发送
+        val imageAttachments = attachments.filter { isImageUploadable(it.displayName) }
+        // 没有图片：非图片附件转 Markdown 拼入文本块即可
+        if (imageAttachments.isEmpty()) {
+            val text = buildTextContentWithNonImages(promptText, attachments)
+            return listOf(DshParams.ContentBlock(type = "text", text = text))
+        }
+
+        // 当前模型明确不支持图片 → 直接回退 Markdown（不发起无谓的 attachImages）
+        val supportsImage = modelCatalogMap[llmModel.value]?.supportsImage ?: true
+        if (!supportsImage) {
+            Log.w("ChatViewModel", "model ${llmModel.value} does not support image input, fallback to markdown")
+            return null
+        }
+
+        // 读 limits（失败也能继续：用默认无限制流程，后端仍会兜底校验）
+        val limits = runCatching { ImageLimits.from(rpc.imageLimits()) }.getOrNull()
+
+        // 批量读文件 → base64（超限自动压缩）
+        val prepared = prepareImageUploads(imageAttachments, limits)
+        val failed = prepared.filter { it.second.isFailure }
+        if (failed.isNotEmpty()) {
+            Log.w(
+                "ChatViewModel",
+                "image prepare failed: " + failed.joinToString { "${it.first.displayName}: ${it.second.exceptionOrNull()?.message}" },
+            )
+            return null
+        }
+        val uploads = prepared.map { it.second.getOrThrow() }
+        if (limits != null && uploads.size > limits.maxImagesPerMessage) {
+            Log.w("ChatViewModel", "too many images: ${uploads.size} > ${limits.maxImagesPerMessage}")
+            return null
+        }
+
+        // 调后端 attachImages → durable refs
+        val refs = rpc.attachImages(uploads)
+        if (refs == null || refs.size != uploads.size) {
+            Log.w("ChatViewModel", "attachImages failed or ref count mismatch")
+            return null
+        }
+
+        val blocks = mutableListOf<DshParams.ContentBlock>()
+        val text = buildTextContentWithNonImages(promptText, attachments)
+        if (text.isNotBlank()) {
+            blocks += DshParams.ContentBlock(type = "text", text = text)
+        }
+        refs.forEach { ref ->
+            blocks += DshParams.ContentBlock(type = "image", attachment = ref)
+        }
+        return blocks
     }
 
 }

@@ -26,6 +26,7 @@ data class MarkdownConfig(
     val thematicBreak: ThematicBreakConfig = ThematicBreakConfig(),
     val table: TableConfig = TableConfig(),
     val mermaid: MermaidConfig = MermaidConfig(),
+    val image: ImageConfig = ImageConfig(),
 ) {
     data class FormulaConfig(
         val blockCornerRadiusDp: Float = 12f,
@@ -91,6 +92,16 @@ data class MarkdownConfig(
         val theme: String = "",
         val cornerRadiusDp: Float = 12f,
         val blockBackground: String? = null,
+    )
+
+    /** M5.5 图片块配置（圆角线框外观，聊天气泡 / 知识库共用） */
+    data class ImageConfig(
+        val cornerRadiusDp: Float = 12f,
+        val borderWidthDp: Float = 1f,
+        val borderColor: String? = null,
+        val maxHeightDp: Float = 320f,
+        val loadingBackground: String? = null,
+        val errorText: String = "图片加载失败",
     )
 
     data class Padding(
@@ -208,6 +219,20 @@ fun resolveMarkdownConfig(raw: MarkdownConfigRaw?, isDark: Boolean): MarkdownCon
                 ?.resolveTheme(isDark).asFloat(MarkdownConfig.MermaidConfig().cornerRadiusDp),
             blockBackground = section("mermaid")?.get("blockBackground")
                 ?.resolveTheme(isDark).asColor(MarkdownConfig.MermaidConfig().blockBackground),
+        ),
+        image = MarkdownConfig.ImageConfig(
+            cornerRadiusDp = section("image")?.get("cornerRadiusDp")
+                ?.resolveTheme(isDark).asFloat(MarkdownConfig.ImageConfig().cornerRadiusDp),
+            borderWidthDp = section("image")?.get("borderWidthDp")
+                ?.resolveTheme(isDark).asFloat(MarkdownConfig.ImageConfig().borderWidthDp),
+            borderColor = section("image")?.get("borderColor")
+                ?.resolveTheme(isDark).asColor(MarkdownConfig.ImageConfig().borderColor),
+            maxHeightDp = section("image")?.get("maxHeightDp")
+                ?.resolveTheme(isDark).asFloat(MarkdownConfig.ImageConfig().maxHeightDp),
+            loadingBackground = section("image")?.get("loadingBackground")
+                ?.resolveTheme(isDark).asColor(MarkdownConfig.ImageConfig().loadingBackground),
+            errorText = section("image")?.get("errorText")
+                ?.resolveTheme(isDark).asString(MarkdownConfig.ImageConfig().errorText),
         ),
     )
 }

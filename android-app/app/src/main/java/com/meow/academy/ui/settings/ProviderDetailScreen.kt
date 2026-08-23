@@ -98,7 +98,7 @@ fun ProviderDetailScreen(
         models = next.toMutableList()
         val key = routeKey()
         scope.launch {
-            val err = vm.saveModels(key, next.map { LlmModelInput(it.id, it.name, it.contextWindow, it.maxTokens) })
+            val err = vm.saveModels(key, next.map { LlmModelInput(it.id, it.name, it.contextWindow, it.maxTokens, it.input) })
             if (err != null) snackbar.showSnackbar("模型保存失败：" + err)
         }
     }
@@ -124,7 +124,7 @@ fun ProviderDetailScreen(
                 displayName = displayName,
                 baseURL = baseURL,
                 api = "openai-completions",
-                models = models.map { LlmModelInput(it.id, it.name, it.contextWindow, it.maxTokens) },
+                models = models.map { LlmModelInput(it.id, it.name, it.contextWindow, it.maxTokens, it.input) },
                 apiKey = apiKey,
             )
             busy = false
@@ -265,7 +265,7 @@ fun ProviderDetailScreen(
             added = models.map { it.id }.toSet(),
             onAdd = { m ->
                 if (models.none { it.id == m.id }) {
-                    autoSaveModels(models + ModelProfile(id = m.id, name = m.name))
+                    autoSaveModels(models + ModelProfile(id = m.id, name = m.name, input = m.inputModalities))
                 }
             },
             onDismiss = { fetchedModels = null },

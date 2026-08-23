@@ -46,6 +46,9 @@ fun appendReasoning(segments: List<Segment>, text: String): List<Segment> {
     val last = segments.lastOrNull()
     return if (last is Segment.Reasoning) {
         segments.dropLast(1) + Segment.Reasoning(last.text + text)
+    } else if (text.isBlank()) {
+        // 没有 Reasoning 段时不要因为一个纯空白 delta 新建空段
+        segments
     } else {
         segments + Segment.Reasoning(text)
     }
@@ -56,7 +59,11 @@ fun appendText(segments: List<Segment>, text: String): List<Segment> {
     if (text.isEmpty()) return segments
     val last = segments.lastOrNull()
     return if (last is Segment.Text) {
+        // 已有 Text 段：连空白一起追加（保留正文里的换行/分段）
         segments.dropLast(1) + Segment.Text(last.text + text)
+    } else if (text.isBlank()) {
+        // 没有 Text 段时不要因为一个纯空白 delta 新建空段（DSH 工具调用前常发 "\n\n" 占位）
+        segments
     } else {
         segments + Segment.Text(text)
     }
@@ -71,8 +78,9 @@ fun parseSegments(json: String?): List<Segment>? {
         arr.mapNotNull { el ->
             val obj = el as? JsonObject ?: return@mapNotNull null
             when (obj.str("type")) {
-                "reasoning" -> Segment.Reasoning(obj.str("text") ?: "")
-                "text" -> Segment.Text(obj.str("text") ?: "")
+                // 过滤纯空白段：DSH 可能存过 "\n\n" 占位 text，旧库读出来直接丢弃
+                "reasoning" -> obj.str("text")?.takeIf { it.isNotBlank() }?.let { Segment.Reasoning(it) }
+                "text" -> obj.str("text")?.takeIf { it.isNotBlank() }?.let { Segment.Text(it) }
                 "tool" -> Segment.Tool(
                     ToolCallInfo(
                         id = obj.str("id") ?: "",

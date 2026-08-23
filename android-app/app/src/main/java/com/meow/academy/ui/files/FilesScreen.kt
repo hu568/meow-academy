@@ -73,6 +73,8 @@ fun FilesScreen(onOpenTerminal: (String) -> Unit = {}) {
 
     // 编辑器覆盖页（HTML 也走同一编辑器：默认停在 WebView 预览模式，可一键切编辑）
     var editingFile by remember { mutableStateOf<FileEntry?>(null) }
+    // 图片浮窗预览（不进独立界面，Dialog 浮在文件页之上，喵~）
+    var previewFile by remember { mutableStateOf<FileEntry?>(null) }
     editingFile?.let { file ->
         FileEditorScreen(
             file = file,
@@ -247,6 +249,7 @@ fun FilesScreen(onOpenTerminal: (String) -> Unit = {}) {
                                             vm.onNavigatedTo(entry.path)
                                         } else {
                                             when (openKind(File(entry.path), repository)) {
+                                                FileKind.IMAGE -> previewFile = entry
                                                 FileKind.TEXT, FileKind.MARKDOWN, FileKind.HTML -> editingFile = entry
                                                 FileKind.LARGE_TEXT -> scope.launch { snackbarHostState.showSnackbar("文件过大，请用终端打开") }
                                                 else -> scope.launch { snackbarHostState.showSnackbar("无法预览（二进制或未知格式）") }
@@ -348,6 +351,14 @@ fun FilesScreen(onOpenTerminal: (String) -> Unit = {}) {
             onDismiss = { targetMode = null },
         )
     }
+    // 图片浮窗预览：Dialog 浮层，不进入独立页面（喵~）
+    previewFile?.let { file ->
+        ImagePreviewOverlay(
+            model = File(file.path),
+            displayName = file.name,
+            onDismiss = { previewFile = null },
+        )
+    }
 }
 
 /** 复制 / 移动目标模式 */
@@ -391,7 +402,13 @@ private fun SearchResultList(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onNavigate(targetPath) },
-                leadingContent = { Icon(fileIcon(kind), contentDescription = null, tint = fileColor(kind)) },
+                leadingContent = {
+                    if (kind == FileKind.IMAGE) {
+                        FileThumbnail(path = r.path, name = r.name)
+                    } else {
+                        Icon(fileIcon(kind), contentDescription = null, tint = fileColor(kind))
+                    }
+                },
                 headlineContent = { Text(r.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 supportingContent = { Text(r.relativePath, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             )

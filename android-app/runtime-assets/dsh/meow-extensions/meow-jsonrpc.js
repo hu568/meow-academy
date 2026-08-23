@@ -401,7 +401,14 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     const llm = this.ctx.get('llm')
     if (llm === undefined) throw new Error('llm service unavailable')
     const models = await llm.listModels(provider)
-    return { models: models.map((m) => ({ id: m.id, name: m.name, ...(m.description === undefined ? {} : { description: m.description }) })) }
+    return {
+      models: models.map((m) => ({
+        id: m.id,
+        name: m.name,
+        ...(m.description === undefined ? {} : { description: m.description }),
+        ...(m.inputModalities === undefined ? {} : { inputModalities: [...m.inputModalities] }),
+      })),
+    }
   }
 
   /** llm/discoverModels：测试连接 / 获取远端模型列表（llm-pi-ai 命名空间） */

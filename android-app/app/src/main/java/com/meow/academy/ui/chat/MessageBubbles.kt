@@ -225,6 +225,9 @@ fun AssistantBody(
 /** 文本气泡（Text 段）：流式中也直接渲染 Markdown，实时看到标题/列表/代码块等格式 */
 @Composable
 fun TextBubble(text: String, status: MessageStatus) {
+    // DSH 在工具调用前常先发一个仅含换行的空白 text-delta（如 "\n\n"）；
+    // 不渲染空白 Text 段，否则会显示成空圆角框（思考过程和工具调用之间夹着的灰框）。
+    if (text.isBlank()) return
     Row(modifier = Modifier.fillMaxWidth()) {
         Box(
             modifier = Modifier

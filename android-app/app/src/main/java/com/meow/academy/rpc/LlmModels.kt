@@ -26,7 +26,12 @@ data class LlmModelInfo(
     val id: String,
     val name: String? = null,
     val description: String? = null,
-)
+    /** 模型接受的输入模态（text / image）；null=未知，非空且不含 image=明确不支持图片 */
+    val inputModalities: List<String>? = null,
+) {
+    /** 是否支持图片输入（未知时返回 true，让发送端尝试后由后端裁决） */
+    val supportsImage: Boolean get() = inputModalities?.contains("image") ?: true
+}
 
 /** 提交 provider 时的模型条目（settings/setProvider 的 models） */
 @Serializable

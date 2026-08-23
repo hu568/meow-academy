@@ -38,6 +38,13 @@ sealed interface MdBlock {
         val code: String,
         val closed: Boolean,
     ) : MdBlock
+
+    /** 独立成段的图片：`![alt](src)`，由 [parseStandaloneImage] 识别 */
+    data class Image(
+        val alt: String,
+        val src: String,
+        val closed: Boolean,
+    ) : MdBlock
 }
 
 /**
@@ -125,6 +132,15 @@ fun parseMarkdownBlocks(markdown: String): List<MdBlock> {
             textLines += l
             j++
         }
+        // 单行独立图片（![alt](src)）拆成图片块，交给 Compose 渲染圆角线框图
+        if (textLines.size == 1) {
+            val image = parseStandaloneImage(textLines[0])
+            if (image != null) {
+                blocks += image
+                i = j
+                continue
+            }
+        }
         blocks += MdBlock.Paragraph(textLines.joinToString("\n"))
         i = j
     }
@@ -195,4 +211,23 @@ internal fun isThematicBreakLine(line: String): Boolean {
     val first = chars.first()
     if (first != '-' && first != '*' && first != '_') return false
     return chars.all { it == first }
+}
+
+/** 独立图片行正则：`![alt](src)` / `![alt](<src with spaces>)`，整行必须只有图片 */
+private val IMAGE_LINE_REGEX = Regex("""^!\[([^\]]*)\]\(\s*(<[^>]*>|[^)\s]+)\s*\)$""")
+
+/**
+ * 识别单行独立图片语法 `![alt](src)`，返回 [MdBlock.Image]；非图片行返回 null。
+ *
+ * 支持 Markdown 链接目标用 `<…>` 包裹空格/括号的写法（与聊天附件生成的 [markdownLink] 一致），
+ * 未闭合（流式中还在输入）的图片语法不识别，继续走 [MdBlock.Paragraph] 显示原文。
+ */
+internal fun parseStandaloneImage(line: String): MdBlock.Image? {
+    val match = IMAGE_LINE_REGEX.matchEntire(line.trim()) ?: return null
+    val alt = match.groupValues[1]
+    var src = match.groupValues[2].trim()
+    if (src.startsWith("<") && src.endsWith(">")) {
+        src = src.substring(1, src.length - 1)
+    }
+    return MdBlock.Image(alt = alt, src = src, closed = true)
 }

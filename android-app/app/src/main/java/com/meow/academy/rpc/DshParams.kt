@@ -1,5 +1,7 @@
 package com.meow.academy.rpc
 
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -8,6 +10,22 @@ import kotlinx.serialization.json.put
 
 /** 请求参数构造（只声明当前阶段用到的字段） */
 object DshParams {
+
+    /** attachImages 的单张图片输入（canonical base64 + mediaType + 可选名称） */
+    @Serializable
+    data class ImageUpload(
+        val mediaType: String,
+        val data: String,
+        val name: String? = null,
+    )
+
+    /** session/prompt 的 content block：text 或 image（image 的 attachment 是 attachImages 返回的 durable ref） */
+    @Serializable
+    data class ContentBlock(
+        val type: String,
+        val text: String? = null,
+        val attachment: JsonObject? = null,
+    )
 
     /** initialize：进程级握手（cwd=workspace；provider/model 决定后续所有会话的路由） */
     fun initialize(
@@ -25,7 +43,7 @@ object DshParams {
             if (reasoningEffort != null) put("reasoningEffort", reasoningEffort)
         }
 
-    /** session/prompt：入队一条用户消息（contentBlocks 只发 text 块） */
+    /** session/prompt：入队一条用户消息（纯文本版，兼容旧调用） */
     fun prompt(sessionId: String, text: String): JsonObject = buildJsonObject {
         put("sessionId", sessionId)
         put("contentBlocks", buildJsonArray {
@@ -35,6 +53,36 @@ object DshParams {
             })
         })
     }
+
+    /** session/prompt：入队一条用户消息（contentBlocks 支持 text + image 混合块） */
+    fun prompt(sessionId: String, blocks: List<ContentBlock>): JsonObject = buildJsonObject {
+        put("sessionId", sessionId)
+        put("contentBlocks", buildJsonArray {
+            blocks.forEach { block ->
+                add(buildJsonObject {
+                    put("type", block.type)
+                    if (block.text != null) put("text", block.text)
+                    if (block.attachment != null) put("attachment", block.attachment)
+                })
+            }
+        })
+    }
+
+    /** session/attachImages：canonical base64 图片批 → 附件服务规范化入库 → durable refs */
+    fun attachImages(images: List<ImageUpload>): JsonObject = buildJsonObject {
+        put("images", buildJsonArray {
+            images.forEach { img ->
+                add(buildJsonObject {
+                    put("mediaType", img.mediaType)
+                    put("data", img.data)
+                    if (img.name != null) put("name", img.name)
+                })
+            }
+        })
+    }
+
+    /** session/imageLimits：图片限额（App 端压缩参数上限预取用） */
+    fun imageLimits(): JsonObject = buildJsonObject { }
 
     /** session/cancel：停止该会话正在生成的回合 */
     fun cancel(sessionId: String): JsonObject = buildJsonObject { put("sessionId", sessionId) }

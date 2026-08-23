@@ -168,6 +168,32 @@ class MarkdownBlocksTest {
     }
 
     @Test
+    fun `独立图片行解析为 Image 块`() {
+        val blocks = parseMarkdownBlocks("![喵喵](file:///tmp/cat.png)")
+        assertEquals(listOf(MdBlock.Image("喵喵", "file:///tmp/cat.png", true)), blocks)
+    }
+
+    @Test
+    fun `图片目标用尖括号包裹时去掉尖括号`() {
+        val blocks = parseMarkdownBlocks("![my cat](<file:///tmp/my cat.png>)")
+        assertEquals(listOf(MdBlock.Image("my cat", "file:///tmp/my cat.png", true)), blocks)
+    }
+
+    @Test
+    fun `图片与文字混排仍按段落处理`() {
+        val md = "看图 ![cat](cat.png) 很可爱"
+        val blocks = parseMarkdownBlocks(md)
+        assertEquals(listOf(MdBlock.Paragraph(md)), blocks)
+    }
+
+    @Test
+    fun `未闭合图片语法不识别为图片块`() {
+        val md = "![cat](cat.png"
+        val blocks = parseMarkdownBlocks(md)
+        assertEquals(listOf(MdBlock.Paragraph(md)), blocks)
+    }
+
+    @Test
     fun `水平分割线判定覆盖常见写法`() {
         assertTrue(isThematicBreakLine("---"))
         assertTrue(isThematicBreakLine("***"))

@@ -184,6 +184,12 @@ fun MarkdownText(
                                 config = config,
                             )
                         }
+
+                    is MdBlock.Image -> ImageBlock(
+                        alt = block.alt,
+                        src = block.src,
+                        config = config,
+                    )
                 }
             }
         }

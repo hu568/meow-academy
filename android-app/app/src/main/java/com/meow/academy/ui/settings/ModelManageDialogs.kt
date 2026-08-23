@@ -26,6 +26,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -104,7 +105,7 @@ fun AddModelDialog(
     )
 }
 
-/** 编辑模型对话框（显示名称 / 上下文窗口 / 最大输出 tokens / 测试连接） */
+/** 编辑模型对话框（显示名称 / 上下文窗口 / 最大输出 tokens / 图片输入开关 / 测试连接） */
 @Composable
 fun EditModelDialog(
     model: ModelProfile,
@@ -116,6 +117,7 @@ fun EditModelDialog(
     var name by remember(model) { mutableStateOf(model.name ?: "") }
     var ctx by remember(model) { mutableStateOf(model.contextWindow?.toString() ?: "") }
     var maxTok by remember(model) { mutableStateOf(model.maxTokens?.toString() ?: "") }
+    var supportsImage by remember(model) { mutableStateOf(model.input?.contains("image") ?: true) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("模型设置 · " + model.id) },
@@ -124,6 +126,16 @@ fun EditModelDialog(
                 OutlinedTextField(name, { name = it }, label = { Text("显示名称") }, singleLine = true)
                 OutlinedTextField(ctx, { ctx = it }, label = { Text("上下文窗口") }, singleLine = true)
                 OutlinedTextField(maxTok, { maxTok = it }, label = { Text("最大输出 tokens") }, singleLine = true)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("支持图片输入（多模态）", style = MaterialTheme.typography.bodyLarge)
+                        Text("开启后聊天页可将图片以视觉块发送给模型", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = supportsImage, onCheckedChange = { supportsImage = it })
+                }
                 if (onTest != null) {
                     OutlinedButton(
                         onClick = onTest,
@@ -143,10 +155,14 @@ fun EditModelDialog(
         },
         confirmButton = {
             TextButton(onClick = {
+                // 保留 image 之外的既有模态，只切换 image 的开关
+                val baseInput = model.input?.filter { it != "image" }?.ifEmpty { listOf("text") } ?: listOf("text")
+                val input = if (supportsImage) (baseInput + "image").distinct() else baseInput
                 val updated = model.copy(
                     name = name.ifBlank { null },
                     contextWindow = ctx.toIntOrNull(),
                     maxTokens = maxTok.toIntOrNull(),
+                    input = input,
                 )
                 onSave(updated)
                 onDismiss()

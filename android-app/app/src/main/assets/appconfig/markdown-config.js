@@ -89,4 +89,14 @@ var markdownConfig = {
     cornerRadiusDp: 12,               // 图块背景圆角 (dp)，0 = 直角
     blockBackground: null,            // null = 主题默认（surfaceVariant 半透明），可给 #RRGGBB 自定义
   },
+
+  // ── 图片（M5.5 升级：md 渲染 + 聊天图片） ──────────
+  image: {
+    cornerRadiusDp: 12,               // 图片圆角 (dp)，0 = 直角
+    borderWidthDp: 1,                 // 线框宽 (dp)，0 = 无边框
+    borderColor: themed("#D1D1D6", "#383850"), // 线框颜色，null = 跟随主题
+    maxHeightDp: 320,                 // 聊天气泡内图片最大高度 (dp)
+    loadingBackground: null,          // null = 主题默认（surfaceVariant 半透明）
+    errorText: "图片加载失败",          // 加载失败时的提示文案
+  },
 };

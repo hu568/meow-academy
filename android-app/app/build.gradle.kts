@@ -98,6 +98,9 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.extended)
 
+    // 图片加载（Coil：文件缩略图 / 图片浮窗预览 / 后续 MD 与聊天图片共用）
+    implementation(libs.coil.compose)
+
     // 协程 + 序列化
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)

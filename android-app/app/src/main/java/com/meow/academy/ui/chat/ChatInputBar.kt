@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -51,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
@@ -58,9 +60,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.meow.academy.rpc.LlmProviderInfo
 import com.meow.academy.ui.settings.ModelAvatar
 import com.meow.academy.ui.settings.ProviderAvatar
+import java.io.File
 
 /**
  * 待发送附件（上传后在输入框上方预览）。
@@ -124,7 +128,7 @@ fun ChatInputArea(
                     modifier = Modifier.padding(start = 12.dp, bottom = 4.dp),
                 )
             }
-            // 待发送附件：输入框上方预览（(文件名) + 可移除），下方分隔线与输入框隔开
+            // 待发送附件：输入框上方预览（图片显示缩略图 + 可移除），下方分隔线与输入框隔开
             if (attachments.isNotEmpty()) {
                 Column(modifier = Modifier.padding(start = 8.dp, bottom = 4.dp)) {
                     attachments.forEach { att ->
@@ -135,12 +139,33 @@ fun ChatInputArea(
                                 .clickable { onPickAttachment(att) },
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(
-                                Icons.Filled.Add,
-                                contentDescription = "插入引用 ${att.displayName}",
-                                modifier = Modifier.size(14.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
+                            if (isImageFile(att.displayName)) {
+                                // 图片附件：显示缩略图
+                                val thumbnailShape = RoundedCornerShape(8.dp)
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(thumbnailShape)
+                                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                                ) {
+                                    AsyncImage(
+                                        model = File(att.path),
+                                        contentDescription = att.displayName,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                }
+                                Spacer(Modifier.width(6.dp))
+                            } else {
+                                // 非图片附件：加号图标
+                                Icon(
+                                    Icons.Filled.Add,
+                                    contentDescription = "插入引用 ${att.displayName}",
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                                Spacer(Modifier.width(4.dp))
+                            }
                             Text(
                                 "(${att.displayName})",
                                 style = MaterialTheme.typography.labelMedium,
@@ -149,7 +174,7 @@ fun ChatInputArea(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier
                                     .weight(1f)
-                                    .padding(start = 4.dp),
+                                    .padding(start = if (isImageFile(att.displayName)) 0.dp else 4.dp),
                             )
                             IconButton(
                                 onClick = { onRemoveAttachment(att) },

@@ -71,6 +71,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -82,9 +83,11 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.SubcomposeAsyncImage
 import com.meow.academy.data.files.FileEntry
 import com.meow.academy.data.files.FileRepository
 import com.meow.academy.data.files.FileRoot
+import com.meow.academy.data.files.IMAGE_EXTENSIONS
 import com.meow.academy.ui.theme.LocalFileTypeColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -103,20 +106,23 @@ enum class FileKind { FOLDER, MARKDOWN, TEXT, IMAGE, AUDIO, VIDEO, PDF, ARCHIVE,
  */
 fun fileKindOf(name: String, isDirectory: Boolean): FileKind {
     if (isDirectory) return FileKind.FOLDER
-    return when (name.substringAfterLast('.', "").lowercase()) {
-        "md", "markdown" -> FileKind.MARKDOWN
-        "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "heic", "avif" -> FileKind.IMAGE
-        "mp3", "wav", "flac", "aac", "ogg", "m4a", "opus", "wma", "mid", "midi" -> FileKind.AUDIO
-        "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "m3u8" -> FileKind.VIDEO
-        "pdf" -> FileKind.PDF
-        "zip", "rar", "7z", "tar", "gz", "bz2", "xz", "zst", "tgz", "jar" -> FileKind.ARCHIVE
-        "kt", "java", "ts", "tsx", "js", "jsx", "py", "go", "rs", "c", "cpp", "h", "hpp", "swift",
-        "sql", "sh", "bat", "ps1", "rb", "php", "scala", "dart", "lua", "css", "vim" -> FileKind.CODE
-        "json", "jsonl", "jsonc" -> FileKind.JSON
-        "html", "htm", "xhtml", "xml" -> FileKind.HTML
-        "db", "sqlite", "sqlite3", "db3" -> FileKind.DATABASE
-        "apk" -> FileKind.APK
-        "txt", "log", "csv", "yaml", "yml", "toml", "env", "properties", "ini", "conf" -> FileKind.TEXT
+    val ext = name.substringAfterLast('.', "").lowercase()
+    return when {
+        ext in IMAGE_EXTENSIONS -> FileKind.IMAGE
+        ext in setOf("md", "markdown") -> FileKind.MARKDOWN
+        ext in setOf("mp3", "wav", "flac", "aac", "ogg", "m4a", "opus", "wma", "mid", "midi") -> FileKind.AUDIO
+        ext in setOf("mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "m3u8") -> FileKind.VIDEO
+        ext == "pdf" -> FileKind.PDF
+        ext in setOf("zip", "rar", "7z", "tar", "gz", "bz2", "xz", "zst", "tgz", "jar") -> FileKind.ARCHIVE
+        ext in setOf(
+            "kt", "java", "ts", "tsx", "js", "jsx", "py", "go", "rs", "c", "cpp", "h", "hpp", "swift",
+            "sql", "sh", "bat", "ps1", "rb", "php", "scala", "dart", "lua", "css", "vim",
+        ) -> FileKind.CODE
+        ext in setOf("json", "jsonl", "jsonc") -> FileKind.JSON
+        ext in setOf("html", "htm", "xhtml", "xml") -> FileKind.HTML
+        ext in setOf("db", "sqlite", "sqlite3", "db3") -> FileKind.DATABASE
+        ext == "apk" -> FileKind.APK
+        ext in setOf("txt", "log", "csv", "yaml", "yml", "toml", "env", "properties", "ini", "conf") -> FileKind.TEXT
         else -> FileKind.BINARY
     }
 }
@@ -126,10 +132,11 @@ fun listKind(entry: FileEntry): FileKind = fileKindOf(entry.name, entry.isDirect
 
 /**
  * 精确分类（用于点击打开时的判定）：会读取小文件内容做二进制嗅探。
- * FOLDER 以外的取值决定打开行为（文本可编辑 / HTML WebView 预览 / 超大文本转终端 / 二进制不可预览）。
+ * FOLDER 以外的取值决定打开行为（图片浮窗预览 / 文本可编辑 / HTML WebView 预览 / 超大文本转终端 / 二进制不可预览）。
  */
 fun openKind(file: File, repository: FileRepository): FileKind = when {
     file.isDirectory -> FileKind.FOLDER
+    repository.isImageFile(file.name) -> FileKind.IMAGE
     repository.isMarkdown(file.name) -> FileKind.MARKDOWN
     repository.isHtmlFile(file.name) -> FileKind.HTML
     repository.isTextFile(file) ->
@@ -210,7 +217,11 @@ fun FileListRow(
                 },
             ),
         leadingContent = {
-            Icon(fileIcon(kind), contentDescription = null, tint = fileColor(kind))
+            if (kind == FileKind.IMAGE) {
+                FileThumbnail(path = entry.path, name = entry.name)
+            } else {
+                Icon(fileIcon(kind), contentDescription = null, tint = fileColor(kind))
+            }
         },
         headlineContent = {
             Text(entry.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -226,6 +237,39 @@ fun FileListRow(
         trailingContent = {
             if (multiSelect) {
                 Checkbox(checked = selected, onCheckedChange = { onClick() })
+            }
+        },
+    )
+}
+
+/** 图片文件列表缩略图：Coil 按 40dp 采样加载，失败回退图片图标（喵~） */
+@Composable
+internal fun FileThumbnail(path: String, name: String) {
+    SubcomposeAsyncImage(
+        model = File(path),
+        contentDescription = name,
+        contentScale = ContentScale.Crop,
+        modifier = Modifier
+            .size(40.dp)
+            .clip(RoundedCornerShape(8.dp)),
+        loading = {
+            Box(
+                modifier = Modifier.size(40.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 1.5.dp)
+            }
+        },
+        error = {
+            Box(
+                modifier = Modifier.size(40.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.Image,
+                    contentDescription = null,
+                    tint = fileColor(FileKind.IMAGE),
+                )
             }
         },
     )

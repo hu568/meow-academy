@@ -152,6 +152,25 @@ class DshRpcClient(
     suspend fun prompt(sessionId: String, text: String, timeoutMs: Long = 15_000): Boolean =
         requestOk("session/prompt", DshParams.prompt(sessionId, text), timeoutMs)
 
+    /** session/prompt：入队一条带 contentBlocks 的消息（text + image 混合，图片块用 attachImages 返回的 durable ref） */
+    suspend fun prompt(sessionId: String, blocks: List<DshParams.ContentBlock>, timeoutMs: Long = 15_000): Boolean =
+        requestOk("session/prompt", DshParams.prompt(sessionId, blocks), timeoutMs)
+
+    /**
+     * session/attachImages：canonical base64 图片批 → durable refs。
+     * @return 与输入顺序一致的 durable refs（ImageAttachmentRef 的 JsonObject 列表），失败为 null
+     */
+    suspend fun attachImages(images: List<DshParams.ImageUpload>, timeoutMs: Long = 30_000): List<JsonObject>? {
+        if (images.isEmpty()) return emptyList()
+        val result = request("session/attachImages", DshParams.attachImages(images), timeoutMs)?.result ?: return null
+        val refs = result["refs"] as? JsonArray ?: return emptyList()
+        return refs.mapNotNull { el -> el as? JsonObject }
+    }
+
+    /** session/imageLimits：读取部署侧图片限额（字节/数量/像素），压缩参数用 */
+    suspend fun imageLimits(timeoutMs: Long = 10_000): JsonObject? =
+        request("session/imageLimits", DshParams.imageLimits(), timeoutMs)?.result
+
     /** session/cancel：停止生成 */
     suspend fun cancelSession(sessionId: String, timeoutMs: Long = 10_000): Boolean =
         requestOk("session/cancel", DshParams.cancel(sessionId), timeoutMs)

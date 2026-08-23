@@ -29,7 +29,12 @@ data class ModelProfile(
     val name: String? = null,
     val contextWindow: Int? = null,
     val maxTokens: Int? = null,
-)
+    /** 模型接受的输入模态（text / image）；null=未知，非空且不含 image=明确不支持图片 */
+    val input: List<String>? = null,
+) {
+    /** 是否支持图片输入（未知时返回 true，让发送端尝试后由后端裁决） */
+    val supportsImage: Boolean get() = input?.contains("image") ?: true
+}
 
 // ── 聊天页与设置页共用的 provider 目录 ──
 
@@ -123,6 +128,7 @@ fun parseCatalogProfiles(result: JsonObject?): Map<String, ProviderProfile> {
                 name = mo["name"]?.jsonPrimitive?.content,
                 contextWindow = mo["contextWindow"]?.jsonPrimitive?.content?.toIntOrNull(),
                 maxTokens = mo["maxTokens"]?.jsonPrimitive?.content?.toIntOrNull(),
+                input = mo["input"]?.jsonArray?.mapNotNull { it.jsonPrimitive.content },
             )
         } ?: emptyList()
         map[name] = ProviderProfile(
