@@ -2,7 +2,7 @@
 
 ## [0.2.2] - 2026-08-23（debug）
 
-第四个 debug 包（约 86MB）。核心变更：**M5 知识库与 RAG 前置能力落地**——HTML 文件 WebView 预览、Markdown 块级渲染 + Mermaid、聊天右侧功能看板（快速换模型 / 快捷附加文件 / 调用量统计）。
+第四个 debug 包（约 86MB）。核心变更：**HTML 文件 WebView 预览、Markdown 块级渲染 + Mermaid、聊天右侧功能看板**（快速换模型 / 快捷附加文件 / 调用量统计）。
 
 **新特性：**
 
@@ -22,7 +22,5 @@
 
 - runtime.bin 已随本包更新（含 `session/stats` RPC），无需手动重建；若调用量面板显示空态，先确认 App 内置运行时已初始化完成
 - 真机验收：HTML 预览 ✓ Markdown 表格/公式/代码复制 ✓ Mermaid 渲染 ✓ 右侧看板三块面板（模型 / 文件 / 统计）请按需复测
-
-安装：`adb install -r release/meow-academy-0.2.2-debug.apk`
 
 **Full Changelog**: https://github.com/hu568/meow-academy/compare/v0.2.1...v0.2.2
