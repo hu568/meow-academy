@@ -8,15 +8,16 @@ fork 出来的**本地源码副本，整体 gitignore 不入库**。本目录把
 
 | 项 | 值 |
 |---|---|
-| 上游基线 | tag `dsh-v0.1.1-rc.1`（commit `528c682e06`） |
-| 基线日期 | 2026-08-21 升级（2026-08-13 首次 fork 于 `47f943859b` = 0.1.0-rc.5） |
-| 对应版本 | 0.1.1-rc.1 |
+| 上游基线 | tag `dsh-v0.1.1-rc.2`（commit `b150a551b8`） |
+| 基线日期 | 2026-08-23 升级（2026-08-21 曾升级至 rc.1 = `528c682e06`；2026-08-13 首次 fork 于 `47f943859b` = 0.1.0-rc.5） |
+| 对应版本 | 0.1.1-rc.2 |
 
-> 升级记录（2026-08-21）：rc.5 → v0.1.1-rc.1（819 commits）。fs/bash/tavily/deploy 零冲突重放；
-> llm-pi-ai dormant 三处手工合并；新增 koffi 惰性加载适配（见下）；`@smithy/core` pin 已不需要
-> （新版 lockfile 自洽）。计划与过程见 `plan/plan-dsh-upgrade-rc1.md`。
+> 升级记录（2026-08-23）：rc.1 → v0.1.1-rc.2（35 commits，主题=统一图片管线）。原 rc.1 patch
+> 对 rc.2 `git apply --check` 零冲突全量重放；另新增 attachment-local 的 Android 适配（父目录
+> fsync 与 `link()` 的 SELinux 规避，见下）与 `sharp-wasm32` 兜底依赖。SQLite SCHEMA_VERSION 仍为
+> 17，**不删库、不迁移**。计划与过程见 `plan/plan-dsh-upgrade-rc2.md`。
 
-## patch 内容（0001-meow-fork-on-deepseek-harness-dsh-v0.1.1-rc.1.patch）
+## patch 内容（0001-meow-fork-on-deepseek-harness-dsh-v0.1.1-rc.2.patch）
 
 ### Android 存活适配
 - **`packages/fs/fs-local/src/fsio.ts`** — guarded-create 发布原语由 `link()` 改为
@@ -55,8 +56,20 @@ fork 出来的**本地源码副本，整体 gitignore 不入库**。本目录把
 - **`deploy/meow-runtime/package.json`** — pnpm deploy 清单：以官方 python/sdk-runtime 闭包为基，
   剔除 ACP/subagent 驱动/node-pty/sandbox 原生模块(landlock)/query/lsp/mcp 等；
   含 SQLite 会话持久化与 DeepSeek web 搜索。**这是打闭包的输入，必须存在。**
-- **`pnpm-workspace.yaml`** — 注册 `deploy/meow-runtime`。（旧版的 `@smithy/core` pin 已删：
-  v0.1.1-rc.1 lockfile 自行解析到 3.24.7，无需豁免。）
+  rc.2 起新增 `@deepseek-ai/dsh-attachment-local`（官方附件存储）与
+  `@img/sharp-wasm32@0.35.3`（Termux sharp WASM 兜底）。
+- **`pnpm-workspace.yaml`** — 注册 `deploy/meow-runtime`。
+
+### 图片存储 Android 适配（rc.2 新增）
+- **`packages/attachment/attachment-local/src/store.ts`** — 两处 Android/SELinux 规避：
+  1. `ensureDurableDirectory()` 向上 fsync 祖先目录时，遇到 `EACCES`/`EPERM`（App 沙箱不能
+     `open('/data/user/0')` 等数据根之上的父目录）改为 best-effort 停止，不再整体失败；
+  2. `commitPreparedImageFile()` 的内容寻址发布由 `link()` 为主，遇 `EACCES`/`EPERM`（SELinux
+     禁 untrusted_app 域 `link()`，与 fs-local 同坑）回退为「`lstat()` 探测 → 未命中
+     `rename()` 发布 / 命中校验摘要」；发布后 `unlink(tmp)` 容忍 `ENOENT`（rename 后临时文件已不存在）。
+- 说明：cordis.yml 挂载 `dsh-attachment-local`、meow-jsonrpc.js 新增 `session/attachImages` /
+  `session/imageLimits` 属于 `runtime-assets/dsh/`（不入 patch）；sharp 在 Termux 靠
+  `@img/sharp-wasm32` 自动 WASM 兜底（PC 闭包内 linux-x64 原生包在 arm64 上加载失败后 fallback）。
 
 ## 从零复现 runtime.bin
 
@@ -64,8 +77,8 @@ fork 出来的**本地源码副本，整体 gitignore 不入库**。本目录把
 # 0. 前置：PC 有 node + pnpm（node ^22.19||>=24）；安卓侧需 JDK 17 + Android SDK + 真机（Termux 打包用）
 git clone https://github.com/deepseek-ai/deepseek-harness dsh
 cd dsh
-git checkout dsh-v0.1.1-rc.1
-git apply ../android-app/runtime-assets/dsh-fork/0001-meow-fork-on-deepseek-harness-dsh-v0.1.1-rc.1.patch
+git checkout dsh-v0.1.1-rc.2
+git apply ../android-app/runtime-assets/dsh-fork/0001-meow-fork-on-deepseek-harness-dsh-v0.1.1-rc.2.patch
 pnpm install          # lockfile 由 install 重新生成（patch 不含 pnpm-lock.yaml）
 
 # 1. PC 构建并打 DSH 闭包（产物 .tmp/dsh-closure.tar.gz）
@@ -97,8 +110,8 @@ cd android-app && ./gradlew clean assembleDebug
   才暴露。跨平台改动务必以真机启动为准。
 - **替换 runtime.bin 后必须 `./gradlew clean assembleDebug`**：增量打包会让 APK 膨胀一倍
   （~70MB 零填充垃圾），clean 后恢复正常体积。
-- **上游 SQLite SCHEMA_VERSION 15→17 硬守卫**：升级后旧版 App 写下的 `.dsh-sessions/chat.db`
-  必须移除（DSH 侧 resume 上下文不可续聊为预期；界面 Room 聊天历史不受影响）。
+- **SQLite SCHEMA_VERSION 17（rc.1 = rc.2）硬守卫**：rc.1 → rc.2 **不删库、不迁移**，旧会话可续聊；
+  若未来上游 bump 到 >17，DSH 会因版本不匹配拒绝打开旧库，届时需按上游迁移或重建。
 
 ## 升级上游时
 

@@ -1,36 +1,12 @@
-From 08af4b3a4b206368305d056f5b7902abfe60a933 Mon Sep 17 00:00:00 2001
-From: meow-academy <meow@academy.local>
-Date: Fri, 21 Aug 2026 20:12:43 +0800
+From e708e7ae3286eed6781ecb1c5ecc8a1ef2277d0a Mon Sep 17 00:00:00 2001
+From: meow <meow@localhost>
+Date: Sun, 23 Aug 2026 22:03:05 +0800
 Subject: [PATCH] feat(meow): Android runtime adaptations + tavily web search +
- meow-runtime deploy manifest
-MIME-Version: 1.0
-Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
+ meow-runtime deploy manifest + attachment store Android fixes
 
-喵仓（meow-academy）安卓内置 DSH 运行时的全部 fork 改动，基线 dsh-v0.1.1-rc.1。
-复现链路见 android-app/runtime-assets/dsh-fork/README.md。
-
-Android 运行时适配（untrusted_app SELinux 域限制）:
-- fs-local: writeFileAtomic 的 guarded-create 发布原语改为「lstat 探测 +
-  EEXIST 上报 + rename()」——SELinux 禁 link()，探测保住 no-replace 契约
-  （竞争者保留、FS_NOT_OBSERVED/FS_NOT_REGULAR_FILE 映射与上游语义一致）
-- fs-local: deny 规则（{path}[]，resolve/lstat/listDir 三处拦截，
-  FS_PERMISSION_DENIED）；fsio.ts 覆盖已有文件的 rename 路径本就可用
-- bash-local: DSH_BASH_BIN/DSH_LINKER64 存在时经 linker64 拉起 bash
-  （untrusted_app 不能 exec 私有 ELF/shebang wrapper）；env 显式
-  DEEPSEEK_API_KEY: undefined tombstone 双保险
-
-llm-pi-ai dormant 路由（模型管理先存凭证后填模型的配置中态）:
-- catalog.ts: 空 models 不再 invalid()，放行为 dormant route
-- config.ts: resolveProfiles 对空 models continue（保留 settings 占位）
-- index.ts: storedApiKey 捕获 MISSING_CREDENTIAL 返回 undefined
-- README/README.zh 规格段 + adapter/discovery/dynamic-config spec
-
-新增 packages/web/web-search-tavily（TAVILY_API_KEY，redirect 全拒绝策略）;
-bundle/base 注册 + tsconfig.host.json 引用 + deploy/meow-runtime 闭包清单
-+ pnpm-workspace.yaml 注册行。
 ---
- deploy/meow-runtime/package.json              |  84 +++++
+ deploy/meow-runtime/package.json              |  86 ++++++
+ .../attachment/attachment-local/src/store.ts  |  47 ++-
  packages/bundle/base/cordis.patch.yml         |   5 +
  packages/bundle/base/package.json             |   1 +
  packages/fs/fs-local/src/fsio.ts              |  29 +-
@@ -57,7 +33,7 @@ bundle/base 注册 + tsconfig.host.json 引用 + deploy/meow-runtime 闭包清�
  packages/web/web-search-tavily/tsconfig.json  |  30 ++
  pnpm-workspace.yaml                           |   2 +
  tsconfig.host.json                            |   1 +
- 27 files changed, 1205 insertions(+), 57 deletions(-)
+ 28 files changed, 1247 insertions(+), 64 deletions(-)
  create mode 100755 deploy/meow-runtime/package.json
  create mode 100755 packages/web/web-search-tavily/README.md
  create mode 100755 packages/web/web-search-tavily/README.zh.md
@@ -72,10 +48,10 @@ bundle/base 注册 + tsconfig.host.json 引用 + deploy/meow-runtime 闭包清�
 
 diff --git a/deploy/meow-runtime/package.json b/deploy/meow-runtime/package.json
 new file mode 100755
-index 0000000000..52e6c08dd7
+index 0000000000..d52e2c7a80
 --- /dev/null
 +++ b/deploy/meow-runtime/package.json
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,86 @@
 +{
 +  "name": "meow-academy-dsh-runtime",
 +  "description": "喵仓（meow-academy）安卓 App 内置 DSH jsonrpc 运行时的依赖清单：以官方 python/sdk-runtime 闭包为基，剔除 ACP/subagent 驱动/持久终端(node-pty)/sandbox 原生模块(landlock)/query/lsp/mcp 等；含 SQLite 会话持久化与 DeepSeek web 搜索。",
@@ -94,6 +70,7 @@ index 0000000000..52e6c08dd7
 +    "@deepseek-ai/dsh-app-boot": "workspace:^",
 +    "@deepseek-ai/dsh-atomic-write": "workspace:^",
 +    "@deepseek-ai/dsh-attachment": "workspace:^",
++    "@deepseek-ai/dsh-attachment-local": "workspace:^",
 +    "@deepseek-ai/dsh-shell": "workspace:^",
 +    "@deepseek-ai/dsh-shell-env": "workspace:^",
 +    "@deepseek-ai/dsh-bash-local": "workspace:^",
@@ -157,9 +134,89 @@ index 0000000000..52e6c08dd7
 +    "@deepseek-ai/dsh-jobs-local": "workspace:^",
 +    "@deepseek-ai/dsh-tool-jobs": "workspace:^",
 +    "@deepseek-ai/dsh-web": "workspace:^",
-+    "@deepseek-ai/dsh-web-search-deepseek": "workspace:^"
++    "@deepseek-ai/dsh-web-search-deepseek": "workspace:^",
++    "@img/sharp-wasm32": "0.35.3"
 +  }
 +}
+diff --git a/packages/attachment/attachment-local/src/store.ts b/packages/attachment/attachment-local/src/store.ts
+index 5fbb8e9201..07699b0ef4 100644
+--- a/packages/attachment/attachment-local/src/store.ts
++++ b/packages/attachment/attachment-local/src/store.ts
+@@ -2,7 +2,7 @@
+ 
+ import { createHash, randomUUID } from 'node:crypto'
+ import { constants } from 'node:fs'
+-import { chmod, link, mkdir, open, readFile, unlink } from 'node:fs/promises'
++import { chmod, link, lstat, mkdir, open, readFile, rename, unlink } from 'node:fs/promises'
+ import { dirname, join, parse, resolve } from 'node:path'
+ import {
+   AttachmentError,
+@@ -154,7 +154,17 @@ async function ensureDurableDirectory(path: string, boundary: string): Promise<v
+   let level = target
+   while (level !== stop) {
+     const parent = dirname(level)
+-    await syncDirectory(parent)
++    try {
++      await syncDirectory(parent)
++    } catch (error) {
++      // Android app sandbox（untrusted_app）不能 open /data/user/0 等 App 数据根之上的
++      // 父目录做 fsync；对进程不可达的祖先做 best-effort，跳过即可（单进程使用下不影响正确性）。
++      if (!(error instanceof Error && 'code' in error
++        && (error.code === 'EACCES' || error.code === 'EPERM'))) {
++        throw error
++      }
++      break
++    }
+     /* v8 ignore next -- filesystem-root guard: callers pass a boundary that is an ancestor of path, so the walk reaches it first. */
+     if (parent === level) return
+     level = parent
+@@ -210,10 +220,30 @@ export async function commitPreparedImageFile(
+     try {
+       await link(temporary, target)
+     } catch (error) {
+-      /* v8 ignore next -- Private same-filesystem directories make EEXIST the only recoverable link race. */
+-      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
+-      const existing = new Uint8Array(await readFile(target))
+-      if (digest(existing) !== sha256) throw new AttachmentError('Stored attachment failed integrity verification.', 'ATTACHMENT_CORRUPT')
++      if (!(error instanceof Error && 'code' in error)) throw error
++      if (error.code === 'EACCES' || error.code === 'EPERM') {
++        // Android app sandbox（untrusted_app）禁止 link(2)（SELinux）。与 fs-local 同款规避：
++        // lstat 探测命中即视为已存在；未命中用 rename() 原子发布（单进程下语义近似 no-replace）。
++        let targetExists = true
++        try {
++          await lstat(target)
++        } catch (statError) {
++          if (!(statError instanceof Error && 'code' in statError && statError.code === 'ENOENT')) throw statError
++          targetExists = false
++        }
++        if (!targetExists) {
++          await rename(temporary, target)
++        } else {
++          const existing = new Uint8Array(await readFile(target))
++          if (digest(existing) !== sha256) throw new AttachmentError('Stored attachment failed integrity verification.', 'ATTACHMENT_CORRUPT')
++        }
++      } else if (error.code !== 'EEXIST') {
++        throw error
++      } else {
++        /* v8 ignore next -- Private same-filesystem directories make EEXIST the only recoverable link race. */
++        const existing = new Uint8Array(await readFile(target))
++        if (digest(existing) !== sha256) throw new AttachmentError('Stored attachment failed integrity verification.', 'ATTACHMENT_CORRUPT')
++      }
+     }
+     // Persist the target entry and close a concurrent bucket-creation window
+     // before the reference can reach a session checkpoint. The dedup path
+@@ -221,7 +251,10 @@ export async function commitPreparedImageFile(
+     // that writer reaches its own durability boundary.
+     await syncDirectory(bucket)
+     await syncDirectory(join(root, 'objects'))
+-    await unlink(temporary)
++    await unlink(temporary).catch((cleanupError: unknown) => {
++      // Android rename 发布后临时文件已不存在；仅 ENOENT 是预期清理路径。
++      if (!(cleanupError instanceof Error && 'code' in cleanupError && cleanupError.code === 'ENOENT')) throw cleanupError
++    })
+   } catch (error) {
+     /* v8 ignore next -- A descriptor can remain open only when the underlying write/sync/close operation fails. */
+     if (handle !== undefined) await handle.close().catch(
 diff --git a/packages/bundle/base/cordis.patch.yml b/packages/bundle/base/cordis.patch.yml
 index e9567d9206..7238f598d4 100644
 --- a/packages/bundle/base/cordis.patch.yml
@@ -177,7 +234,7 @@ index e9567d9206..7238f598d4 100644
        name: '@deepseek-ai/dsh-tool-web'
        config:
 diff --git a/packages/bundle/base/package.json b/packages/bundle/base/package.json
-index 8b7058446f..6aeadfba31 100644
+index 2096a64b75..ea4dfd9acb 100644
 --- a/packages/bundle/base/package.json
 +++ b/packages/bundle/base/package.json
 @@ -114,6 +114,7 @@
@@ -399,10 +456,10 @@ index 661ef236b8..340bd83d30 100644
  
    override async writeText(
 diff --git a/packages/llm/llm-pi-ai/README.md b/packages/llm/llm-pi-ai/README.md
-index 19dbcfa90d..2787b8faba 100644
+index 43472de908..880935a659 100644
 --- a/packages/llm/llm-pi-ai/README.md
 +++ b/packages/llm/llm-pi-ai/README.md
-@@ -102,7 +102,7 @@ Request modalities resolve entry `input` → installed catalog entry → route `
+@@ -105,7 +105,7 @@ Request modalities resolve entry `input` → installed catalog entry → route `
  
  `[text]` is the absence of a declaration rather than a guess at the endpoint, which is why the fallback here is conservative where the capacity fallbacks are merely plausible. Nothing interrogates a gateway for what it accepts, and the two wrong answers do not cost the same: the harness refuses an image before it is attached when a model's modalities omit one, so under-claiming costs a refusal naming the model, while over-claiming admits an image the provider then rejects mid-turn — after the message is durable, which leaves the session repeating a request that cannot succeed.
  
@@ -411,7 +468,7 @@ index 19dbcfa90d..2787b8faba 100644
  
  `baseURL` sets the endpoint of every model on the route, so private proxies such as `https://proxy.example.com:8443` remain supported; a catalog route that omits it keeps each catalog model's own endpoint. Naming `api` on a catalog route repoints the whole route at that protocol, which is how a deployment moves a provider between, say, Responses and Chat Completions.
  
-@@ -112,7 +112,7 @@ Resolution still fails loud, naming the offending route and model, when a route
+@@ -115,7 +115,7 @@ Resolution still fails loud, naming the offending route and model, when a route
  
  The adapter reads its profiles through a thunk **once per operation** instead of freezing them at construction. The plugin registers the `llm-pi-ai` namespace on the optional `ctx.settings` seam with this same `Config` schema and its `cordis.yml` entry as the composition `base`, and because `providers` is a dict, the base and the user's `llm-pi-ai:` settings section merge **per provider**: a user can add a route, override one field of a composition route, or point a route at another proxy, all effective on the next request with no restart. Without a mounted settings service the entry config alone drives the adapter, unchanged.
  
@@ -420,7 +477,7 @@ index 19dbcfa90d..2787b8faba 100644
  
  The adapter exposes each configured route's models through `ctx.llm.listModels(provider)`. This is provider-neutral selector metadata read from the same pi-ai `Models` collection the request path uses, so discovery does not create a second model registry. `ctx.llm.resolveModelInfo(provider, model)` performs that exact descriptor lookup once and returns its identity, context window, configured output cap, and selectable thinking levels, keeping authoritative metadata on the route-owning adapter rather than its consumers. A model's **configured** `maxTokens` becomes the seam's `defaultMaxTokens`, so a request that names no output cap carries the one the deployment chose; a value inherited from the installed catalog is the model's output *capability* and never becomes a request default on its own.
  
-@@ -130,7 +130,7 @@ The plugin offers `ctx.llm.registerModelDiscovery('llm-pi-ai', …)`, which answ
+@@ -133,7 +133,7 @@ The plugin offers `ctx.llm.registerModelDiscovery('llm-pi-ai', …)`, which answ
  
  A request naming a route the **installed catalog ships is answered from that catalog**, with no network call: pi-ai's registry is the authoritative list for its own providers, and it carries the context windows and output caps a listing endpoint would not disclose. Such a route needs no `baseURL` at all. Only a route the catalog does not describe — a gateway, a self-hosted server — is interrogated over the wire, and one that names no endpoint is told to set one or enter its models by hand.
  
@@ -430,10 +487,10 @@ index 19dbcfa90d..2787b8faba 100644
  Interrogation reads `openai-completions` and `openai-responses`, whose `GET /models` shape with bearer auth is the one a gateway, a self-hosted server, and the official endpoints all agree on. Azure is excluded despite its OpenAI lineage — it authenticates with an `api-key` header and requires an `api-version` query — and Codex uses OAuth; every other protocol answers `DISCOVERY_UNSUPPORTED` so the surface falls back to hand-entry instead of an authentication failure being reported as a provider with no models. The `baseURL` is treated as a prefix rather than a URL to resolve against, so a deployment path such as `https://gateway.example/openai/v1` keeps its segments.
  
 diff --git a/packages/llm/llm-pi-ai/README.zh.md b/packages/llm/llm-pi-ai/README.zh.md
-index 334c6c3166..1b2a6c9e25 100644
+index 76b3dc9dec..ccb90c3945 100644
 --- a/packages/llm/llm-pi-ai/README.zh.md
 +++ b/packages/llm/llm-pi-ai/README.zh.md
-@@ -131,7 +131,7 @@ pi-ai 依据提供方 id 与 baseURL 决定每个请求的形状：系统提示
+@@ -134,7 +134,7 @@ pi-ai 依据提供方 id 与 baseURL 决定每个请求的形状：系统提示
  
  点名了**已安装 catalog 所提供路由**的请求，直接由该 catalog 作答，完全不联网：pi-ai 的注册表才是它自家提供方的权威列表，且携带列表端点不会公布的上下文窗口与输出上限。这类路由根本不需要 `baseURL`。只有 catalog 未描述的路由——网关、自建服务——才会经协议层询问；若它也没给端点，则会被告知去设置一个或手工填写模型。
  
@@ -464,10 +521,10 @@ index 1e9b126dd5..4f6e81daf4 100644
    // Vocabulary before protocols: a withheld or undeclared switch is refused
    // wherever it is written, so it cannot look applied on a route whose models
 diff --git a/packages/llm/llm-pi-ai/src/config.ts b/packages/llm/llm-pi-ai/src/config.ts
-index 62d49a58ee..e54384c36d 100644
+index 5fdcc2cdb2..80d574f805 100644
 --- a/packages/llm/llm-pi-ai/src/config.ts
 +++ b/packages/llm/llm-pi-ai/src/config.ts
-@@ -415,6 +415,11 @@ export function resolveProfiles(
+@@ -437,6 +437,11 @@ export function resolveProfiles(
        defaultContextWindow: source.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW,
        defaultMaxTokens: source.defaultMaxTokens ?? DEFAULT_MAX_TOKENS,
      })
@@ -507,10 +564,10 @@ index 846509f8c6..daff49680d 100644
    // Interrogating an endpoint is a configuration-time action over a draft, so
    // it is offered for the whole namespace rather than per route: the provider
 diff --git a/packages/llm/llm-pi-ai/tests/adapter.spec.ts b/packages/llm/llm-pi-ai/tests/adapter.spec.ts
-index a36a180f7d..21d529b2fd 100644
+index e2ed0233d9..3ba28bccd4 100644
 --- a/packages/llm/llm-pi-ai/tests/adapter.spec.ts
 +++ b/packages/llm/llm-pi-ai/tests/adapter.spec.ts
-@@ -745,8 +745,9 @@ describe('provider profile lifecycle', () => {
+@@ -800,8 +800,9 @@ describe('provider profile lifecycle', () => {
      expect(resolveProfiles(undefined).size).toBe(0)
      expect(() => resolveProfiles({ '': {} })).toThrow(/non-empty/)
      // A route the installed catalog does not ship is allowed, but it has no
@@ -1766,3 +1823,6 @@ index f37b98ea57..fc51a17aae 100644
      { "path": "./packages/web/web-fetch-http" },
      { "path": "./packages/web/tool-web" },
      { "path": "./packages/spill/spill" },
+-- 
+2.43.0
+

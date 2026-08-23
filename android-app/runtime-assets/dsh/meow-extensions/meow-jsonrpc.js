@@ -22,6 +22,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { isTokenDelta } from '@deepseek-ai/dsh-llm/message'
+import { admitEncodedImages } from '@deepseek-ai/dsh-attachment'
 import z from '@deepseek-ai/schemastery'
 
 export const name = 'meow-jsonrpc'
@@ -529,6 +530,8 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
       case 'settings/setProvider': return this.setProvider(params ?? {})
       case 'settings/updateProviderModels': return this.updateProviderModels(params ?? {})
       case 'settings/removeProvider': return this.removeProvider(params ?? {})
+      case 'session/attachImages': return this.attachImages(params ?? {})
+      case 'session/imageLimits': return this.imageLimits()
       default: return super.handleRequest(method, params)
     }
   }
@@ -593,6 +596,51 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
   /** 心跳探测：进程活着且可响应即返回（App 保活 worker 用） */
   async ping() {
     return { pong: true, liveSessions: this.ctx.agents.list().length }
+  }
+
+  /**
+   * 会话发图：接收 canonical base64 图片批 → 附件服务规范化入库 → 返回 durable refs。
+   * App 后续用返回的 refs 构造 session/prompt 的 contentBlocks（text + image 块）。
+   */
+  async attachImages(params) {
+    const attachments = this.ctx.get('attachments')
+    if (attachments === undefined) {
+      throw new Error('session/attachImages: attachments service is not mounted')
+    }
+    const images = Array.isArray(params.images) ? params.images : []
+    if (images.length === 0) throw new Error('session/attachImages: images must be a non-empty array')
+    const inputs = images.map((img, index) => {
+      if (typeof img?.data !== 'string' || img.data.length === 0) {
+        throw new Error(`session/attachImages: images[${index}].data (canonical base64) is required`)
+      }
+      if (typeof img?.mediaType !== 'string'
+        || !['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(img.mediaType)) {
+        throw new Error(`session/attachImages: images[${index}].mediaType must be one of image/jpeg|image/png|image/webp|image/gif`)
+      }
+      return {
+        mediaType: img.mediaType,
+        data: img.data,
+        ...(typeof img.name === 'string' && img.name.length > 0 ? { name: img.name } : {}),
+      }
+    })
+    try {
+      const refs = await admitEncodedImages(attachments, inputs)
+      return { refs: [...refs] }
+    } catch (error) {
+      const code = error?.code !== undefined ? String(error.code) : undefined
+      throw new Error(
+        `session/attachImages failed${code === undefined ? '' : ` (${code})`}: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+
+  /** 图片限额：App 端压缩参数上限预取用。 */
+  imageLimits() {
+    const attachments = this.ctx.get('attachments')
+    if (attachments === undefined) {
+      throw new Error('session/imageLimits: attachments service is not mounted')
+    }
+    return { imageLimits: attachments.imageLimits }
   }
 
   /** 会话调用量统计：读持久化日志折叠（轮/步/时长/首token/tok/s/用量/最近一步/上下文） */

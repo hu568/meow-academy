@@ -38,6 +38,18 @@
     thinking: enabled
     reasoningEffort: high
 
+# 图片附件（M5 发图铺路）：官方 attachment-local，sharp 走 @img/sharp-wasm32 WASM 兜底。
+# 存储根 = <dshHome>/attachments/v1；dshHome 用 DSH_HOME，未注入则落在 DSH_CWD/.dsh（App workspace 内）。
+# imageCompressionConcurrency=1：Termux WASM 解码较慢，串行更稳。
+- id: attachments
+  name: '@deepseek-ai/dsh-attachment-local'
+  config:
+    dshHome: !!js process.env.DSH_HOME ?? (process.env.DSH_CWD ?? process.cwd()) + '/.dsh'
+    maxImagesPerMessage: 9
+    maxMessageImageBytes: 9437184
+    normalizedImageMaxDimension: 2048
+    imageCompressionConcurrency: 1
+
 # 受管子进程组（bash 执行器底座；Android 上 PATH 含 runtime/bin 与 /system/bin）
 - id: subprocess
   name: '@deepseek-ai/dsh-subprocess-local'
