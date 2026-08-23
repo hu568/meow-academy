@@ -120,12 +120,12 @@ cd android-app
 ./gradlew assembleDebug
 ```
 
-构建产物自动同步到 `release/meow-academy-0.2.0-debug.apk`（约 88MB，内置 DSH 运行时 `runtime.bin` 约 67MB）。
+构建产物自动同步到 `release/meow-academy-0.2.2-debug.apk`（约 86MB，内置 DSH 运行时 `runtime.bin` 约 62MB）。
 
 ### 安装到真机
 
 ```bash
-adb install -r release/meow-academy-0.2.0-debug.apk
+adb install -r release/meow-academy-0.2.2-debug.apk
 ```
 
 ### 首次配置
@@ -198,7 +198,7 @@ meow-academy/
 | [docs/notes/meow-dynamic-architecture-note.md](docs/notes/meow-dynamic-architecture-note.md) | 动态架构笔记：Markdown 渲染 JS 化等 |
 | [docs/notes/embedded-dsh-capabilities.md](docs/notes/embedded-dsh-capabilities.md) | 内置 DSH 运行时能力盘点 |
 | [docs/reference/](docs/reference/) | RAG 算法 / Cherry Studio / RikkaHub 参考实现 |
-| [release/RELEASE_NOTES_0.2.1.md](release/RELEASE_NOTES_0.2.1.md) | 版本更新记录（最新） |
+| [release/RELEASE_NOTES_0.2.2.md](release/RELEASE_NOTES_0.2.2.md) | 版本更新记录（最新） |
 
 ---
 
