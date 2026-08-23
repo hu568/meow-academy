@@ -18,6 +18,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -26,6 +27,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import java.io.File
+import kotlin.math.roundToInt
 
 /**
  * HTML 文件预览组件（WebView 封装，喵~）。
@@ -43,6 +45,8 @@ import java.io.File
  * @param modifier 外层修饰符
  * @param content 非 null 时按内存内容渲染（忽略磁盘文件内容）
  * @param reloadKey 变化时重新加载页面（如保存后刷新）
+ * @param initialScrollFraction 页面加载完成后恢复的滚动比例（0~1，相对 contentHeight）；用于模式切换回来时保持阅读位置
+ * @param onScrollFractionChanged 预览滚动时实时上报当前滚动比例（scrollY / contentHeight）
  */
 @Suppress("DEPRECATION") // allowFileAccessFromFileURLs / LocalLifecycleOwner 在新版本有替代 API，但当前仍是稳定可用路径
 @Composable
@@ -51,11 +55,15 @@ fun HtmlWebView(
     modifier: Modifier = Modifier,
     content: String? = null,
     reloadKey: Int = 0,
+    initialScrollFraction: Float = 0f,
+    onScrollFractionChanged: (Float) -> Unit = {},
 ) {
     // 每个文件一个独立 WebView：换文件时整组销毁重建，避免 AndroidView 复用旧实例（喵~）
     key(file.path) {
         val context = LocalContext.current
         var progress by remember { mutableIntStateOf(100) }
+        // 闭包（onPageFinished）里读最新恢复比例：滚动中的 recompose 不会触发重新加载，但恢复目标始终取最新值（喵~）
+        val currentInitialScrollFraction by rememberUpdatedState(initialScrollFraction)
 
         val webView = remember {
             WebView(context).apply {
@@ -73,6 +81,14 @@ fun HtmlWebView(
                         progress = newProgress
                     }
                 }
+                // 预览滚动时按比例上报：上层在切换模式时用它做跨模式位置锚点（喵~）
+                setOnScrollChangeListener { _, _, _, _, _ ->
+                    val contentHeight = this.contentHeight
+                    if (contentHeight > 0) {
+                        onScrollFractionChanged(scrollY.toFloat() / contentHeight)
+                    }
+                }
+
                 webViewClient = object : WebViewClient() {
                     override fun onReceivedError(
                         view: WebView?,
@@ -82,6 +98,15 @@ fun HtmlWebView(
                         // 只提示主页面加载失败；子资源（图片/css 等）失败不打扰
                         if (request?.isForMainFrame == true) {
                             Toast.makeText(context, "加载失败", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        // 页面加载完成后恢复上次滚动位置（模式切换回来时 WebView 会重建，喵~）
+                        val contentHeight = view?.contentHeight ?: 0
+                        val fraction = currentInitialScrollFraction
+                        if (view != null && contentHeight > 0 && fraction > 0f) {
+                            view.scrollTo(0, (fraction * contentHeight).roundToInt())
                         }
                     }
                 }

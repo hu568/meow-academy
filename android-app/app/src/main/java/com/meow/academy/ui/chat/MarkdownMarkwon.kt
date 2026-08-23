@@ -12,7 +12,9 @@ import io.noties.markwon.MarkwonPlugin
 import io.noties.markwon.ext.latex.JLatexMathNode
 import io.noties.markwon.ext.latex.JLatexMathPlugin
 import io.noties.markwon.ext.latex.JLatexMathTheme
+import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.ext.tables.TablePlugin
+import io.noties.markwon.ext.tasklist.TaskListPlugin
 import io.noties.markwon.inlineparser.InlineProcessor
 import io.noties.markwon.inlineparser.MarkwonInlineParserPlugin
 import io.noties.markwon.linkify.LinkifyPlugin
@@ -68,6 +70,9 @@ fun buildMarkwon(
         .usePlugin(TablePlugin.create(context))
         .usePlugin(LinkifyPlugin.create())
         .usePlugin(SyntaxHighlightPlugin.create(prism4j, prismTheme))
+        // M5：GFM 任务列表（- [ ] / - [x] 复选框）+ 删除线（~~text~~）
+        .usePlugin(TaskListPlugin.create(context))
+        .usePlugin(StrikethroughPlugin.create())
         .usePlugin(MarkwonInlineParserPlugin.create())
         // 动态渲染配置：列表 · / 代码块圆角 / 引用 / 链接 / 标题 / 分割线
         .usePlugin(MarkdownConfigPlugin(context, textSizePx, resolved))
@@ -76,7 +81,7 @@ fun buildMarkwon(
                 textSizePx,
                 JLatexMathPlugin.BuilderConfigure { builder ->
                     builder.inlinesEnabled(true)
-                    // 公式解析失败（含流式未闭合）回退显示原始 LaTeX 文本
+                    // 公式解析失败时返回 null（不绘制占位图）；MathBlockCompose 会自行回退显示原文
                     builder.errorHandler { _, _ -> null }
                     configureJLatexTheme(builder.theme(), resolved.formula, textColorArgb, context)
                 },

@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -50,11 +52,13 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,9 +67,11 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.TextFieldValue
@@ -135,6 +141,23 @@ fun FileEditorScreen(
         mutableStateOf(if (repository.isHtmlFile(file.name)) EditorMode.PREVIEW else EditorMode.EDIT)
     }
 
+    // ── 模式切换滚动保持 ─────────────────────────────────────────────
+    // 编辑 / 预览的 ScrollState 提升到顶层：切换模式时不销毁，配合锚点比例恢复位置（喵~）
+    val editScroll = rememberScrollState()
+    val previewScroll = rememberScrollState()
+    // HTML WebView 预览的实时滚动比例（scrollY / contentHeight）
+    var htmlScrollFraction by remember { mutableFloatStateOf(0f) }
+    // 切换瞬间记录的「来源模式视口位置比例」，切到目标模式后按同一比例恢复
+    var anchorFraction by remember { mutableFloatStateOf(0f) }
+    // 恢复编辑滚动期间抑制光标自动跟随，避免恢复位置被光标拉走（喵~）
+    var suppressCursorFollow by remember { mutableStateOf(false) }
+    // 本次切回编辑模式后是否还有一次「恢复滚动」待执行；执行完立即清掉，避免后续布局变化误触发
+    var pendingRestore by remember { mutableStateOf(false) }
+    // 编辑区布局状态提升到顶层：恢复滚动协程需要等它们就绪，并计算光标应落到的行（喵~）
+    var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    var viewportHeightPx by remember { mutableIntStateOf(0) }
+    var fieldOffsetY by remember { mutableIntStateOf(0) }
+
     // 撤销 / 恢复栈（每次编辑入栈，上限 MAX_UNDO_HISTORY）
     var undoStack by remember { mutableStateOf(emptyList<TextFieldValue>()) }
     var redoStack by remember { mutableStateOf(emptyList<TextFieldValue>()) }
@@ -145,6 +168,47 @@ fun FileEditorScreen(
 
     // 系统返回键：v1 从简，不弹「未保存」确认，直接返回
     BackHandler { onBack() }
+
+    // 切回编辑模式：等编辑区布局就绪后按锚点比例恢复滚动，并把光标同步到恢复位置。
+    // 光标同步是关键：光标跟随逻辑即使随后触发，也会发现光标已在视口内，不会把滚动拉回原光标处（喵~）
+    LaunchedEffect(mode, textLayout, viewportHeightPx, fieldOffsetY, pendingRestore) {
+        if (mode != EditorMode.EDIT || !pendingRestore) return@LaunchedEffect
+        // 编辑区不渲染（大 HTML 提示 / 不可预览）时无需恢复，直接放行（喵~）
+        if (editBlocked != null || previewError != null) {
+            pendingRestore = false
+            suppressCursorFollow = false
+            return@LaunchedEffect
+        }
+        val layout = textLayout ?: return@LaunchedEffect
+        if (viewportHeightPx <= 0) return@LaunchedEffect
+        // 文本区尚未被 onGloballyPositioned 定位（fieldOffsetY 仍为 0）时等下一轮触发，避免光标算错（喵~）
+        if (fieldOffsetY <= 0) return@LaunchedEffect
+        if (editScroll.maxValue <= 0) {
+            pendingRestore = false
+            suppressCursorFollow = false
+            return@LaunchedEffect
+        }
+        suppressCursorFollow = true
+        editScroll.scrollTo((anchorFraction * editScroll.maxValue).roundToInt())
+        // 视口顶部滚动坐标换算成文本布局内 y，取该行起始 offset 作为新光标位置（喵~）
+        val topLine = layout.getLineForVerticalPosition((editScroll.value - fieldOffsetY).coerceAtLeast(0).toFloat())
+        val topOffset = layout.getLineStart(topLine).coerceIn(0, fieldValue.text.length)
+        if (fieldValue.selection.start != topOffset || fieldValue.selection.end != topOffset) {
+            fieldValue = fieldValue.copy(selection = TextRange(topOffset))
+        }
+        pendingRestore = false
+        // 等一帧：让 selection 变化触发的光标跟随协程在 suppressCursorFollow=true 下跳过
+        withFrameNanos { }
+        suppressCursorFollow = false
+    }
+
+    // 切回预览模式（Markdown / 纯文本）：内容布局就绪后按锚点比例恢复；HTML 由 WebView 内部恢复
+    LaunchedEffect(mode, previewScroll.maxValue, anchorFraction) {
+        if (mode != EditorMode.PREVIEW || repository.isHtmlFile(currentFile.name)) return@LaunchedEffect
+        if (previewScroll.maxValue > 0) {
+            previewScroll.scrollTo((anchorFraction * previewScroll.maxValue).roundToInt())
+        }
+    }
 
     // 父级（FilesScreen）因重命名回调替换了 file 时，同步本地 currentFile 并触发重新加载
     LaunchedEffect(file.path) {
@@ -180,6 +244,13 @@ fun FileEditorScreen(
         if (previewError == null && !isHtml) {
             fieldValue = TextFieldValue(withContext(Dispatchers.IO) { repository.readText(currentFile.path) })
         }
+        // 换文件后内容完全不同：滚动位置与跨模式锚点一并重置（重命名不重读不重置，喵~）
+        editScroll.scrollTo(0)
+        previewScroll.scrollTo(0)
+        htmlScrollFraction = 0f
+        anchorFraction = 0f
+        pendingRestore = false
+        suppressCursorFollow = false
         undoStack = emptyList()
         redoStack = emptyList()
         isLoading = false
@@ -224,6 +295,22 @@ fun FileEditorScreen(
         undoStack = undoStack + fieldValue
         fieldValue = next
         redoStack = redoStack.dropLast(1)
+    }
+
+    /** 切换编辑/预览模式，并在切换前记录当前视口比例作为恢复锚点（喵~） */
+    fun toggleMode() {
+        anchorFraction = when (mode) {
+            EditorMode.EDIT ->
+                if (editScroll.maxValue > 0) editScroll.value / editScroll.maxValue.toFloat() else 0f
+            EditorMode.PREVIEW ->
+                if (repository.isHtmlFile(currentFile.name)) htmlScrollFraction
+                else if (previewScroll.maxValue > 0) previewScroll.value / previewScroll.maxValue.toFloat() else 0f
+        }
+        val nextMode = if (mode == EditorMode.EDIT) EditorMode.PREVIEW else EditorMode.EDIT
+        suppressCursorFollow = true
+        // 只有切回编辑模式才需要执行一次「恢复滚动 + 光标同步」（喵~）
+        pendingRestore = nextMode == EditorMode.EDIT
+        mode = nextMode
     }
 
     // 重命名：文件名（不含后缀）+ 后缀两个输入框，成功后原地更新 currentFile 并通知父级
@@ -309,9 +396,7 @@ fun FileEditorScreen(
                 Icon(Icons.Filled.Save, contentDescription = "保存")
             }
             IconButton(
-                onClick = {
-                    mode = if (mode == EditorMode.EDIT) EditorMode.PREVIEW else EditorMode.EDIT
-                },
+                onClick = { toggleMode() },
                 enabled = !isLoading && previewError == null,
             ) {
                 if (mode == EditorMode.EDIT) {
@@ -392,17 +477,20 @@ fun FileEditorScreen(
                 // OutlinedTextFieldDefaults.DecorationBox/ContainerBox 复刻原版描边框外观；
                 // 高度随内容铺开、自身不滚动，由外层 verticalScroll 统一滚动 —— 键盘弹出只
                 // 压缩视口、不重置滚动位置；再监听光标/视口变化，把光标行滚进视口上半部。
-                val editScroll = rememberScrollState()
+                // editScroll / textLayout / viewportHeightPx / fieldOffsetY 提升到顶层：
+                // 模式切换恢复滚动与光标跟随需要共享（喵~）
                 val interactionSource = remember { MutableInteractionSource() }
-                var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
-                var viewportHeightPx by remember { mutableIntStateOf(0) }
                 // 滚动容器在窗口中的 y（配合文本区窗口坐标算内容内偏移）
                 var containerY by remember { mutableIntStateOf(0) }
-                // 文本区在滚动内容中的纵向偏移（用于把 TextLayoutResult 坐标换算成滚动坐标）
-                var fieldOffsetY by remember { mutableIntStateOf(0) }
 
-                // 光标或视口（键盘弹出/收起）变化时，把光标行滚进视口上半部
-                LaunchedEffect(fieldValue.selection, textLayout, viewportHeightPx) {
+                // 光标或视口（键盘弹出/收起）变化时，把光标行滚进视口上半部。
+                // 模式切换恢复滚动期间先跳过，避免刚恢复的位置被光标自动滚动覆盖（喵~）
+                // fieldOffsetY 参与触发：键盘弹出/收起时布局偏移更新后再计算，避免用旧值算错跳顶
+                LaunchedEffect(fieldValue.selection, textLayout, viewportHeightPx, fieldOffsetY) {
+                    if (suppressCursorFollow) return@LaunchedEffect
+                    // 等一帧：让同帧的 onSizeChanged / onGloballyPositioned 布局值先落定（喵~）
+                    withFrameNanos { }
+                    if (suppressCursorFollow) return@LaunchedEffect
                     val layout = textLayout ?: return@LaunchedEffect
                     if (viewportHeightPx <= 0) return@LaunchedEffect
                     val offset = fieldValue.selection.end.coerceIn(0, fieldValue.text.length)
@@ -486,10 +574,11 @@ fun FileEditorScreen(
                     repository.isMarkdown(currentFile.name) -> {
                         // Markdown：TextView 按内容高度铺开，由外层 Compose verticalScroll 统一滚动，
                         // 避免 TextView 内部 ScrollingMovementMethod 自滚动导致「无惯性、直接刹车」。
+                        // previewScroll 提升到顶层：模式切换时保留滚动位置（喵~）
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .verticalScroll(rememberScrollState())
+                                .verticalScroll(previewScroll)
                                 .padding(16.dp),
                         ) {
                             MarkdownText(fieldValue.text, modifier = Modifier.fillMaxWidth(), streaming = false)
@@ -502,14 +591,19 @@ fun FileEditorScreen(
                             file = File(currentFile.path),
                             content = if (htmlContentLoaded) fieldValue.text else null,
                             modifier = Modifier.fillMaxSize(),
+                            // 进入预览时的恢复锚点：从编辑切回时按编辑位置比例恢复；
+                            // 预览内滚动由 onScrollFractionChanged 实时上报（喵~）
+                            initialScrollFraction = anchorFraction,
+                            onScrollFractionChanged = { htmlScrollFraction = it },
                         )
                     }
                     else -> {
                         // 普通文本：等宽 + 外层 verticalScroll 滚动，顶部对齐
+                        // previewScroll 提升到顶层：模式切换时保留滚动位置（喵~）
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .verticalScroll(rememberScrollState())
+                                .verticalScroll(previewScroll)
                                 .padding(16.dp),
                         ) {
                             Text(fieldValue.text, fontFamily = FontFamily.Monospace)
@@ -620,31 +714,42 @@ fun MarqueeTitle(
             text = AnnotatedString(text),
             style = textStyle,
             maxLines = 1,
+            softWrap = false,
             overflow = TextOverflow.Clip,
         )
     }
-    val singleTextWidthPx = measured.size.width
+    var singleTextWidthPx by remember { mutableIntStateOf(measured.size.width) }
     var containerWidthPx by remember { mutableIntStateOf(0) }
-    val scrollDistancePx = singleTextWidthPx
-    val shouldScroll = containerWidthPx > 0 && singleTextWidthPx > containerWidthPx
+    // 兜底：静态文字真被省略号截断时，强制切换滚动态（防预测量不准导致不滚动，喵~）
+    var overflowDetected by remember { mutableStateOf(false) }
+    // 两份文字之间的间隔（固定 dp，不依赖字体空格宽度），滚完一份正好第二份接上（喵~）
+    val loopGapPx = with(LocalDensity.current) { 32.dp.toPx() }.roundToInt()
+    val scrollDistancePx = singleTextWidthPx + loopGapPx
+    val shouldScroll = overflowDetected ||
+        (containerWidthPx > 0 && singleTextWidthPx > containerWidthPx)
 
-    val transition = rememberInfiniteTransition(label = "marqueeTitle")
-    val progress by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(
-                durationMillis = if (scrollDistancePx > 0) {
-                    (scrollDistancePx * 10).coerceIn(2500, 15000)
-                } else {
-                    3000
-                },
-                easing = LinearEasing,
+    // 只在需要滚动时启动无限动画：静态展示不空转，且滚动总是从起点开始（喵~）
+    val progress = if (shouldScroll) {
+        val transition = rememberInfiniteTransition(label = "marqueeTitle")
+        transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(
+                    durationMillis = if (scrollDistancePx > 0) {
+                        (scrollDistancePx * 10).coerceIn(2500, 15000)
+                    } else {
+                        3000
+                    },
+                    easing = LinearEasing,
+                ),
+                repeatMode = RepeatMode.Restart,
             ),
-            repeatMode = RepeatMode.Restart,
-        ),
-        label = "marqueeScroll",
-    )
+            label = "marqueeScroll",
+        ).value
+    } else {
+        0f
+    }
 
     Box(
         modifier = modifier
@@ -655,18 +760,40 @@ fun MarqueeTitle(
         contentAlignment = Alignment.CenterStart,
     ) {
         if (shouldScroll) {
-            Text(
-                text = text + text,
-                style = textStyle,
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Clip,
+            Row(
                 modifier = Modifier
+                    // 关键：解除父容器宽度约束，让双份文字按完整宽度排版，
+                    // 否则超出部分不参与布局，向左滚动只会滚出空白（喵~）
+                    .wrapContentWidth(align = Alignment.Start, unbounded = true)
+                    // 用实际排版宽度校正滚动距离（预测量可能受字体/密度影响，这里最准）
+                    .onGloballyPositioned { coords ->
+                        val totalWidth = coords.size.width
+                        if (totalWidth > 0) {
+                            singleTextWidthPx = ((totalWidth - loopGapPx) / 2).coerceAtLeast(0)
+                        }
+                    }
                     .clickable(onClick = onClick)
                     .offset {
                         IntOffset(x = -(progress * scrollDistancePx).roundToInt(), y = 0)
                     },
-            )
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = text,
+                    style = textStyle,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
+                )
+                Spacer(Modifier.width(32.dp))
+                Text(
+                    text = text,
+                    style = textStyle,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
+                )
+            }
         } else {
             Text(
                 text = text,
@@ -674,6 +801,10 @@ fun MarqueeTitle(
                 maxLines = 1,
                 softWrap = false,
                 overflow = TextOverflow.Ellipsis,
+                onTextLayout = { layout ->
+                    // 静态文字如果出现省略号/视觉溢出，立刻切滚动态（喵~）
+                    if (layout.hasVisualOverflow) overflowDetected = true
+                },
                 modifier = Modifier
                     .clickable(onClick = onClick)
                     .padding(horizontal = 8.dp),

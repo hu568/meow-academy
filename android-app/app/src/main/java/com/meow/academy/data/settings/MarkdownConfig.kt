@@ -24,6 +24,8 @@ data class MarkdownConfig(
     val link: LinkConfig = LinkConfig(),
     val heading: HeadingConfig = HeadingConfig(),
     val thematicBreak: ThematicBreakConfig = ThematicBreakConfig(),
+    val table: TableConfig = TableConfig(),
+    val mermaid: MermaidConfig = MermaidConfig(),
 ) {
     data class FormulaConfig(
         val blockCornerRadiusDp: Float = 12f,
@@ -71,6 +73,24 @@ data class MarkdownConfig(
     data class ThematicBreakConfig(
         val color: String? = null,
         val heightDp: Float = 2f,
+    )
+
+    /** M5 表格配置（Compose 表格组件读取） */
+    data class TableConfig(
+        val cornerRadiusDp: Float = 12f,
+        val headerBackground: String? = null,
+        val rowAltBackground: String? = null,
+        val borderColor: String? = null,
+        val borderWidthDp: Float = 1f,
+        val cellPaddingDp: Padding = Padding(10f, 6f, 10f, 6f),
+        val copyButtonColor: String? = null,
+    )
+
+    /** M5 mermaid 配置（WebView 渲染主题 + 图块外观） */
+    data class MermaidConfig(
+        val theme: String = "",
+        val cornerRadiusDp: Float = 12f,
+        val blockBackground: String? = null,
     )
 
     data class Padding(
@@ -165,6 +185,30 @@ fun resolveMarkdownConfig(raw: MarkdownConfigRaw?, isDark: Boolean): MarkdownCon
             heightDp = section("thematicBreak")?.get("heightDp")
                 ?.resolveTheme(isDark).asFloat(MarkdownConfig.ThematicBreakConfig().heightDp),
         ),
+        table = MarkdownConfig.TableConfig(
+            cornerRadiusDp = section("table")?.get("cornerRadiusDp")
+                ?.resolveTheme(isDark).asFloat(MarkdownConfig.TableConfig().cornerRadiusDp),
+            headerBackground = section("table")?.get("headerBackground")
+                ?.resolveTheme(isDark).asColor(MarkdownConfig.TableConfig().headerBackground),
+            rowAltBackground = section("table")?.get("rowAltBackground")
+                ?.resolveTheme(isDark).asColor(MarkdownConfig.TableConfig().rowAltBackground),
+            borderColor = section("table")?.get("borderColor")
+                ?.resolveTheme(isDark).asColor(MarkdownConfig.TableConfig().borderColor),
+            borderWidthDp = section("table")?.get("borderWidthDp")
+                ?.resolveTheme(isDark).asFloat(MarkdownConfig.TableConfig().borderWidthDp),
+            cellPaddingDp = section("table")?.get("cellPaddingDp")
+                ?.resolveTheme(isDark).asPadding(MarkdownConfig.TableConfig().cellPaddingDp),
+            copyButtonColor = section("table")?.get("copyButtonColor")
+                ?.resolveTheme(isDark).asColor(MarkdownConfig.TableConfig().copyButtonColor),
+        ),
+        mermaid = MarkdownConfig.MermaidConfig(
+            theme = section("mermaid")?.get("theme")
+                ?.resolveTheme(isDark).asString(MarkdownConfig.MermaidConfig().theme),
+            cornerRadiusDp = section("mermaid")?.get("cornerRadiusDp")
+                ?.resolveTheme(isDark).asFloat(MarkdownConfig.MermaidConfig().cornerRadiusDp),
+            blockBackground = section("mermaid")?.get("blockBackground")
+                ?.resolveTheme(isDark).asColor(MarkdownConfig.MermaidConfig().blockBackground),
+        ),
     )
 }
 
@@ -221,6 +265,11 @@ private fun Any?.resolveTheme(isDark: Boolean): Any? {
 private fun Any?.asFloat(default: Float): Float = when (this) {
     is Number -> this.toFloat()
     is String -> this.toFloatOrNull() ?: default
+    else -> default
+}
+
+private fun Any?.asString(default: String): String = when (this) {
+    is String -> this
     else -> default
 }
 

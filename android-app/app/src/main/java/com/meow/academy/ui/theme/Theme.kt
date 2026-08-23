@@ -9,10 +9,19 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import com.meow.academy.data.settings.DEFAULT_THEME_SEED_ARGB
 import com.meow.academy.data.settings.ThemeMode
+
+/**
+ * 当前实际应用的深浅色标记。
+ *
+ * 不能用 `isSystemInDarkTheme()` 代替：App 支持强制浅色/深色（ThemeMode.LIGHT/DARK），
+ * 渲染层（Markdown 高亮、mermaid 主题、图片色调等）需要跟随「实际主题」而不是系统。
+ */
+val LocalDarkTheme = staticCompositionLocalOf { false }
 
 /**
  * 喵仓主题入口。
@@ -58,6 +67,7 @@ fun MeowAcademyTheme(
     }
 
     CompositionLocalProvider(
+        LocalDarkTheme provides darkTheme,
         LocalFileTypeColors provides if (darkTheme) DarkFileTypeColors else LightFileTypeColors,
     ) {
         MaterialTheme(

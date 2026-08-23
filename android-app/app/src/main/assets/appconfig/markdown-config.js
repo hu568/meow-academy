@@ -71,4 +71,22 @@ var markdownConfig = {
     color: null,                      // null = 主题默认
     heightDp: 2,
   },
+
+  // ── 表格（M5 升级） ──────────────────────────────
+  table: {
+    cornerRadiusDp: 12,               // 表格圆角 (dp)
+    headerBackground: themed("#E8E8ED", "#2A2A3A"), // 表头背景色
+    rowAltBackground: null,           // null = 无斑马纹，{ light: "#F5F5F5", dark: "#252535" }
+    borderColor: themed("#D1D1D6", "#383850"),
+    borderWidthDp: 1,
+    cellPaddingDp: { left: 10, top: 6, right: 10, bottom: 6 },
+    copyButtonColor: null,
+  },
+
+  // ── Mermaid 图（M5 升级） ─────────────────────────
+  mermaid: {
+    theme: "",                        // '' = 自动跟随系统深色，'dark'/'default'/'neutral'/'forest'/'base'
+    cornerRadiusDp: 12,               // 图块背景圆角 (dp)，0 = 直角
+    blockBackground: null,            // null = 主题默认（surfaceVariant 半透明），可给 #RRGGBB 自定义
+  },
 };
