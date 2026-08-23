@@ -9,7 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.systemGestureExclusion
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -38,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 
@@ -55,7 +57,7 @@ enum class DashboardFeature(val label: String) {
  *  - 无黑色遮罩（透明点击区，点外部关闭）；
  *  - 头部：X 在左、功能名、⋮ 在右；
  *  - ⋮ 是按钮，点击弹出模式切换菜单（模型管理 / 快捷文件 / 调用量）；
- *  - 关闭态只挂一条右边缘窄条手势：从右边缘向左滑打开，不影响聊天页其它点击。
+ *  - 打开：顶栏「功能看板」按钮，或聊天内容区任意位置向左滑（手势在 ChatScreen 挂载）。
  */
 @Composable
 fun DashboardDrawer(
@@ -63,36 +65,11 @@ fun DashboardDrawer(
     feature: DashboardFeature,
     onFeatureChange: (DashboardFeature) -> Unit,
     onClose: () -> Unit,
-    onOpen: () -> Unit,
     modelPanel: @Composable () -> Unit,
     filesPanel: @Composable () -> Unit,
     statsPanel: @Composable () -> Unit,
 ) {
     Box(Modifier.fillMaxSize()) {
-        // 关闭态：仅右边缘窄条响应“向左滑”打开（不铺满全屏，避免挡住聊天页）
-        if (!open) {
-            Box(
-                Modifier
-                    .align(Alignment.CenterEnd)
-                    .fillMaxHeight()
-                    // 加宽到 72dp：ColorOS 右缘有系统手势窗口，太窄会被系统抢走
-                    .width(72.dp)
-                    // 排除系统手势导航的右缘返回手势，让 App 能收到从右往左的滑动
-                    .systemGestureExclusion()
-                    .pointerInput(Unit) {
-                        detectHorizontalDragGestures(
-                            onDragStart = {},
-                            onHorizontalDrag = { change, dragAmount ->
-                                if (dragAmount < 0) {
-                                    change.consume()
-                                    onOpen()
-                                }
-                            },
-                        )
-                    },
-            )
-        }
-
         AnimatedVisibility(
             visible = open,
             enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
@@ -110,21 +87,34 @@ fun DashboardDrawer(
                             onClick = onClose,
                         ),
                 )
-                // 右滑面板
+                // 右滑面板：与左抽屉视觉一致（半透明 + 内侧圆角）
                 Column(
                     Modifier
                         .align(Alignment.CenterEnd)
                         .fillMaxHeight()
                         .fillMaxWidth(0.85f)
-                        .widthIn(max = 360.dp)
-                        .background(MaterialTheme.colorScheme.surface)
-                        // 标题与聊天页 TopAppBar 对齐：内容下移出系统状态栏区域
+                        .widthIn(max = 340.dp)
+                        .clip(RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.80f))
+                        // 标题与聊天页 TopAppBar 对齐：内容避开状态栏与导航栏
                         .statusBarsPadding()
+                        .navigationBarsPadding()
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
                             onClick = {},
-                        ),
+                        )
+                        // 反向滑动收回：在面板上向右滑，和左抽屉一样可以把面板收回去
+                        .pointerInput(Unit) {
+                            detectHorizontalDragGestures(
+                                onHorizontalDrag = { change, dragAmount ->
+                                    if (dragAmount > 0) {
+                                        change.consume()
+                                        onClose()
+                                    }
+                                },
+                            )
+                        },
                 ) {
                     Row(
                         Modifier

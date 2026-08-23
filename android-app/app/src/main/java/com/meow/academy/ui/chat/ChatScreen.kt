@@ -10,6 +10,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -52,6 +54,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -111,6 +115,8 @@ private fun ChatDetailView(
     val repository = remember(context) { FileRepository(context) }
     val snackbarHostState = remember { SnackbarHostState() }
 
+    // 右侧功能看板滑出手势：挂在聊天内容区（顶栏与输入栏之间），
+    // 和左抽屉一样在窗口内容区向左滑即可打开；不会用覆盖条挡住右上角按钮。
     // 上传文件：内容去重复制到 DSH_UPLOAD_DIR（uploads/）→ 只加到输入框上方附件预览，不自动引用。
     // 点击附件预览才插入 [引用标记]；同一个文件内容相同只存一份，可反复点击引用（喵~）
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -298,7 +304,26 @@ private fun ChatDetailView(
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(padding),
+                            .padding(padding)
+                            // 和左抽屉一致：在聊天内容区任意位置向左滑即可打开功能看板。
+                            // 注意这里必须用“只观察不消费”的手势，否则会抢走左侧 ModalNavigationDrawer 的滑动手势。
+                            .pointerInput(Unit) {
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(requireUnconsumed = false)
+                                    var totalX = 0f
+                                    var opened = false
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                        if (!change.pressed) break
+                                        totalX += change.positionChange().x
+                                        if (!opened && totalX <= -viewConfiguration.touchSlop) {
+                                            opened = true
+                                            dashboardOpen = true
+                                        }
+                                    }
+                                }
+                            },
                     ) {
                         if (messages.isEmpty() && streaming == null) {
                             Box(
@@ -364,7 +389,6 @@ private fun ChatDetailView(
             feature = dashboardFeature,
             onFeatureChange = { dashboardFeature = it },
             onClose = { dashboardOpen = false },
-            onOpen = { dashboardOpen = true },
             modelPanel = {
                 ModelManagePanel(
                     currentProvider = currentProvider,
