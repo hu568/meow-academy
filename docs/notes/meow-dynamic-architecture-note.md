@@ -97,6 +97,83 @@ pet.html 放 filesDir（可热更）
 DSH meow-pet 插件 经 JSON-RPC 下发动作指令
 ```
 
+### 5.1 聊天页 WebView 背景（同思路扩展）
+
+桌宠的「原生通用渲染器 + 可热更 HTML + AI 改写」思路，可以直接复用到聊天页背景：
+
+- **形态**：聊天页底部垫一个透明 WebView（`webView.setBackgroundColor(Color.TRANSPARENT)`），HTML 负责画背景（渐变 / 粒子 / 动态光效）；
+- **热更**：AI 改 `appconfig/chat-background.html` → FileObserver 感知 → WebView reload，无需重启 App；
+- **分层**：
+  - JSON 配置：控制 WebView 是否启用、透明度、模糊强度等参数（`config-defaults/` 放默认，`appconfig/` 放用户覆盖）；
+  - HTML/CSS/JS：背景内容本身（AI 直接改）；
+  - DSH 插件：自动换背景、定时主题等行为逻辑；
+- **安全**：复用 HTML 预览的安全配置——开启 JS，但关闭 `allowFileAccessFromFileURLs` / `allowUniversalAccessFromFileURLs`，防页面内 JS 越权读 App 文件；
+- **性能**：聊天页不可见时暂停/停止 WebView 动画，避免常驻空转耗电。
+
+> 💡 桌宠、聊天页背景、未来的自定义面板 = 同一套「WebView 热更基建」的三个落地场景。
+
+### 5.2 资源热替换（图片 / 音频 / 字体 / Lottie 等）
+
+文本配置走「默认模板 + 用户覆盖」，**文件型资源走「覆盖优先」**：
+
+- **不复制默认资源到 `config-defaults/`**：二进制文件 AI 没法文本编辑，只能整体替换；
+- **资源按类型放 `appconfig/` 下的子文件夹**：
+  ```
+  appconfig/fonts/     ← 字体（.ttf/.otf）
+  appconfig/images/    ← 图片（.png/.webp/.gif）
+  appconfig/audio/     ← 音频（.mp3/.ogg/.wav）
+  appconfig/lottie/    ← Lottie 动画（JSON，AI 可改内容，但按资源文件管理）
+  ```
+- **JSONC 配置负责引用**：比如 `resources.jsonc` 或各功能 JSONC 里写 `"background": "images/bg.jpg"`、`"sound": "audio/notification.ogg"`、`"petAnimation": "lottie/pet.json"`；
+- **运行时逻辑：有就用，没有就回退内置默认**：
+  ```
+  appconfig/images/bg.jpg   存在 → 用它
+  appconfig/images/bg.jpg   不存在 → 用内置默认（APK 资源）
+  ```
+- **AI 能力**：二进制只能整文件替换（上传/复制）；Lottie/JSON 这类文本资源可以读/复制/改；
+- **校验与回退**：字体魔数、图片解码、音频格式、Lottie JSON 合法性，失败一律回退内置默认；
+- **App 升级不碰 `appconfig/`**，自定义资源全部保留。
+
+> 📌 资源热替换 = 「JSON 配置引用 + 文件覆盖优先」；文本配置 = 「默认 + 覆盖合并」模式。两者分开记，别混。
+
+### 5.3 字体与字号热更（JSON 配置 + fonts 文件夹）
+
+字体和字号统一用一份 JSON 配置，字体文件单独放文件夹：
+
+```
+config-defaults/typography.jsonc   ← 默认排版模板（文本，走「默认 + 覆盖合并」）
+appconfig/typography.jsonc         ← 用户覆盖（只写改过的项）
+appconfig/fonts/                  ← 导入的字体文件（二进制，走「覆盖优先」，不复制默认到 config-defaults）
+```
+
+JSONC 结构示例：
+
+```jsonc
+// 🐾 排版配置覆盖文件，只写想改的键
+{
+  "version": 1,
+  "fontFamily": null,          // null/"default" → 系统默认；"custom.ttf" → 用 appconfig/fonts/custom.ttf
+  "sizes": {
+    "bodyLarge": 16,           // 全局正文
+    "bodyMedium": 14,
+    "titleLarge": 22,
+    "markdownBase": 15,        // 聊天 Markdown 基础字号
+    "codeRatio": 0.85,         // 行内代码/代码块相对比例
+    "terminal": 13
+  }
+}
+```
+
+规则：
+
+- `fontFamily: null` / `"default"` → 系统默认字体；
+- `fontFamily: "custom.ttf"` → 使用 `appconfig/fonts/custom.ttf`；
+- 指定字体**不存在 / 魔数校验失败** → 回退系统默认；
+- 字号统一从 JSON 读取，`Type.kt`、Markdown 基础字号、终端/编辑器不再硬编码；
+- 热更：FileObserver 同时监听 `typography.jsonc` 与 `appconfig/fonts/` 目录，变化后重建 Typography / Markwon。
+
+> 📌 这属于「文本配置（JSON）+ 资源替换（字体文件）」的组合模式：配置走合并，字体文件走覆盖优先。
+
 ---
 
 ## 6. JSON 驱动设置页（含 AI 改设置）
@@ -240,3 +317,114 @@ AI/用户 → DSH write 工具 → 写 markdown-config.js
 
 > 📌 关联文件：`md_test.md`、`plan-phase3.md`（历史规划）
 > 🧭 本笔记对应仓库：github.com/hu568/meow-academy
+
+---
+
+## 11. Markdown 配置更新问题：默认模板 + 用户覆盖（讨论中）
+
+> 日期：2026-08-24 · 主题：解决「开发者更新可修改项后，用户自定义配置被覆盖 / 享受不到新项」的矛盾
+> 一句话总结：**把「内置默认模板」和「用户覆盖」拆开，运行时深合并；存量用户旧文件整体当作覆盖，零迁移零丢失。**
+
+### 11.1 问题背景
+
+- 现状：`appconfig/markdown-config.js` 一个文件同时承担「内置默认模板」和「用户覆盖值」。
+- 首次启动从 assets 播种，**已有文件不覆盖** → App 升级后新模板进不来。
+- 后果：
+  - 新增的可修改项不会出现在用户文件里 → 用户看不到 / 没法改；
+  - 开发者调整旧键默认值时，用户文件里的旧值会盖住新默认 → 存量用户享受不到新默认。
+- 根因：**默认值与用户值混在一个文件，更新时无法区分「用户真改过」和「只是旧默认值」**。
+
+### 11.2 方案：默认模板与用户覆盖分离 + 深合并
+
+> 路径说明：
+> - `assets/config-defaults/...` = **源码/APK 内 assets**（`android-app/app/src/main/assets/config-defaults/`），构建时打进 APK，运行时只读；
+> - `config-defaults/...` = **运行时默认模板目录**（`context.filesDir/config-defaults/`），从 assets 播种，供 DSH/AI 读取，随版本刷新；
+> - `appconfig/...` = **运行时用户配置目录**（`context.filesDir/appconfig/`，由 `RuntimeExtractor.appConfigDir()` 创建），用户/AI 在这里改文件。
+
+```
+assets/config-defaults/markdown-config.jsonc   ← 内置默认模板（APK assets，只读，随 App 更新）
+config-defaults/markdown-config.jsonc          ← 默认模板副本（运行时，仅 APK 升级/同版本重装时从 assets 同步；AI 可读可复制，不可修改）
+appconfig/markdown-config.jsonc                ← 用户文件（默认 = 模板完整副本，用户/AI 直接改值，App 更新永不碰它）
+```
+
+> 📌 两个目录下文件名相同，复制粘贴方便；`config-defaults/` 是通用默认目录，以后所有功能的默认设置都可以放这里。
+> 📌 **配置格式统一 JSONC**（JSON + `//`、`/* */` 注释）：Kotlin 侧先 `stripJsonc()` 剥注释，再按标准 JSON 解析；不引第三方依赖，保持严格 JSON 规范。
+
+运行时：
+
+```js
+merged = deepMerge(defaults, overrides)
+// 对象递归合并；数组/标量整体替换
+```
+
+**回退链**（天然成立，不用额外写逻辑）：
+
+```
+用户覆盖缺失 / 为 null
+        ↓
+默认模板（config-defaults/）
+        ↓
+Kotlin 内置默认
+```
+
+- 用户配置不存在 / 是 `{}` → 纯默认模板；
+- 用户配置少了某个键 → 用默认模板里的值；
+- 默认模板里也没有 → 用 Kotlin 数据类默认值；
+- 更新引入新配置项 → 默认模板有、用户覆盖没有 → 自动用新默认值；
+- `null` 语义约定为「回退默认」，与「没写」等价（沿用现有 markdown-config 的行为）。
+
+效果：
+
+| 项目 | 效果 |
+|---|---|
+| 用户自定义 | ✅ 全部保留 |
+| 新增可修改项 | ✅ 自动出现（默认有、覆盖无 → 合并进来） |
+| 删除可修改项 | ✅ 自动消失（解析器只认已知键） |
+| 旧键默认值更新 | ⚠️ 对存量用户不生效（保守路线代价） |
+| 新安装用户 | ✅ 从干净默认模板开始 |
+
+### 11.3 已确认决策
+
+1. **用户文件路径**：`appconfig/markdown-config.jsonc`（由原 `.js` 迁移而来），默认 = `config-defaults/` 模板的完整副本；用户/AI 直接改值，也可精简为「只留改过的键」。
+2. **默认模板目录**：新增通用默认目录 `config-defaults/`（`context.filesDir/config-defaults/`），与用户配置 `appconfig/` 平级分离；以后所有功能的默认设置都可以放这里，不限于 `appconfig/`。
+3. **文件名相同**：默认模板与用户文件都叫 `markdown-config.jsonc`，靠目录区分（`config-defaults/` vs `appconfig/`），复制粘贴方便。
+4. **存量迁移策略：保守全量保留**——旧 `.js` 文件整体转为用户文件内容，不做 diff、不重写用户文件、不需要历史快照。
+   - 好处：用户数据零丢失、实现最简单；
+   - 代价：旧文件里的旧键值会盖住新默认值；后续可加「恢复默认」功能解决。
+   - 注：当前仅 4 个用户，也可选择手动迁移/让用户重新配置。
+5. **新安装用户 seed**：把 `config-defaults/markdown-config.jsonc` 完整复制到 `appconfig/markdown-config.jsonc`（默认状态下两个文件内容相同），保留「用户文件 = 模板副本」的直觉；`version` 也一起复制，记录基于哪个模板版本。
+6. **`config-defaults/` 权限与同步策略**：**仅在 APK 升级或同版本重装时从 assets 同步**——启动时读轻量标记（如 `config-defaults/.sync-token`，记录 `versionCode + lastUpdateTime`），一致则跳过，不一致才同步，**不影响启动速度**；**内置 agent 不可修改**，但可以读取、可以复制（例如复制到 `appconfig/` 作为覆盖起点）。
+7. **配置格式统一 JSONC**：所有文本配置（markdown / typography / resources 等）用 `.jsonc`（JSON + `//`、`/* */` 注释）；Kotlin 侧 `stripJsonc()` 剥注释后按标准 JSON 解析，不引第三方依赖，保持严格 JSON 规范。
+
+### 11.4 待补充 / 待确认细节
+
+- [ ] `config-defaults/` 同步标记字段：`versionCode + lastUpdateTime` 在同版本重装时是否可靠变化，需真机验证；若不可靠再换方案（如比对 assets 文件哈希）；
+- [x] 恢复默认功能已确认：见 §11.5；
+- [x] 文件头注释模板已确认：统一一套（功能名 + 显式指向 `appconfig/README.md` + 元数据），不分默认/用户两版；
+- [ ] `README.md` 内容：各文件用途、可改/只读、复制到 `appconfig/`、恢复默认操作说明；`config-defaults/README.md` 为权威版，**同步一份到 `appconfig/README.md`**（更新时**强制覆盖**，不保留本地修改）；
+- [x] 深合并精确语义已确认：对象递归、数组/标量整体替换、`null` = 回退默认（与「没写」等价）；
+- [x] 配置格式已确认：统一 JSONC（`.jsonc`），Kotlin 侧 `stripJsonc()` 剥注释后按标准 JSON 解析；
+- [ ] 是否观察 `config-defaults/markdown-config.jsonc` 副本变化（默认模板由 App 控制，一般不需要热更）；
+- [ ] `stripJsonc()` 的实现与单元测试（处理字符串内的 `//`、`/* */`、转义引号）；
+- [x] 版本号 / 可修改项数量已定：顶层 `"version"`（ISO 8601 时间戳）+ `"_editableCount"`（`_` 前缀元数据，解析忽略）；详见 `docs/design-dynamic-config.md`；
+- [x] `config-defaults/README.md` 可编辑地图：**要做**，大致说明每个文件能改什么（可改/只读、示例）；
+- [x] **AI 硬边界**：DSH 工具层 `deny config-defaults/`，内置 agent 不可修改默认模板；
+- [x] **资源上传**：内置 agent 有 bash 权限，直接拷贝文件到 `appconfig/fonts/`、`images/` 等即可，不需要专门接口；
+- [ ] **git/diff 对比想法**：让 AI 通过对比用户覆盖与默认模板来理解「改了什么」——需确认 runtime 是否带 `diff`/`git`；没有的话可考虑 JSON-RPC 提供 diff，暂缓；
+- [ ] **统一配置仓库**：目前仅 markdown 一个配置，暂不抽象；等第 2 个 JSONC 配置出现再抽通用 `ConfigManager`（YAGNI）；
+- [ ] 开发者新增/删除可修改项的完整流程文档（改 Kotlin 数据类 + 默认模板 + bump 版本）；
+- [ ] `config-defaults/` 除 markdown 外还要放哪些默认设置（后续功能扩展规划）。
+
+### 11.5 恢复默认功能（已确认）
+
+1. **作用范围**：只清文本配置（`appconfig/*.jsonc`），**保留资源文件**（`appconfig/fonts/`、`images/`、`audio/` 等）。
+2. **实现方式**：不是删除文件，而是把 `config-defaults/` 对应默认模板**复制覆盖**到 `appconfig/` 同名文件（文件保持存在，内容变成当前默认，`version` 也同步更新）。
+   - 注意：这样用户文件会变成「全量默认副本」，未来默认模板更新时该文件里的旧默认值会盖住新默认（与保守迁移一致）；想再吃新默认就再点一次恢复。
+   - 备选：写空 `{}` 则未来更新自动生效；当前按「复制覆盖」确认。
+3. **入口**：**外观设置**（不是聊天设置）里的危险选项，点击需**确认弹窗**。
+4. **AI 命令**：§11 默认+覆盖机制落地后，AI 自然可以复制/覆盖文件实现恢复，不需要专门接口。
+5. **版本与可修改项标注**：
+   - 默认模板 JSONC 里标注「可修改项数量」和「版本号」；
+   - 版本号用**时间戳**（如 `2026-08-24T12:00:00Z`），避免每次包更新都要手动 bump；
+   - 更新检测**不做弹窗**：有更新时可由内置 agent 处理，且有默认值兜底；
+   - 以后若做配置编辑 UI，再在 UI 里提示版本更新。

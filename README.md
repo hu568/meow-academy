@@ -195,7 +195,8 @@ meow-academy/
 | [docs/decision-dsh-agent.md](docs/decision-dsh-agent.md) | Pi Agent → DeepSeek Harness 替换的决策与实施 |
 | [docs/decision-local-pi-agent.md](docs/decision-local-pi-agent.md) | Pi 本地化 + 终端驻留决策 |
 | [docs/design-gui.md](docs/design-gui.md) | GUI 信息架构设计 v1 |
-| [docs/notes/meow-dynamic-architecture-note.md](docs/notes/meow-dynamic-architecture-note.md) | 动态架构笔记：Markdown 渲染 JS 化等 |
+| [docs/design-dynamic-config.md](docs/design-dynamic-config.md) | 动态配置 JSONC 格式规范（通用设计文档，Markdown 为示例） |
+| [docs/notes/meow-dynamic-architecture-note.md](docs/notes/meow-dynamic-architecture-note.md) | 动态架构笔记：JSONC 配置、默认模板 + 用户覆盖、WebView 背景等 |
 | [docs/notes/embedded-dsh-capabilities.md](docs/notes/embedded-dsh-capabilities.md) | 内置 DSH 运行时能力盘点 |
 | [docs/reference/](docs/reference/) | RAG 算法 / Cherry Studio / RikkaHub 参考实现 |
 | [release/RELEASE_NOTES_0.2.2.md](release/RELEASE_NOTES_0.2.2.md) | 版本更新记录（最新） |

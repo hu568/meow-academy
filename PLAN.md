@@ -5,6 +5,7 @@
 > 方案决策（Pi 本地化 + 终端驻留 + 推敲 v2）：见 [docs/decision-local-pi-agent.md](docs/decision-local-pi-agent.md)
 > 方案决策（M2.8 Pi Agent → DeepSeek Harness 替换 + 体积实测 + 插件化机制）：见 [docs/decision-dsh-agent.md](docs/decision-dsh-agent.md)
 > GUI 设计（信息架构 v1）：见 [docs/design-gui.md](docs/design-gui.md)
+> 动态配置 JSONC 规范（默认模板 + 用户覆盖 + 恢复默认，Markdown 为示例）：见 [docs/design-dynamic-config.md](docs/design-dynamic-config.md)
 > 阶段规划：M2 套壳 ✅ 见 [plan/plan-phase1.md](plan/plan-phase1.md)；M3 会话持久化+聊天体验 Chatbox 化 ✅ 见 [plan/plan-phase2.md](plan/plan-phase2.md)；M4 文件管理 ✅ 见 [plan/plan-phase3.md](plan/plan-phase3.md)
 
 ---
@@ -44,6 +45,7 @@
 - [ ] 知识库管理界面（增删改查、重新索引）
 
 ### 第四阶段 · 增强与远期
+- [ ] 动态配置 JSONC 化：markdown-config 迁移到 JSONC + 默认模板/用户覆盖 + config-defaults 同步（[规范](docs/design-dynamic-config.md)）
 - [ ] 双模型配置（通用 + Agent 自有）同步管理
 - [ ] Pi Agent 工具调用强化（rag_search / 计算器 / 翻译）
 - [ ] 重排序模型（Rerank，提升检索精度）
