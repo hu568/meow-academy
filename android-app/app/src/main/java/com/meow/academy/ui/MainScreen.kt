@@ -1,7 +1,10 @@
 package com.meow.academy.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -18,12 +21,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,9 +41,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -48,17 +61,18 @@ import com.meow.academy.ui.files.FilesScreen
 import com.meow.academy.ui.settings.SettingsScreen
 import com.meow.academy.ui.terminal.TerminalScreen
 
-/** 底部导航板块的展示信息 */
+/** 底部导航板块的展示信息（选中用填充图标，未选中用描边图标） */
 private data class TabInfo(
     val tab: HomeTab,
     val labelRes: Int,
-    val icon: ImageVector,
+    val iconSelected: ImageVector,
+    val iconUnselected: ImageVector,
 )
 
 private val TABS = listOf(
-    TabInfo(HomeTab.CHAT, R.string.tab_chat, Icons.AutoMirrored.Filled.Chat),
-    TabInfo(HomeTab.FILES, R.string.tab_files, Icons.Filled.Folder),
-    TabInfo(HomeTab.SETTINGS, R.string.tab_settings, Icons.Filled.Settings),
+    TabInfo(HomeTab.CHAT, R.string.tab_chat, Icons.AutoMirrored.Filled.Chat, Icons.AutoMirrored.Outlined.Chat),
+    TabInfo(HomeTab.FILES, R.string.tab_files, Icons.Filled.Folder, Icons.Outlined.Folder),
+    TabInfo(HomeTab.SETTINGS, R.string.tab_settings, Icons.Filled.Settings, Icons.Outlined.Settings),
 )
 
 /**
@@ -159,17 +173,55 @@ fun MainScreen(repository: SettingsRepository) {
                 targetOffsetY = { it },
             ) + fadeOut(animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing)),
         ) {
-            NavigationBar(modifier = Modifier.fillMaxWidth().height(76.dp)) {
+            val haptics = LocalHapticFeedback.current
+            val navDividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)
+            NavigationBar(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(76.dp)
+                    .drawBehind {
+                        drawLine(
+                            color = navDividerColor,
+                            start = Offset(0f, 0f),
+                            end = Offset(size.width, 0f),
+                            strokeWidth = 1.dp.toPx(),
+                        )
+                    },
+                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                tonalElevation = 0.dp,
+            ) {
                 TABS.forEach { info ->
+                    val selected = info.tab == selectedTab
+                    val iconScale by animateFloatAsState(
+                        targetValue = if (selected) 1.12f else 1f,
+                        animationSpec = spring(dampingRatio = 0.55f, stiffness = 350f),
+                        label = "tabIconScale",
+                    )
                     NavigationBarItem(
-                        selected = info.tab == selectedTab,
-                        onClick = { selectedTabName = info.tab.name },
+                        selected = selected,
+                        onClick = {
+                            if (!selected) {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                selectedTabName = info.tab.name
+                            }
+                        },
                         icon = {
-                            Icon(
-                                info.icon,
-                                contentDescription = null,
-                                modifier = Modifier.size(28.dp),
-                            )
+                            Crossfade(
+                                targetState = selected,
+                                animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                                label = "tabIconMorph",
+                            ) { isSelected ->
+                                Icon(
+                                    imageVector = if (isSelected) info.iconSelected else info.iconUnselected,
+                                    contentDescription = stringResource(info.labelRes),
+                                    modifier = Modifier
+                                        .size(26.dp)
+                                        .graphicsLayer {
+                                            scaleX = iconScale
+                                            scaleY = iconScale
+                                        },
+                                )
+                            }
                         },
                         label = {
                             Text(
@@ -179,7 +231,14 @@ fun MainScreen(repository: SettingsRepository) {
                                 style = MaterialTheme.typography.labelMedium,
                             )
                         },
-                        alwaysShowLabel = true,
+                        alwaysShowLabel = false,
+                        colors = NavigationBarItemDefaults.colors(
+                            indicatorColor = Color.Transparent,
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
                     )
                 }
             }
