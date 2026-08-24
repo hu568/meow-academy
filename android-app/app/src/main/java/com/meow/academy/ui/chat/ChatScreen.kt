@@ -53,11 +53,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.meow.academy.data.chat.MessageStatus
@@ -74,10 +76,20 @@ import kotlinx.coroutines.launch
  * 页面骨架只负责组装；抽屉 / 气泡 / 输入栏 / Markdown 各在独立文件中。
  */
 @Composable
-fun ChatScreen(vm: ChatViewModel = viewModel()) {
+fun ChatScreen(
+    vm: ChatViewModel = viewModel(),
+    bottomPadding: Dp = 0.dp,
+    imeZoom: Float = 0f,
+) {
     val sessions by vm.sessions.collectAsState()
     val currentId by vm.currentSessionId.collectAsState()
-    ChatDetailView(vm = vm, sessions = sessions, currentId = currentId)
+    ChatDetailView(
+        vm = vm,
+        sessions = sessions,
+        currentId = currentId,
+        bottomPadding = bottomPadding,
+        imeZoom = imeZoom,
+    )
 }
 
 // ─────────────────── 会话详情 ───────────────────
@@ -88,6 +100,8 @@ private fun ChatDetailView(
     vm: ChatViewModel,
     sessions: List<SessionEntity>,
     currentId: Long?,
+    bottomPadding: Dp = 0.dp,
+    imeZoom: Float = 0f,
 ) {
     val messages by vm.messages.collectAsState()
     val streaming by vm.streaming.collectAsState()
@@ -206,36 +220,51 @@ private fun ChatDetailView(
     val drawerOpen = drawerState.isOpen
     val blurRadius by animateDpAsState(if (drawerOpen || dashboardOpen) 8.dp else 0.dp)
 
+    // 唤出输入法时底图放大（模拟导航栏退场时的视觉张力），收起时缩回原尺寸。
+    // 缩放进度由实时 IME 高度驱动，和导航栏/输入栏完全同步，不会慢一拍。
+    val bgScale = 1f + 0.1f * imeZoom
+
     Box(Modifier.fillMaxSize()) {
     ModalNavigationDrawer(
         drawerState = drawerState,
         // 浅遮罩：抽屉只占 ~85% 宽度，右侧聊天页仍然可见
         scrimColor = Color.Black.copy(alpha = 0.25f),
         drawerContent = {
-            SessionDrawer(
-                sessions = sessions,
-                currentId = currentId,
-                onOpen = { id -> vm.openSession(id); scope.launch { drawerState.close() } },
-                onNew = { vm.newSession(); scope.launch { drawerState.close() } },
-                onDelete = vm::deleteSession,
-                onRename = vm::renameSession,
-            )
+            // 会话抽屉也只垫内容区，避免底部被导航栏盖住；底图层仍保持全屏。
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(bottom = bottomPadding),
+            ) {
+                SessionDrawer(
+                    sessions = sessions,
+                    currentId = currentId,
+                    onOpen = { id -> vm.openSession(id); scope.launch { drawerState.close() } },
+                    onNew = { vm.newSession(); scope.launch { drawerState.close() } },
+                    onDelete = vm::deleteSession,
+                    onRename = vm::renameSession,
+                )
+            }
         },
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            // 底图层：放在 ModalNavigationDrawer 内容内部，抽屉遮罩/毛玻璃能同时作用于它
+            // 底图层：全屏铺满，不受导航栏高度影响（导航栏浮在上层即可）
+            // 唤出输入法时放大（bgScale），键盘收起时缩回，底图始终铺满整个区域。
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .blur(blurRadius),
+                    .blur(blurRadius)
+                    .scale(bgScale),
             ) {
                 ChatBackgroundLayer(chatBackground)
             }
-            // 透明 Scaffold：聊天内容叠在底图上，抽屉打开时同样被模糊
+            // 透明 Scaffold：仅内容区垫底部占位，底图层不会被压缩，
+            // 导航栏消失/出现时底图大小不变（不会先变大再缩回去）。
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .blur(blurRadius),
+                    .blur(blurRadius)
+                    .padding(bottom = bottomPadding),
             ) {
                 Scaffold(
                     containerColor = Color.Transparent,
@@ -384,37 +413,44 @@ private fun ChatDetailView(
     }
 
         // 右侧功能看板 overlay（放在 ModalNavigationDrawer 外层，盖住聊天内容）
-        DashboardDrawer(
-            open = dashboardOpen,
-            feature = dashboardFeature,
-            onFeatureChange = { dashboardFeature = it },
-            onClose = { dashboardOpen = false },
-            modelPanel = {
-                ModelManagePanel(
-                    currentProvider = currentProvider,
-                    providers = providers,
-                    llmModel = llmModel,
-                    availableModels = availableModels,
-                    onSelectProvider = vm::selectProvider,
-                    onSelectModel = vm::selectModel,
-                )
-            },
-            filesPanel = {
-                QuickFilesPanel(
-                    vm = quickVm,
-                    panelOpen = dashboardOpen && dashboardFeature == DashboardFeature.FILES,
-                    attachedPaths = attachedPaths,
-                    onToggleAttach = onToggleAttach,
-                )
-            },
-            statsPanel = {
-                UsageStatsPanel(
-                    stats = sessionUsageStats,
-                    loading = false,
-                    onRefresh = vm::refreshUsageStats,
-                )
-            },
-        )
+        // 同样只垫内容区，避免面板底部被底部导航栏盖住；底图层仍保持全屏。
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = bottomPadding),
+        ) {
+            DashboardDrawer(
+                open = dashboardOpen,
+                feature = dashboardFeature,
+                onFeatureChange = { dashboardFeature = it },
+                onClose = { dashboardOpen = false },
+                modelPanel = {
+                    ModelManagePanel(
+                        currentProvider = currentProvider,
+                        providers = providers,
+                        llmModel = llmModel,
+                        availableModels = availableModels,
+                        onSelectProvider = vm::selectProvider,
+                        onSelectModel = vm::selectModel,
+                    )
+                },
+                filesPanel = {
+                    QuickFilesPanel(
+                        vm = quickVm,
+                        panelOpen = dashboardOpen && dashboardFeature == DashboardFeature.FILES,
+                        attachedPaths = attachedPaths,
+                        onToggleAttach = onToggleAttach,
+                    )
+                },
+                statsPanel = {
+                    UsageStatsPanel(
+                        stats = sessionUsageStats,
+                        loading = false,
+                        onRefresh = vm::refreshUsageStats,
+                    )
+                },
+            )
+        }
     }
 }
 

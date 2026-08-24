@@ -1,7 +1,6 @@
 package com.meow.academy.ui
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -11,10 +10,10 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -28,16 +27,16 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -90,17 +89,21 @@ fun MainScreen(repository: SettingsRepository) {
         return
     }
 
-    val imeVisible = WindowInsets.isImeVisible
-    val bottomPad = remember { Animatable(76f) }
-    LaunchedEffect(imeVisible) {
-        if (imeVisible) {
-            // 键盘弹出：底部占位缩到 0，输入栏贴住键盘；与导航栏下滑淡出同速
-            bottomPad.animateTo(0f, tween(durationMillis = 320, easing = FastOutSlowInEasing))
-        } else {
-            // 键盘收起：底部占位长回 76dp，输入栏回到导航栏上方；与导航栏上滑淡入同速
-            bottomPad.animateTo(76f, tween(durationMillis = 160, easing = FastOutSlowInEasing))
-        }
-    }
+    // 键盘动画统一以「当前 IME 高度」驱动，而不是等 isImeVisible 翻转后再补动画：
+    // 输入栏由 ChatInputArea 的 imePadding 实时顶起，这里只补足导航栏高度——
+    // 键盘还高于导航栏时占位为 0（输入栏贴键盘），键盘缩到比导航栏矮时占位补到 76dp，
+    // 输入栏总偏移 = max(imeHeight, navHeight)，不会先掉到屏幕底再被导航栏顶回去。
+    val density = LocalDensity.current
+    val imeHeightPx = WindowInsets.ime.getBottom(density).toFloat()
+    val navHeightPx = with(density) { 76.dp.toPx() }
+    val bottomPad = with(density) { (navHeightPx - imeHeightPx).coerceAtLeast(0f).toDp() }
+    val navVisible = imeHeightPx < navHeightPx
+    // 输入法高度归一化进度（0=收起，1=完全唤出），传给聊天页驱动底图放大动画。
+    // 这里用「输入框实际抬升量」做分母参考：输入框在键盘高度 ≤ 导航栏时不动，
+    // 超过导航栏后才开始被顶起，缩放跟着输入框的抬升走，避免键盘刚冒头就跳到最大。
+    val inputLiftPx = (imeHeightPx - navHeightPx).coerceAtLeast(0f)
+    val windowHeightPx = with(density) { LocalConfiguration.current.screenHeightDp.dp.toPx() }
+    val imeZoom = (inputLiftPx / (windowHeightPx * 0.3f)).coerceIn(0f, 1f)
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
@@ -112,28 +115,40 @@ fun MainScreen(repository: SettingsRepository) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(bottom = bottomPad.value.dp),
+                    .padding(innerPadding),
             ) {
                 when (selectedTab) {
-                    HomeTab.CHAT -> ChatScreen()
-                    HomeTab.FILES -> FilesScreen(onOpenTerminal = { dir ->
-                        terminalInitialDir = dir
-                        terminalOpen = true
-                    })
-                    HomeTab.SETTINGS -> SettingsScreen(repository, onOpenTerminal = {
-                        terminalInitialDir = null
-                        terminalOpen = true
-                    })
+                    // 聊天页底图要铺满全屏（含导航栏下方），所以底部占位传入 ChatScreen，
+                    // 由它只垫「内容区」而不压缩底图层；imeZoom 用于输入法同步缩放动画。
+                    HomeTab.CHAT -> ChatScreen(bottomPadding = bottomPad, imeZoom = imeZoom)
+                    HomeTab.FILES -> Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = bottomPad),
+                    ) {
+                        FilesScreen(onOpenTerminal = { dir ->
+                            terminalInitialDir = dir
+                            terminalOpen = true
+                        })
+                    }
+                    HomeTab.SETTINGS -> Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = bottomPad),
+                    ) {
+                        SettingsScreen(repository, onOpenTerminal = {
+                            terminalInitialDir = null
+                            terminalOpen = true
+                        })
+                    }
                 }
             }
         }
 
-        // 底部导航浮层：键盘弹出时下滑淡出，键盘收起时上滑淡入。
-        // 内容区底部占位由 bottomPad 同步动画：键盘弹出时缩到 0（输入栏贴键盘），
-        // 键盘收起时长回 76dp（输入栏回导航栏上方），中间不会留出导航栏高度的空行。
+        // 底部导航浮层：可见性直接由 IME 高度驱动——键盘高于导航栏时下滑淡出，
+        // 键盘缩到比导航栏矮时上滑淡入；与 bottomPad 同一数据源，输入栏不会被顶得跳变。
         AnimatedVisibility(
-            visible = !WindowInsets.isImeVisible,
+            visible = navVisible,
             modifier = Modifier.align(Alignment.BottomCenter),
             enter = slideInVertically(
                 animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing),
