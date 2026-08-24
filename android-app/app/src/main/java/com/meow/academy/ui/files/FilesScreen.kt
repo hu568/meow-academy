@@ -103,6 +103,7 @@ fun FilesScreen(onOpenTerminal: (String) -> Unit = {}) {
     var targetMode by remember { mutableStateOf<TargetMode?>(null) }
     var searchOpen by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    var fabMenuExpanded by remember { mutableStateOf(false) }
 
     // SAF 多选导入到当前目录
     val importLauncher = rememberLauncherForActivityResult(
@@ -151,11 +152,13 @@ fun FilesScreen(onOpenTerminal: (String) -> Unit = {}) {
                             IconButton(onClick = { showMoreMenu = true }) {
                                 Icon(Icons.Filled.MoreVert, contentDescription = "更多")
                             }
-                            DropdownMenu(expanded = showMoreMenu, onDismissRequest = { showMoreMenu = false }) {
-                                DropdownMenuItem(text = { Text("新建文件") }, onClick = { showMoreMenu = false; showNewFile = true })
-                                DropdownMenuItem(text = { Text("新建文件夹") }, onClick = { showMoreMenu = false; showNewFolder = true })
-                                DropdownMenuItem(text = { Text("导入文件") }, onClick = { showMoreMenu = false; importLauncher.launch(arrayOf("*/*")) })
-                            }
+                            NewItemMenu(
+                                expanded = showMoreMenu,
+                                onDismiss = { showMoreMenu = false },
+                                onNewFile = { showNewFile = true },
+                                onNewFolder = { showNewFolder = true },
+                                onImport = { importLauncher.launch(arrayOf("*/*")) },
+                            )
                         }
                     }
                 },
@@ -174,8 +177,17 @@ fun FilesScreen(onOpenTerminal: (String) -> Unit = {}) {
         },
         floatingActionButton = {
             if (!searchActive) {
-                FloatingActionButton(onClick = { showMoreMenu = true }) {
-                    Icon(Icons.Filled.Add, contentDescription = "新建")
+                Box {
+                    FloatingActionButton(onClick = { fabMenuExpanded = true }) {
+                        Icon(Icons.Filled.Add, contentDescription = "新建")
+                    }
+                    NewItemMenu(
+                        expanded = fabMenuExpanded,
+                        onDismiss = { fabMenuExpanded = false },
+                        onNewFile = { showNewFile = true },
+                        onNewFolder = { showNewFolder = true },
+                        onImport = { importLauncher.launch(arrayOf("*/*")) },
+                    )
                 }
             }
         },
@@ -382,6 +394,22 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit, onClose:
             }
         },
     )
+}
+
+/** 「新建/导入」菜单：顶栏更多与右下角 FAB 共用同一组动作 */
+@Composable
+private fun NewItemMenu(
+    expanded: Boolean,
+    onDismiss: () -> Unit,
+    onNewFile: () -> Unit,
+    onNewFolder: () -> Unit,
+    onImport: () -> Unit,
+) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        DropdownMenuItem(text = { Text("新建文件") }, onClick = { onDismiss(); onNewFile() })
+        DropdownMenuItem(text = { Text("新建文件夹") }, onClick = { onDismiss(); onNewFolder() })
+        DropdownMenuItem(text = { Text("导入文件") }, onClick = { onDismiss(); onImport() })
+    }
 }
 
 /** 搜索结果列表：显示相对路径，点击进入所在目录/文件 */
