@@ -2,24 +2,40 @@ package com.meow.academy.ui.chat
 
 /**
  * 会话抽屉组件（聊天页左侧）。
- * 会话列表 + 新建 + 重命名/删除对话框；从 ChatScreen.kt 原子拆出。
+ * 会话列表 + 新建 + 多选（右滑触发 / 工具栏按钮）+ 重命名/删除对话框；从 ChatScreen.kt 原子拆出。
+ *
+ * 多选交互（仿 MT 管理器）：
+ * - 工具栏「☐」按钮：进入多选模式
+ * - 列表项「右滑」过阈值：自动进入多选并勾选该项
+ * - 多选模式下点击：切换勾选；非多选：打开会话
+ * - 多选工具栏：「✕」退出多选 + 「🗑」批量删除（带确认）
+ *
+ * 手势注意：行内的「右滑多选」手势是只观察不消费的——
+ * 右滑才累计位移触发多选，左滑完全让出事件，保留 ModalNavigationDrawer 的左滑收回抽屉。
  */
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -28,29 +44,71 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.meow.academy.data.chat.SessionEntity
 import com.meow.academy.ui.components.EmptyStateCompact
+import kotlin.math.roundToInt
 
-/** 会话抽屉：列表 + 新建 + 重命名/删除对话框 */
+/** 右滑触发多选的阈值（px 在 density 中换算） */
+private val SWIPE_TRIGGER_DP = 64.dp
+
+/** 会话抽屉：列表 + 新建 + 多选 + 重命名/删除对话框 */
 @Composable
 fun SessionDrawer(
     sessions: List<SessionEntity>,
     currentId: Long?,
+    drawerOpen: Boolean,
     onOpen: (Long) -> Unit,
     onNew: () -> Unit,
     onDelete: (SessionEntity) -> Unit,
+    onDeleteMany: (List<SessionEntity>) -> Unit,
     onRename: (Long, String) -> Unit,
 ) {
     var renaming by remember { mutableStateOf<SessionEntity?>(null) }
     var deleting by remember { mutableStateOf<SessionEntity?>(null) }
+    var batchDeleting by remember { mutableStateOf(false) }
+
+    // 多选状态：选中的会话 id 集合；空集合 + selectionMode=false → 普通模式
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+
+    // 退出多选的统一入口：清空选择 + 关闭模式
+    val exitSelection: () -> Unit = {
+        selectionMode = false
+        selectedIds = emptySet()
+    }
+
+    // 抽屉关闭时自动退出多选（避免「用户侧滑关闭抽屉后下次打开还残留多选 UI」）。
+    // 关键是 onDrawerClose 触发时 drawerOpen: true → false 这一刻执行 exitSelection()。
+    LaunchedEffect(drawerOpen) {
+        if (!drawerOpen) exitSelection()
+    }
+
+    // 切换某条会话的勾选状态（首次进入多选时也用它）
+    val toggleSelected: (Long) -> Unit = { id ->
+        selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
+    }
+
+    // 当前已选实体（按会话列表顺序）
+    val selectedSessions by remember(sessions, selectedIds) {
+        derivedStateOf { sessions.filter { it.id in selectedIds } }
+    }
 
     ModalDrawerSheet(
         // 只占约 85% 宽度，右侧留一条聊天页可见；半透明容器露出模糊后的聊天内容（毛玻璃）
@@ -59,54 +117,91 @@ fun SessionDrawer(
             .widthIn(max = 340.dp),
         drawerContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.80f),
     ) {
+        // 工具栏
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("会话", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-            IconButton(onClick = onNew) { Icon(Icons.Filled.Add, contentDescription = "新建会话") }
+            if (selectionMode) {
+                // 多选模式工具栏：✕ 退出 + 标题（已选 N 项）+ 删除
+                IconButton(onClick = exitSelection) {
+                    Icon(Icons.Filled.Close, contentDescription = "取消多选")
+                }
+                Text(
+                    text = "已选 ${selectedIds.size} 项",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 4.dp),
+                )
+                IconButton(
+                    onClick = { if (selectedSessions.isNotEmpty()) batchDeleting = true },
+                    enabled = selectedSessions.isNotEmpty(),
+                ) {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = "批量删除",
+                        tint = if (selectedSessions.isNotEmpty()) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                // 普通模式工具栏：标题 + 多选（紧贴新建左边） + 新建
+                Text(
+                    text = "会话",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 8.dp),
+                )
+                IconButton(onClick = {
+                    selectionMode = true
+                    selectedIds = emptySet()
+                }) {
+                    Icon(
+                        Icons.Filled.CheckBoxOutlineBlank,
+                        contentDescription = "多选",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+                IconButton(onClick = onNew) {
+                    Icon(Icons.Filled.Add, contentDescription = "新建会话")
+                }
+            }
         }
+
         if (sessions.isEmpty()) {
             EmptyStateCompact(
                 icon = Icons.Outlined.Forum,
                 title = "暂无会话",
             )
         } else {
-            LazyColumn {
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
                 items(sessions, key = { it.id }) { session ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(
-                                if (session.id == currentId) MaterialTheme.colorScheme.surfaceVariant
-                                else Color.Transparent,
-                            )
-                            .clickable { onOpen(session.id) }
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = session.title,
-                                style = MaterialTheme.typography.titleMedium,
-                                maxLines = 1,
-                            )
-                            Text(
-                                text = java.text.DateFormat.getDateTimeInstance()
-                                    .format(java.util.Date(session.updatedAt)),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        IconButton(onClick = { renaming = session }) {
-                            Icon(Icons.Filled.Edit, contentDescription = "重命名", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        IconButton(onClick = { deleting = session }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
-                        }
-                    }
+                    val isSelected = session.id in selectedIds
+                    SwipeableSessionRow(
+                        session = session,
+                        isCurrent = session.id == currentId,
+                        selectionMode = selectionMode,
+                        isSelected = isSelected,
+                        onTap = {
+                            if (selectionMode) toggleSelected(session.id)
+                            else onOpen(session.id)
+                        },
+                        onSwipeRightTrigger = {
+                            // 右滑触发：进入多选 + 勾选该项
+                            if (!selectionMode) {
+                                selectionMode = true
+                                selectedIds = setOf(session.id)
+                            } else {
+                                toggleSelected(session.id)
+                            }
+                        },
+                        onEdit = { renaming = session },
+                        onDelete = { deleting = session },
+                    )
                 }
             }
         }
@@ -144,5 +239,147 @@ fun SessionDrawer(
             },
             dismissButton = { TextButton(onClick = { deleting = null }) { Text("取消") } },
         )
+    }
+
+    if (batchDeleting) {
+        AlertDialog(
+            onDismissRequest = { batchDeleting = false },
+            title = { Text("批量删除会话") },
+            text = { Text("确定删除已选的 ${selectedSessions.size} 个会话吗？此操作不可撤销。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val toDelete = selectedSessions
+                    batchDeleting = false
+                    exitSelection()
+                    onDeleteMany(toDelete)
+                }) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { batchDeleting = false }) { Text("取消") } },
+        )
+    }
+}
+
+/**
+ * 单个会话行：
+ * - 多选模式 → 右侧复选框；点击行切换勾选；编辑/删除图标隐藏（多选工具栏的删除按钮统一处理）
+ * - 普通模式 → 右侧编辑/删除图标；点击行打开会话
+ * - 右滑：行向右偏移累计，超阈值回调 onSwipeRightTrigger 一次；手指松开回弹归零
+ *   （避免遮挡/手感僵硬）。
+ * - 左滑：完全不处理也不消费，事件冒泡给外层 ModalNavigationDrawer → 抽屉左滑收回。
+ *
+ * **首次右滑进入多选时不要卡住**：把 `selectionMode` 排除在 `pointerInput` 的 key 之外，
+ * 否则右滑触发 onSwipeRightTrigger → 外层 selectionMode 变 true → Row 重组 →
+ * pointerInput 因 key 变化被销毁重建 → 正在进行的 drag 事件丢失、onDragEnd 永远不到 →
+ * dragOffsetX 永远保留位移（用户看到卡片"卡住"）。
+ * 解法：key 只用 session.id，dragOffsetX 用 animateFloatAsState 让其平滑归零
+ * （selectionMode 变化时任何非零偏移都自然 animateTo(0f)）。
+ */
+@Composable
+private fun SwipeableSessionRow(
+    session: SessionEntity,
+    isCurrent: Boolean,
+    selectionMode: Boolean,
+    isSelected: Boolean,
+    onTap: () -> Unit,
+    onSwipeRightTrigger: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val density = LocalDensity.current
+    val triggerPx = with(density) { SWIPE_TRIGGER_DP.toPx() }
+    // 行的水平拖拽偏移（用于滑动时的视觉反馈，松手/触发后归零）
+    var dragOffsetX by remember { mutableStateOf(0f) }
+    // selectionMode / isCurrent 变化时把任何残留的拖拽偏移弹回 0
+    LaunchedEffect(selectionMode, isCurrent) {
+        dragOffsetX = 0f
+    }
+    // 平滑回弹：dragOffsetX 变化 → 200ms 动画到目标值（自然弹回）
+    val animatedOffsetX by animateFloatAsState(
+        targetValue = dragOffsetX,
+        animationSpec = tween(durationMillis = 180),
+        label = "sessionRowSwipe",
+    )
+    // 让 pointerInput 永远读到最新的 onSwipeRightTrigger（避免闭包捕获旧值）
+    val currentOnSwipeRightTrigger by rememberUpdatedState(onSwipeRightTrigger)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .offset { IntOffset(animatedOffsetX.roundToInt(), 0) }
+            .background(
+                if (isCurrent && !selectionMode) MaterialTheme.colorScheme.surfaceVariant
+                else Color.Transparent,
+            )
+            .clickable(onClick = onTap)
+            // key 只用 session.id：不让 selectionMode 重建 drag handler（避免首次右滑卡住）
+            // 注意：这里不能再用 detectHorizontalDragGestures——它会把左滑/右滑全部消费掉，
+            // 导致左侧 ModalNavigationDrawer 收不到左滑事件、抽屉无法左滑收回。
+            // 改为「只观察不消费」的手势：右滑累计位移触发多选，左滑完全不管、让事件冒泡给抽屉。
+            .pointerInput(session.id) {
+                var hasTriggered = false
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) break
+                        val delta = change.positionChange().x
+                        // 只处理向右拖动；左滑不累计也不消费（抽屉收回手势才能收到）
+                        if (delta > 0) {
+                            dragOffsetX = (dragOffsetX + delta).coerceAtLeast(0f)
+                            if (!hasTriggered && dragOffsetX >= triggerPx) {
+                                hasTriggered = true
+                                currentOnSwipeRightTrigger()
+                            }
+                        }
+                        // 不调用 change.consume()：始终把事件留给外层抽屉手势
+                    }
+                    // 手指松开：视觉位移回弹归零
+                    dragOffsetX = 0f
+                    hasTriggered = false
+                }
+            }
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = session.title,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+            )
+            Text(
+                text = java.text.DateFormat.getDateTimeInstance()
+                    .format(java.util.Date(session.updatedAt)),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        if (selectionMode) {
+            // 多选模式：右侧显示复选框（用 Checkbox 控件 + 圆形浅色背景增加点击命中）
+            Checkbox(
+                checked = isSelected,
+                onCheckedChange = { onTap() },
+            )
+        } else {
+            // 普通模式：右侧编辑 + 删除
+            IconButton(onClick = onEdit) {
+                Icon(
+                    Icons.Filled.Edit,
+                    contentDescription = "重命名",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = "删除",
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
     }
 }

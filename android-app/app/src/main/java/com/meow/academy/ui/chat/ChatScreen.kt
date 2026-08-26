@@ -239,9 +239,11 @@ private fun ChatDetailView(
                 SessionDrawer(
                     sessions = sessions,
                     currentId = currentId,
+                    drawerOpen = drawerOpen,
                     onOpen = { id -> vm.openSession(id); scope.launch { drawerState.close() } },
                     onNew = { vm.newSession(); scope.launch { drawerState.close() } },
                     onDelete = vm::deleteSession,
+                    onDeleteMany = vm::deleteSessions,
                     onRename = vm::renameSession,
                 )
             }

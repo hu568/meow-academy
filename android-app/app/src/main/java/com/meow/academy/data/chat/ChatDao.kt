@@ -42,6 +42,14 @@ interface ChatDao {
     @Delete
     suspend fun deleteSession(session: SessionEntity)
 
+    /** 批量删除会话（多选用） */
+    @Query("DELETE FROM sessions WHERE id IN (:ids)")
+    suspend fun deleteSessionsByIds(ids: List<Long>)
+
+    /** 批量删除多个会话的消息（多选用） */
+    @Query("DELETE FROM messages WHERE sessionId IN (:sessionIds)")
+    suspend fun deleteMessagesBySessionIds(sessionIds: List<Long>)
+
     // ── 消息 ──
 
     @Query("SELECT * FROM messages WHERE sessionId = :sessionId ORDER BY createdAt ASC, id ASC")

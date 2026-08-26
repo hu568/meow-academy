@@ -317,6 +317,25 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 批量删除会话（多选模式确认删除用）：
+     * 1. 先批量清空这些会话的消息（外键/级联依赖：单条删除时手动清消息，批量也对应处理）
+     * 2. 再批量删除会话行
+     * 3. 若当前打开的会话在删除集里 → 关掉（让用户重新选或新建）
+     */
+    fun deleteSessions(sessions: List<SessionEntity>) {
+        if (sessions.isEmpty()) return
+        viewModelScope.launch {
+            val ids = sessions.map { it.id }
+            dao.deleteMessagesBySessionIds(ids)
+            dao.deleteSessionsByIds(ids)
+            if (_currentSessionId.value != null && _currentSessionId.value in ids) {
+                _currentSessionId.value = null
+                _sessionUsageStats.value = null
+            }
+        }
+    }
+
     /** Room 长 id → DSH sessionId；null（未打开会话）→ 空串：setModel 只更新服务端全局默认 */
     private fun dshSessionIdOf(roomId: Long?): String = if (roomId == null) "" else "room-$roomId"
 
