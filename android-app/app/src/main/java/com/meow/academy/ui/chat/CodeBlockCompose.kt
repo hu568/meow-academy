@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.meow.academy.data.settings.MarkdownConfig
@@ -54,6 +55,13 @@ fun CodeBlockCompose(
     val cornerShape = RoundedCornerShape(config.code.blockCornerRadiusDp.dp)
     val backgroundColor = parseColor(config.code.blockBackground)
         ?: MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.7f)
+
+    // 代码文字基础色：配置优先（可 { light, dark } 主题感知），否则跟随当前实际主题
+    // （浅色 = 深字、深色 = 浅字）。纯文本代码块（无语言标记）没有 Prism4j 高亮 span，
+    // 全靠 TextView 的 textColor 上色，不显式设置会在运行时切换明暗主题后残留旧色
+    // （如深色主题创建出的白色文字，切到浅色后浅底白字看不清）。
+    val textColor = parseColor(config.code.blockTextColor)
+        ?: MaterialTheme.colorScheme.onSurface
 
     // Prism4j 实例只建一次；主题随深浅色切换重建
     val prism4j = remember { Prism4j(MarkdownGrammarLocator()) }
@@ -112,6 +120,7 @@ fun CodeBlockCompose(
                 },
                 update = { view ->
                     view.textSize = 15f * config.code.blockTextSizeRatio
+                    view.setTextColor(textColor.toArgb())
                     view.setText(highlighted)
                 },
             )

@@ -10,6 +10,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -26,17 +27,20 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Dashboard
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
@@ -216,6 +220,10 @@ private fun ChatDetailView(
     // 顶栏显示当前会话标题（没有打开会话时回退为“聊天”）
     val currentTitle = sessions.firstOrNull { it.id == currentId }?.title ?: "聊天"
 
+    // 顶栏标题点击重命名
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var renameText by remember { mutableStateOf("") }
+
     // 抽屉打开时给「底图 + 聊天内容」一起加毛玻璃模糊（API < 31 自动退化为不模糊）
     val drawerOpen = drawerState.isOpen
     val blurRadius by animateDpAsState(if (drawerOpen || dashboardOpen) 8.dp else 0.dp)
@@ -278,6 +286,14 @@ private fun ChatDetailView(
                                     text = currentTitle,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
+                                    modifier = if (currentId != null) {
+                                        Modifier.clickable {
+                                            renameText = currentTitle
+                                            showRenameDialog = true
+                                        }
+                                    } else {
+                                        Modifier
+                                    },
                                 )
                             },
                             navigationIcon = {
@@ -453,6 +469,31 @@ private fun ChatDetailView(
                 },
             )
         }
+
+    // 顶栏标题点击 → 重命名当前会话（未打开会话时标题不可点，不会弹）
+    if (showRenameDialog && currentId != null) {
+        AlertDialog(
+            onDismissRequest = { showRenameDialog = false },
+            title = { Text("重命名会话") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    singleLine = true,
+                    label = { Text("标题") },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.renameSession(currentId, renameText)
+                    showRenameDialog = false
+                }) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRenameDialog = false }) { Text("取消") }
+            },
+        )
+    }
     }
 }
 

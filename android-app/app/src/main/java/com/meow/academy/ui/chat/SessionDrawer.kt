@@ -2,40 +2,49 @@ package com.meow.academy.ui.chat
 
 /**
  * 会话抽屉组件（聊天页左侧）。
- * 会话列表 + 新建 + 多选（右滑触发 / 工具栏按钮）+ 重命名/删除对话框；从 ChatScreen.kt 原子拆出。
+ * 会话列表 + 新建 + 多选（右滑触发 / 工具栏按钮）+ 长按菜单（重命名/删除）+ 对话框；从 ChatScreen.kt 原子拆出。
  *
  * 多选交互（仿 MT 管理器）：
- * - 工具栏「☐」按钮：进入多选模式
+ * - 工具栏「☑ 清单」按钮：进入多选模式
  * - 列表项「右滑」过阈值：自动进入多选并勾选该项
  * - 多选模式下点击：切换勾选；非多选：打开会话
  * - 多选工具栏：「✕」退出多选 + 「🗑」批量删除（带确认）
  *
- * 手势注意：行内的「右滑多选」手势是只观察不消费的——
- * 右滑才累计位移触发多选，左滑完全让出事件，保留 ModalNavigationDrawer 的左滑收回抽屉。
+ * 单条会话操作：
+ * - 普通模式长按卡片：弹出菜单（重命名 / 删除），卡片右侧不再常驻操作按钮
+ *
+ * 手势注意：行内的「右滑多选 / 点击 / 长按」手势统一在同一个 pointerInput 里处理、
+ * 只观察不消费——右滑才累计位移触发多选，左滑完全让出事件，保留 ModalNavigationDrawer 的左滑收回抽屉。
  */
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.ChecklistRtl
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -59,6 +68,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.meow.academy.data.chat.SessionEntity
@@ -161,7 +171,7 @@ fun SessionDrawer(
                     selectedIds = emptySet()
                 }) {
                     Icon(
-                        Icons.Filled.CheckBoxOutlineBlank,
+                        Icons.Outlined.ChecklistRtl,
                         contentDescription = "多选",
                         tint = MaterialTheme.colorScheme.onSurface,
                     )
@@ -263,8 +273,8 @@ fun SessionDrawer(
 
 /**
  * 单个会话行：
- * - 多选模式 → 右侧复选框；点击行切换勾选；编辑/删除图标隐藏（多选工具栏的删除按钮统一处理）
- * - 普通模式 → 右侧编辑/删除图标；点击行打开会话
+ * - 多选模式 → 右侧复选框；点击行切换勾选；长按不弹菜单（多选工具栏的删除按钮统一处理）
+ * - 普通模式 → 点击行打开会话；长按弹出菜单（重命名/删除）
  * - 右滑：行向右偏移累计，超阈值回调 onSwipeRightTrigger 一次；手指松开回弹归零
  *   （避免遮挡/手感僵硬）。
  * - 左滑：完全不处理也不消费，事件冒泡给外层 ModalNavigationDrawer → 抽屉左滑收回。
@@ -275,7 +285,11 @@ fun SessionDrawer(
  * dragOffsetX 永远保留位移（用户看到卡片"卡住"）。
  * 解法：key 只用 session.id，dragOffsetX 用 animateFloatAsState 让其平滑归零
  * （selectionMode 变化时任何非零偏移都自然 animateTo(0f)）。
+ *
+ * 点击/长按由 combinedClickable 处理，右滑由 pointerInput 处理（只观察不消费），
+ * 互不抢事件；左滑完全让出，保留 ModalNavigationDrawer 的收回手势。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SwipeableSessionRow(
     session: SessionEntity,
@@ -289,6 +303,8 @@ private fun SwipeableSessionRow(
 ) {
     val density = LocalDensity.current
     val triggerPx = with(density) { SWIPE_TRIGGER_DP.toPx() }
+    // 长按菜单展开状态
+    var longPressMenuExpanded by remember { mutableStateOf(false) }
     // 行的水平拖拽偏移（用于滑动时的视觉反馈，松手/触发后归零）
     var dragOffsetX by remember { mutableStateOf(0f) }
     // selectionMode / isCurrent 变化时把任何残留的拖拽偏移弹回 0
@@ -304,82 +320,112 @@ private fun SwipeableSessionRow(
     // 让 pointerInput 永远读到最新的 onSwipeRightTrigger（避免闭包捕获旧值）
     val currentOnSwipeRightTrigger by rememberUpdatedState(onSwipeRightTrigger)
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .offset { IntOffset(animatedOffsetX.roundToInt(), 0) }
-            .background(
-                if (isCurrent && !selectionMode) MaterialTheme.colorScheme.surfaceVariant
-                else Color.Transparent,
-            )
-            .clickable(onClick = onTap)
-            // key 只用 session.id：不让 selectionMode 重建 drag handler（避免首次右滑卡住）
-            // 注意：这里不能再用 detectHorizontalDragGestures——它会把左滑/右滑全部消费掉，
-            // 导致左侧 ModalNavigationDrawer 收不到左滑事件、抽屉无法左滑收回。
-            // 改为「只观察不消费」的手势：右滑累计位移触发多选，左滑完全不管、让事件冒泡给抽屉。
-            .pointerInput(session.id) {
-                var hasTriggered = false
-                awaitEachGesture {
-                    val down = awaitFirstDown(requireUnconsumed = false)
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (!change.pressed) break
-                        val delta = change.positionChange().x
-                        // 只处理向右拖动；左滑不累计也不消费（抽屉收回手势才能收到）
-                        if (delta > 0) {
-                            dragOffsetX = (dragOffsetX + delta).coerceAtLeast(0f)
-                            if (!hasTriggered && dragOffsetX >= triggerPx) {
-                                hasTriggered = true
-                                currentOnSwipeRightTrigger()
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .offset { IntOffset(animatedOffsetX.roundToInt(), 0) }
+                .background(
+                    if (isCurrent && !selectionMode) MaterialTheme.colorScheme.surfaceVariant
+                    else Color.Transparent,
+                )
+                // 点击打开会话；长按弹出操作菜单（多选模式下长按不弹）
+                .combinedClickable(
+                    onClick = onTap,
+                    onLongClick = { if (!selectionMode) longPressMenuExpanded = true },
+                )
+                // key 只用 session.id：不让 selectionMode 重建 drag handler（避免首次右滑卡住）
+                // 注意：这里不能再用 detectHorizontalDragGestures——它会把左滑/右滑全部消费掉，
+                // 导致左侧 ModalNavigationDrawer 收不到左滑事件、抽屉无法左滑收回。
+                // 改为「只观察不消费」的手势：右滑累计位移触发多选，左滑完全不管、让事件冒泡给抽屉。
+                .pointerInput(session.id) {
+                    var hasTriggered = false
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) break
+                            val delta = change.positionChange().x
+                            // 只处理向右拖动；左滑不累计也不消费（抽屉收回手势才能收到）
+                            if (delta > 0) {
+                                dragOffsetX = (dragOffsetX + delta).coerceAtLeast(0f)
+                                if (!hasTriggered && dragOffsetX >= triggerPx) {
+                                    hasTriggered = true
+                                    currentOnSwipeRightTrigger()
+                                }
                             }
+                            // 不调用 change.consume()：始终把事件留给外层抽屉手势
                         }
-                        // 不调用 change.consume()：始终把事件留给外层抽屉手势
+                        // 手指松开：视觉位移回弹归零
+                        dragOffsetX = 0f
+                        hasTriggered = false
                     }
-                    // 手指松开：视觉位移回弹归零
-                    dragOffsetX = 0f
-                    hasTriggered = false
                 }
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = session.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                )
+                Text(
+                    text = java.text.DateFormat.getDateTimeInstance()
+                        .format(java.util.Date(session.updatedAt)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = session.title,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-            )
-            Text(
-                text = java.text.DateFormat.getDateTimeInstance()
-                    .format(java.util.Date(session.updatedAt)),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+
+            if (selectionMode) {
+                // 多选模式：右侧显示复选框（用 Checkbox 控件 + 圆形浅色背景增加点击命中）
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onTap() },
+                )
+            } else {
+                // 普通模式：右侧预留与多选 Checkbox 等宽的占位，
+                // 避免切换多选时标题/卡片内容发生横向错位
+                Spacer(modifier = Modifier.size(48.dp))
+            }
         }
 
-        if (selectionMode) {
-            // 多选模式：右侧显示复选框（用 Checkbox 控件 + 圆形浅色背景增加点击命中）
-            Checkbox(
-                checked = isSelected,
-                onCheckedChange = { onTap() },
+        // 长按弹出的会话操作菜单
+        DropdownMenu(
+            expanded = longPressMenuExpanded,
+            onDismissRequest = { longPressMenuExpanded = false },
+            offset = DpOffset(120.dp, 0.dp),
+        ) {
+            DropdownMenuItem(
+                text = { Text("重命名") },
+                leadingIcon = {
+                    Icon(
+                        Icons.Filled.Edit,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+                onClick = {
+                    longPressMenuExpanded = false
+                    onEdit()
+                },
             )
-        } else {
-            // 普通模式：右侧编辑 + 删除
-            IconButton(onClick = onEdit) {
-                Icon(
-                    Icons.Filled.Edit,
-                    contentDescription = "重命名",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            IconButton(onClick = onDelete) {
-                Icon(
-                    Icons.Filled.Delete,
-                    contentDescription = "删除",
-                    tint = MaterialTheme.colorScheme.error,
-                )
-            }
+            DropdownMenuItem(
+                text = { Text("删除") },
+                leadingIcon = {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                },
+                onClick = {
+                    longPressMenuExpanded = false
+                    onDelete()
+                },
+            )
         }
     }
 }
