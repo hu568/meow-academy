@@ -52,7 +52,7 @@ internal object MarkdownPrismBundle
 /**
  * @param textSizePx LaTeX 公式字号（px）；与 TextView 正文 15sp 对应
  * @param textColorArgb LaTeX 公式文字色；跟随当前主题，避免深色模式下黑字不可见
- * @param config appconfig/markdown-config.js 解析后的渲染配置；null 用内置默认值
+ * @param config appconfig/markdown-config.jsonc 解析后的渲染配置；null 用内置默认值
  */
 fun buildMarkwon(
     context: Context,

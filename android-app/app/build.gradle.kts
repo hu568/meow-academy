@@ -134,7 +134,8 @@ dependencies {
     // 拖拽排序（长按卡片上下拖动 + 边缘自动滚动）
     implementation(libs.reorderable)
 
-    // appconfig/markdown-config.js 的 JS 求值（Rhino 解释模式，Android 兼容）
+    // 旧版 appconfig/markdown-config.js 的一次性 JSONC 迁移求值（Rhino 解释模式，Android 兼容）；
+    // 迁移完成后仅剩兜底用途，后续可随存量用户清零移除
     implementation(libs.rhino)
 
     debugImplementation(libs.androidx.ui.tooling)

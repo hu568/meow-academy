@@ -75,7 +75,7 @@ fun MarkdownText(
             context.resources.displayMetrics,
         )
     }
-    // appconfig/markdown-config.js：仓库只存原始 JS 配置，这里按当前主题解析成具体值
+    // appconfig/markdown-config.jsonc：仓库只存原始 JSONC 配置，这里按当前主题解析成具体值
     val app = context.applicationContext as MeowAcademyApp
     val configRaw by app.markdownConfigRepository.config.collectAsState()
     val config = remember(configRaw, isDark) { resolveMarkdownConfig(configRaw, isDark) }

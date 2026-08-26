@@ -21,7 +21,7 @@ import io.noties.markwon.core.MarkwonTheme
  *
  * 默认 Markwon 的 [io.noties.markwon.core.spans.CodeBlockSpan] 用直角矩形每行画背景；
  * 这里复制它的行为（整行铺满 + 代码块文字样式），但只在第一行画一次圆角矩形，
- * 圆角半径来自 appconfig/markdown-config.js 的 `code.blockCornerRadiusDp`。
+ * 圆角半径来自 appconfig/markdown-config.jsonc 的 `code.blockCornerRadiusDp`。
  *
  * 原理：利用 [Layout] 的 [getLineForOffset] 找出当前 span 覆盖的起始/终止行，
  * 计算整块总高度，仅在第一行 [drawLeadingMargin] 时绘制整块圆角背景。

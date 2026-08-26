@@ -19,7 +19,7 @@ import kotlin.math.ceil
  *
  * Markwon 默认的 [io.noties.markwon.core.spans.CodeSpan] 用 `TextPaint.bgColor`
  * 画直角矩形背景；这里改用 [ReplacementSpan] 自己测量宽度并绘制「胶囊/圆角芯片」，
- * 水平/垂直内边距与圆角半径来自 appconfig/markdown-config.js 的 `code.inline*` 配置。
+ * 水平/垂直内边距与圆角半径来自 appconfig/markdown-config.jsonc 的 `code.inline*` 配置。
  *
  * 注意：ReplacementSpan 会把整段行内代码当作一个不可拆分的单元，超长时整体换行，
  * 对常见的短行内代码（变量名、命令、路径）视觉一致性更好。

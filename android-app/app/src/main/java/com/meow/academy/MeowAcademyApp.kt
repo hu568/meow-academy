@@ -26,7 +26,7 @@ class MeowAcademyApp : Application() {
     /** 模型目录本地缓存（前后端解耦：UI 先用缓存渲染，DSH 就绪后再同步） */
     val modelCatalogRepository: ModelCatalogRepository by lazy { ModelCatalogRepository(this) }
 
-    /** Markdown 渲染配置（appconfig/markdown-config.js，JS 热更 + AI 可编排） */
+    /** Markdown 渲染配置（appconfig/markdown-config.jsonc，JSONC 热更 + AI 可编排） */
     val markdownConfigRepository: MarkdownConfigRepository by lazy { MarkdownConfigRepository(this) }
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -36,7 +36,7 @@ class MeowAcademyApp : Application() {
         // phase4 目录重构：进程启动即确保 workspace/appconfig/.agents 就绪（三保险之一；
         // 覆盖「先打开文件管理页、不启动 DSH」的场景）
         RuntimeExtractor.ensureAppDirs(this)
-        // Markdown 渲染配置：从 assets 播种 appconfig/markdown-config.js + FileObserver 热更
+        // Markdown 渲染配置：config-defaults 同步 + seed appconfig/markdown-config.jsonc + FileObserver 热更
         markdownConfigRepository.start()
         // 前后台档位策略（M2.6）
         AppLifecycleObserver(this, appScope).install()

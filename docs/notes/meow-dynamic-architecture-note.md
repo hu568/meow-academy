@@ -271,6 +271,8 @@ model.schema.json       ─┘     · 每份 schema = 一个大设置项
 
 ## 10. 落地案例：Markdown 渲染配置（appconfig/markdown-config.js）
 
+> ⚠️ 本节为**旧版 JS 方案**（2026-08-21 落地，已真机验证）。2026-08-24 已按 §11 迁移为 **JSONC + 默认模板/用户覆盖**（`config-defaults/` + `appconfig/markdown-config.jsonc`），旧 `.js` 仅在存量升级时一次性迁移。历史记录保留供追溯。
+
 把「施工队 + 军师」落到第一个真实功能：**JS 控制 Markdown 渲染外观**（2026-08-21）。
 
 ### 10.1 文件与契约
@@ -401,11 +403,11 @@ Kotlin 内置默认
 - [ ] `config-defaults/` 同步标记字段：`versionCode + lastUpdateTime` 在同版本重装时是否可靠变化，需真机验证；若不可靠再换方案（如比对 assets 文件哈希）；
 - [x] 恢复默认功能已确认：见 §11.5；
 - [x] 文件头注释模板已确认：统一一套（功能名 + 显式指向 `appconfig/README.md` + 元数据），不分默认/用户两版；
-- [ ] `README.md` 内容：各文件用途、可改/只读、复制到 `appconfig/`、恢复默认操作说明；`config-defaults/README.md` 为权威版，**同步一份到 `appconfig/README.md`**（更新时**强制覆盖**，不保留本地修改）；
+- [x] `README.md` 内容：各文件用途、可改/只读、复制到 `appconfig/`、恢复默认操作说明；`config-defaults/README.md` 为权威版，**同步一份到 `appconfig/README.md`**（更新时**强制覆盖**，不保留本地修改）；
 - [x] 深合并精确语义已确认：对象递归、数组/标量整体替换、`null` = 回退默认（与「没写」等价）；
 - [x] 配置格式已确认：统一 JSONC（`.jsonc`），Kotlin 侧 `stripJsonc()` 剥注释后按标准 JSON 解析；
-- [ ] 是否观察 `config-defaults/markdown-config.jsonc` 副本变化（默认模板由 App 控制，一般不需要热更）；
-- [ ] `stripJsonc()` 的实现与单元测试（处理字符串内的 `//`、`/* */`、转义引号）；
+- [x] 是否观察 `config-defaults/markdown-config.jsonc` 副本变化（默认模板由 App 控制，一般不需要热更）→ **不观察**，仅观察 `appconfig/` 用户文件；
+- [x] `stripJsonc()` 的实现与单元测试（处理字符串内的 `//`、`/* */`、转义引号）；
 - [x] 版本号 / 可修改项数量已定：顶层 `"version"`（ISO 8601 时间戳）+ `"_editableCount"`（`_` 前缀元数据，解析忽略）；详见 `docs/design-dynamic-config.md`；
 - [x] `config-defaults/README.md` 可编辑地图：**要做**，大致说明每个文件能改什么（可改/只读、示例）；
 - [x] **AI 硬边界**：DSH 工具层 `deny config-defaults/`，内置 agent 不可修改默认模板；
@@ -414,6 +416,16 @@ Kotlin 内置默认
 - [ ] **统一配置仓库**：目前仅 markdown 一个配置，暂不抽象；等第 2 个 JSONC 配置出现再抽通用 `ConfigManager`（YAGNI）；
 - [ ] 开发者新增/删除可修改项的完整流程文档（改 Kotlin 数据类 + 默认模板 + bump 版本）；
 - [ ] `config-defaults/` 除 markdown 外还要放哪些默认设置（后续功能扩展规划）。
+
+### 11.6 落地情况（2026-08-24）
+
+- ✅ **markdown-config 已从 JS 迁移到 JSONC**：`JsoncConfig.kt`（stripJsonc / parseConfigJsonc / deepMerge）+ `MarkdownConfigRepository` 重写（config-defaults 同步 + appconfig 用户文件 + 深合并）；
+- ✅ **存量 `.js` 一次性迁移**：检测到 `appconfig/markdown-config.js` 且无 `.jsonc` 时，用 Rhino 求值整体转成 JSONC 用户文件后删除旧文件；
+- ✅ **`.sync-token`**（`versionCode + lastUpdateTime`）控制 config-defaults 仅在包更新时同步；`appconfig/README.md` 每次同步时强制覆盖为 `config-defaults/README.md`；
+- ✅ **AI 硬边界**：cordis.yml fs-local `deny config-defaults/`（目录前缀匹配）+ persona 提示；
+- ✅ **单测**：`JsoncConfigTest`（stripJsonc / deepMerge）+ `MarkdownConfigResolveTest`（主题解析 / 类型转换）；
+- 🔧 **修复（2026-08-26 真机）**：① `copyAssetTree` 用 `AssetManager.list()` 判文件/目录——**Android 对文件返回空数组而非 null**，导致 `config-defaults/` 与 `appconfig/README.md` 被误建为目录 → 改为 `children.isNullOrEmpty()` 当文件 + 自愈（token 一致时也修复坏目录）；② 旧 JS 迁移生成的用户文件原本**没有逐项注释** → 新增 `formatMarkdownConfigJsonc()`（带 Section/字段注释的 JSONC 生成器），迁移时用「默认模板补齐缺失字段 + 保留用户改过的值」生成带注释的用户文件；
+- ⏳ 真机验证待做：`.sync-token` 在同版本重装时是否可靠变化、旧 JS 迁移 + JSONC 热更链路。
 
 ### 11.5 恢复默认功能（已确认）
 

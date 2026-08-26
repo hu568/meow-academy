@@ -40,6 +40,9 @@ object RuntimeExtractor {
     /** 设置选项存放目录名（filesDir 下，后续全 JSON） */
     const val APPCONFIG_DIR = "appconfig"
 
+    /** 默认配置模板目录名（filesDir 下，docs/design-dynamic-config.md） */
+    const val CONFIG_DEFAULTS_DIR = "config-defaults"
+
     /** agent 配置目录名（filesDir 下，skills / 记忆 / 插件，MCP 未来） */
     const val AGENTS_DIR = ".agents"
 
@@ -194,6 +197,7 @@ object RuntimeExtractor {
             File(filesDir, WORKSPACE_DIR),
             File(filesDir, "$WORKSPACE_DIR/$UPLOADS_DIR"),
             File(filesDir, APPCONFIG_DIR),
+            File(filesDir, CONFIG_DEFAULTS_DIR),
             File(filesDir, AGENTS_DIR),
             File(filesDir, AGENTS_PLUGINS_DIR),
             File(filesDir, AGENTS_SKILLS_DIR),
@@ -211,6 +215,9 @@ object RuntimeExtractor {
 
     /** appconfig 目录（settings / credentials） */
     fun appConfigDir(context: Context): File = File(context.filesDir, APPCONFIG_DIR)
+
+    /** config-defaults 目录（默认配置模板，随 APK 升级同步） */
+    fun configDefaultsDir(context: Context): File = File(context.filesDir, CONFIG_DEFAULTS_DIR)
 
     /** .agents 根目录 */
     fun agentsDir(context: Context): File = File(context.filesDir, AGENTS_DIR)

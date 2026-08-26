@@ -106,7 +106,7 @@ app/src/main/java/com/meow/academy/
 ### data/ 与 runtime/（未拆分，保持单职责）
 
 - `data/chat/` — Room：`ChatDatabase` / `ChatDao` / `ChatEntities`（会话+消息，`segmentsJson` 存步骤序列）
-- `data/settings/` — DataStore：`SettingsRepository`（主题/默认首页/常驻/模型配置）+ `SettingsEnums` + `MarkdownConfig`（JS 渲染配置数据类/解析器）+ `MarkdownConfigRepository`（Rhino 求值 appconfig/markdown-config.js + FileObserver 热更）
+- `data/settings/` — DataStore：`SettingsRepository`（主题/默认首页/常驻/模型配置）+ `SettingsEnums` + `JsoncConfig`（JSONC 通用管道 stripJsonc / parseConfigJsonc / deepMerge）+ `MarkdownConfig`（JSONC 渲染配置数据类/解析器）+ `MarkdownConfigRepository`（config-defaults 同步 + appconfig/markdown-config.jsonc 用户覆盖 + FileObserver 热更）
 - `data/model/` — 模型目录缓存（前后端解耦）：`ModelCatalogRepository`（DataStore 存 settingsDescribe result JSON）+ `ModelCatalog`（ProviderProfile/ModelProfile 模型与解析）
 - `runtime/` — `RuntimeManager`（状态机 + Mutex）、`DshRuntimeService`（前台服务 + initialize 握手）、`DshProcessLauncher`（linker64 拉起）、`RuntimeExtractor`（解压 assets）、`DshKeepAliveWorker`（心跳 ping）、`AppLifecycleObserver`
 
@@ -133,8 +133,9 @@ ModelManageScreen ──▶ ModelManageViewModel ──▶ DshRpcClient(llm/sett
         ├─ ProviderDetailScreen  └─ ModelManageModels(共享数据)
         └─ ProviderForms/ModelListTab/ModelManageDialogs
 
-Markdown 渲染配置链路（2026-08-21）：
-appconfig/markdown-config.js ──▶ MarkdownConfigRepository(Rhino 求值 + FileObserver 热更)
+Markdown 渲染配置链路（2026-08-24 JSONC 化）：
+config-defaults/markdown-config.jsonc(默认模板) + appconfig/markdown-config.jsonc(用户覆盖)
+        ──▶ MarkdownConfigRepository(深合并 + FileObserver 热更)
         ──▶ StateFlow<MarkdownConfigRaw> ──▶ MarkdownText(resolveMarkdownConfig 按主题解析)
         ──▶ buildMarkwon(MarkdownConfigPlugin + 公式块圆角配置) ──▶ Markwon 渲染
 ```

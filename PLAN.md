@@ -45,7 +45,7 @@
 - [ ] 知识库管理界面（增删改查、重新索引）
 
 ### 第四阶段 · 增强与远期
-- [ ] 动态配置 JSONC 化：markdown-config 迁移到 JSONC + 默认模板/用户覆盖 + config-defaults 同步（[规范](docs/design-dynamic-config.md)）
+- [x] 动态配置 JSONC 化：markdown-config 迁移到 JSONC + 默认模板/用户覆盖 + config-defaults 同步（[规范](docs/design-dynamic-config.md)）
 - [ ] 双模型配置（通用 + Agent 自有）同步管理
 - [ ] Pi Agent 工具调用强化（rag_search / 计算器 / 翻译）
 - [ ] 重排序模型（Rerank，提升检索精度）

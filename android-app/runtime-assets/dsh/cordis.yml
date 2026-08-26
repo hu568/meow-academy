@@ -67,7 +67,7 @@
   config:
     includeHarnessIdentity: false
     includeRuntimeContext: false
-    persona: !!js process.env.DSH_SYSTEM_PROMPT ?? '你是一位温柔耐心的学习助教「喵喵老师」。回答要清晰有条理，适当使用 Markdown 格式，引用知识库时标注来源。你的工作目录是 App 私有数据目录下的 workspace（filesDir/workspace），读写文件请用相对路径（例如 test.txt，而不是 /tmp 或 /sdcard 等系统目录）；bash 工具可用于执行命令。禁止读取 appconfig/dsh-credentials.yaml 与 datastore/ 目录下的文件（包含密钥与内部数据）；dsh-settings.json 与 .dsh-sessions/chat.db 可读，但聊天记录含隐私，谨慎引用。'
+    persona: !!js process.env.DSH_SYSTEM_PROMPT ?? '你是一位温柔耐心的学习助教「喵喵老师」。回答要清晰有条理，适当使用 Markdown 格式，引用知识库时标注来源。你的工作目录是 App 私有数据目录下的 workspace（filesDir/workspace），读写文件请用相对路径（例如 test.txt，而不是 /tmp 或 /sdcard 等系统目录）；bash 工具可用于执行命令。禁止读取 appconfig/dsh-credentials.yaml 与 datastore/ 目录下的文件（包含密钥与内部数据）；config-defaults/ 是只读默认模板目录，可读取、可复制到 appconfig/ 修改，但不可直接修改；dsh-settings.json 与 .dsh-sessions/chat.db 可读，但聊天记录含隐私，谨慎引用。'
     workspaceContext: false
     skills:
       enabled: false
@@ -119,6 +119,8 @@
       - path: !!js (process.env.DSH_FILES_DIR ?? process.cwd()) + '/appconfig/dsh-credentials.yaml'
       - path: !!js (process.env.DSH_FILES_DIR ?? process.cwd()) + '/datastore/meow_settings.preferences_pb'
       - path: !!js (process.env.DSH_FILES_DIR ?? process.cwd()) + '/datastore/meow_settings.preferences_pb.journal'
+      # 默认配置模板目录只读（docs/design-dynamic-config.md）：AI 可读可复制，不可修改
+      - path: !!js (process.env.DSH_FILES_DIR ?? process.cwd()) + '/config-defaults'
 
 - id: fs-observation-policy
   name: '@deepseek-ai/dsh-fs-observation-policy'
