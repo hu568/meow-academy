@@ -29,6 +29,11 @@ import androidx.lifecycle.LifecycleEventObserver
 import java.io.File
 import kotlin.math.roundToInt
 
+/** HTML 预览滚动恢复：contentHeight 尚未就绪时的最大重试次数（30次 × 100ms = 3s） */
+private const val SCROLL_RESTORE_MAX_ATTEMPTS = 30
+/** HTML 预览滚动恢复：重试间隔（毫秒） */
+private const val SCROLL_RESTORE_RETRY_MS = 100L
+
 /**
  * HTML 文件预览组件（WebView 封装，喵~）。
  *
@@ -102,12 +107,31 @@ fun HtmlWebView(
                     }
 
                     override fun onPageFinished(view: WebView?, url: String?) {
-                        // 页面加载完成后恢复上次滚动位置（模式切换回来时 WebView 会重建，喵~）
-                        val contentHeight = view?.contentHeight ?: 0
+                        // 页面加载完成后恢复上次滚动位置；onPageFinished 时 contentHeight
+                        // 可能仍为 0（页面布局未完成），轮询重试直到就绪（喵~）
                         val fraction = currentInitialScrollFraction
-                        if (view != null && contentHeight > 0 && fraction > 0f) {
-                            view.scrollTo(0, (fraction * contentHeight).roundToInt())
+                        if (view == null || fraction <= 0f) return
+                        var attempts = 0
+                        val restore = object : Runnable {
+                            override fun run() {
+                                // contentHeight 访问用 runCatching 兜底：重试期间用户切走
+                                // tab 导致 WebView 被销毁时返回 0 → attempts 耗尽后自然停止，
+                                // 不会崩溃（喵~）
+                                val contentHeight =
+                                    runCatching { view.contentHeight }.getOrDefault(0)
+                                if (contentHeight > 0) {
+                                    runCatching {
+                                        view.scrollTo(
+                                            0,
+                                            (fraction * contentHeight).roundToInt(),
+                                        )
+                                    }
+                                } else if (attempts++ < SCROLL_RESTORE_MAX_ATTEMPTS) {
+                                    runCatching { view.postDelayed(this, SCROLL_RESTORE_RETRY_MS) }
+                                }
+                            }
                         }
+                        view.post(restore)
                     }
                 }
             }

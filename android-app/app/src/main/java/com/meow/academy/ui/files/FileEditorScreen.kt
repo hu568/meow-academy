@@ -25,7 +25,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
@@ -57,6 +57,10 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.SaverScope
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -93,19 +97,39 @@ import kotlin.math.roundToInt
 /** 编辑页两种视图模式 */
 private enum class EditorMode { EDIT, PREVIEW }
 
+/** EditorMode 的 Saver：存枚举名（String），恢复时 valueOf */
+private val EditorModeSaver = Saver<EditorMode, String>(
+    save = { it.name },
+    restore = { runCatching { EditorMode.valueOf(it) }.getOrNull() },
+)
+
+/** List<TextFieldValue> 的 Saver：组合 TextFieldValue.Saver 用于 undo/redo 栈 */
+private val TextFieldValueListSaver: Saver<List<TextFieldValue>, Any> = listSaver(
+    save = { list: List<TextFieldValue> ->
+        with(TextFieldValue.Saver) { list.map { save(it)!! } }
+    },
+    restore = { list: List<Any> ->
+        with(TextFieldValue.Saver) { list.map { restore(it)!! } }
+    },
+)
+
 /** 撤销/恢复历史最大步数 */
 private const val MAX_UNDO_HISTORY = 100
 
 /**
  * 文件编辑器（全屏覆盖页）：编辑 / Markdown 预览切换 + 保存 + 撤销/恢复 + 重命名 + 更多菜单。
  *
- * 由 FilesScreen 在点击文本文件时全屏打开；保存成功后回调 [onSaved]，
+ * 由父级（MainScreen）在 [editingPath] 非空时全屏打开；保存成功后回调 [onSaved]，
  * 由调用方负责刷新列表并关闭本页（喵~）。
+ *
+ * 用 [file] 的 [FileEntry.path] 作为 composable key：编辑态（[fieldValue]、撤销栈、
+ * 滚动位置等）跟文件绑定，跨 tab / 跨配置变化时即使 [editingPath] 重新构造 FileEntry，
+ * 只要 path 不变，编辑态原地保留（喵~）。
  *
  * @param file 目标文件条目（name / path / isDirectory / size / lastModified）
  * @param repository 文件数据层（读/写 UTF-8、文本判定、Markdown 判定）
  * @param onBack 返回上一页
- * @param onSaved 保存成功回调（FilesScreen 刷新列表并关闭编辑页）
+ * @param onSaved 保存成功回调（父级关闭编辑页并刷新列表）
  * @param onRenamed 重命名成功回调（父级同步最新 FileEntry，保持编辑页不关闭）
  * @param onDeleted 删除成功回调（父级关闭编辑页并刷新列表）
  */
@@ -123,45 +147,52 @@ fun FileEditorScreen(
     val scope = rememberCoroutineScope()
 
     // 当前正在编辑的文件：重命名后原地更新，避免重读内容 / 重置撤销历史（喵~）
+    // 不改为 rememberSaveable——它由父级 file 参数 + LaunchedEffect(file.path) 同步，
+    // 跨 tab 恢复时父级从 editingPath 构造 FileEntry 传入，path 一致不会触发重读盘。
     var currentFile by remember { mutableStateOf(file) }
-    // 已加载内容的路径：重命名时手动同步，防止 LaunchedEffect 因路径变化重复读盘
-    var loadedPath by remember { mutableStateOf<String?>(null) }
+    // 以下 13 个状态改为 rememberSaveable：切走 tab 时 SaveableStateProvider 自动保存，
+    // 切回时恢复——实现「编辑/预览位置 + 模式 + 撤销栈」跨 tab 原地保留（喵~）。
+    // 路径标识：重命名时手动同步，防止 LaunchedEffect 因路径变化重复读盘
+    var loadedPath by rememberSaveable { mutableStateOf<String?>(null) }
 
-    // 用 TextFieldValue 而非 String：编辑区需要 selection（光标位置）做自动滚动（喵~）
-    var fieldValue by remember { mutableStateOf(TextFieldValue("")) }
-    var isLoading by remember { mutableStateOf(true) }
-    // 非 null 表示不可预览（二进制 / 超大文件），值为提示文案
-    var previewError by remember { mutableStateOf<String?>(null) }
-    // 非 null 表示可预览但不可编辑（超大 HTML），值为提示文案
-    var editBlocked by remember { mutableStateOf<String?>(null) }
-    // HTML 是否已读入内存（切到编辑模式才加载）；未加载时预览走磁盘 WebView，避免大文件读内存
-    var htmlContentLoaded by remember { mutableStateOf(false) }
-    // HTML 默认停在预览模式（WebView 渲染），与文本文件默认编辑统一在同一个编辑器界面（喵~）
-    var mode by remember {
+    // TextFieldValue（含光标 selection）用官方 Saver 跨 composition 保存
+    var fieldValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(""))
+    }
+    var isLoading by rememberSaveable { mutableStateOf(true) }
+    var previewError by rememberSaveable { mutableStateOf<String?>(null) }
+    var editBlocked by rememberSaveable { mutableStateOf<String?>(null) }
+    var htmlContentLoaded by rememberSaveable { mutableStateOf(false) }
+    // 模式用 EditorModeSaver 存枚举名——这是「切回预览仍停在预览」的关键（喵~）
+    var mode by rememberSaveable(stateSaver = EditorModeSaver) {
         mutableStateOf(if (repository.isHtmlFile(file.name)) EditorMode.PREVIEW else EditorMode.EDIT)
     }
 
     // ── 模式切换滚动保持 ─────────────────────────────────────────────
-    // 编辑 / 预览的 ScrollState 提升到顶层：切换模式时不销毁，配合锚点比例恢复位置（喵~）
-    val editScroll = rememberScrollState()
-    val previewScroll = rememberScrollState()
-    // HTML WebView 预览的实时滚动比例（scrollY / contentHeight）
-    var htmlScrollFraction by remember { mutableFloatStateOf(0f) }
-    // 切换瞬间记录的「来源模式视口位置比例」，切到目标模式后按同一比例恢复
-    var anchorFraction by remember { mutableFloatStateOf(0f) }
-    // 恢复编辑滚动期间抑制光标自动跟随，避免恢复位置被光标拉走（喵~）
+    // ScrollState 用官方 Saver 存当前值；rememberSaveable 包装后跨 tab 保留位置
+    val editScroll = rememberSaveable(saver = ScrollState.Saver) { ScrollState(0) }
+    val previewScroll = rememberSaveable(saver = ScrollState.Saver) { ScrollState(0) }
+    // Float 原生可存：HTML 预览实时滚动比例 + 模式切换锚点
+    var htmlScrollFraction by rememberSaveable { mutableFloatStateOf(0f) }
+    var anchorFraction by rememberSaveable { mutableFloatStateOf(0f) }
+    // 瞬态：抑制光标自动跟随的 flag（恢复初始 false 即可）
     var suppressCursorFollow by remember { mutableStateOf(false) }
-    // 本次切回编辑模式后是否还有一次「恢复滚动」待执行；执行完立即清掉，避免后续布局变化误触发
+    // 瞬态：本次切回编辑模式后是否还有「恢复滚动」待执行
     var pendingRestore by remember { mutableStateOf(false) }
-    // 编辑区布局状态提升到顶层：恢复滚动协程需要等它们就绪，并计算光标应落到的行（喵~）
+    // 布局瞬态：切回时由 onSizeChanged / onGloballyPositioned / onTextLayout 重新填充
     var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
     var viewportHeightPx by remember { mutableIntStateOf(0) }
     var fieldOffsetY by remember { mutableIntStateOf(0) }
 
-    // 撤销 / 恢复栈（每次编辑入栈，上限 MAX_UNDO_HISTORY）
-    var undoStack by remember { mutableStateOf(emptyList<TextFieldValue>()) }
-    var redoStack by remember { mutableStateOf(emptyList<TextFieldValue>()) }
+    // 撤销 / 恢复栈用 listSaver + TextFieldValue.Saver 组合——跨 tab 保留历史
+    var undoStack by rememberSaveable(stateSaver = TextFieldValueListSaver) {
+        mutableStateOf(emptyList<TextFieldValue>())
+    }
+    var redoStack by rememberSaveable(stateSaver = TextFieldValueListSaver) {
+        mutableStateOf(emptyList<TextFieldValue>())
+    }
 
+    // 对话框瞬态：跨 tab 不需要保留
     var showRenameDialog by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
@@ -591,9 +622,11 @@ fun FileEditorScreen(
                             file = File(currentFile.path),
                             content = if (htmlContentLoaded) fieldValue.text else null,
                             modifier = Modifier.fillMaxSize(),
-                            // 进入预览时的恢复锚点：从编辑切回时按编辑位置比例恢复；
-                            // 预览内滚动由 onScrollFractionChanged 实时上报（喵~）
-                            initialScrollFraction = anchorFraction,
+                            // 初始滚动比例直接用 htmlScrollFraction（WebView 实时上报）——
+                            // 切 tab 回来时由 rememberSaveable 恢复 → 保留阅读位置；
+                            // 切模式时 toggleMode 已将 anchorFraction = htmlScrollFraction 后再
+                            // 切换 mode → WebView 重建，恢复值与 anchorFraction 等价。
+                            initialScrollFraction = htmlScrollFraction,
                             onScrollFractionChanged = { htmlScrollFraction = it },
                         )
                     }

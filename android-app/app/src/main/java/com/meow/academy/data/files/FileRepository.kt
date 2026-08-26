@@ -403,6 +403,21 @@ class FileRepository(private val context: Context) {
         return name
     }
 
+    /**
+     * 用 java.io.File 构造 [FileEntry]：用于从保存的 path 字符串还原条目（切换 tab 回来 / 跨配置变化恢复时）。
+     * 文件不存在时返回 null，调用方应据此退出编辑器/预览（喵~）。
+     */
+    fun toFileEntry(file: File): FileEntry? {
+        if (!file.exists()) return null
+        return FileEntry(
+            name = file.name,
+            path = file.absolutePath,
+            isDirectory = file.isDirectory,
+            size = if (file.isDirectory) 0L else file.length(),
+            lastModified = file.lastModified(),
+        )
+    }
+
     companion object {
         /** 文本预览/编辑读入内存的上限（1MB） */
         const val TEXT_PREVIEW_LIMIT = 1L * 1024 * 1024

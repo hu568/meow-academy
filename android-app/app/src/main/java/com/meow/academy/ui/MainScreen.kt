@@ -34,9 +34,13 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ExperimentalComposeApi
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
@@ -48,16 +52,22 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.meow.academy.R
+import com.meow.academy.data.files.FileRepository
 import com.meow.academy.data.settings.HomeTab
 import com.meow.academy.data.settings.SettingsRepository
 import com.meow.academy.ui.chat.ChatScreen
+import com.meow.academy.ui.files.FileEditorScreen
 import com.meow.academy.ui.files.FilesScreen
+import com.meow.academy.ui.files.FilesViewModel
+import com.meow.academy.ui.files.ImagePreviewOverlay
 import com.meow.academy.ui.settings.SettingsScreen
 import com.meow.academy.ui.terminal.TerminalScreen
 
@@ -81,8 +91,12 @@ private val TABS = listOf(
  * 终端页双入口：设置 → 终端（home 路径）；文件管理 → 终端按钮（知识库目录，M3 前落 home）。
  * 默认首页取自 DataStore；用户手动切换后以手动选择为准（进程重建时
  * 由 rememberSaveable 恢复，若从未手动切换则回到设置里的默认首页）。
+ *
+ * 文件编辑/图片浮窗状态由顶层 [rememberSaveable] 持有：底部导航切走再切回、
+ * 系统切换明暗色触发 Activity 重建时，都能原地恢复在「文件编辑/预览」状态，
+ * 不再被踢回文件管理列表（喵~）。
  */
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalComposeApi::class)
 @Composable
 fun MainScreen(repository: SettingsRepository) {
     val defaultHome by repository.defaultHome.collectAsState(initial = HomeTab.CHAT)
@@ -97,6 +111,21 @@ fun MainScreen(repository: SettingsRepository) {
     var terminalOpen by rememberSaveable { mutableStateOf(false) }
     // 入口目录：文件管理页传入当前浏览目录（自动 cd），设置页为 null（留在默认 cwd）
     var terminalInitialDir by rememberSaveable { mutableStateOf<String?>(null) }
+
+    // 文件编辑/预览状态：仅存 path（rememberSaveable 原生支持 String），渲染时按 path
+    // 重新构造 FileEntry。FilesScreen 列表层 + FileEditorScreen 互斥：editingPath 非空
+    // 时直接渲染编辑器，列表层整体退出 composition（喵~）。
+    var editingPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var previewPath by rememberSaveable { mutableStateOf<String?>(null) }
+    // 顶层 FileRepository：editingPath/previewPath 重建 FileEntry 需 path -> FileEntry，
+    // 与 FilesScreen / FileEditorScreen 内部用的是同一份实例（喵~）。
+    // LocalContext.current 必须在 Composable 顶层取出来再传给非 Composable 的
+    // remember lambda（remember 的 calculation 是 @DisallowComposableCalls，喵~）。
+    val appContext = LocalContext.current.applicationContext
+    val fileRepository = remember { FileRepository(appContext) }
+    // 顶层 FilesViewModel：与 FilesScreen 内部 viewModel() 取的是同一个实例（共享
+    // LocalViewModelStoreOwner），保存/删除/重命名后调 refresh() 通知列表更新（喵~）。
+    val filesViewModel: FilesViewModel = viewModel()
 
     if (terminalOpen) {
         TerminalScreen(initialDir = terminalInitialDir, onBack = { terminalOpen = false })
@@ -120,6 +149,11 @@ fun MainScreen(repository: SettingsRepository) {
     val imeZoom = (inputLiftPx / (windowHeightPx * 0.3f)).coerceIn(0f, 1f)
 
     Box(modifier = Modifier.fillMaxSize()) {
+        // 跨 tab 状态持有器：切走文件管理 tab 时 SaveableStateProvider("files") 退出
+        // composition，内部所有 rememberSaveable 状态被保存到 holder；切回时恢复。
+        // 放在 when(selectedTab) 之外（不随 tab 销毁），且 rememberSaveableStateHolder
+        // 自身存于 Bundle——系统切换明暗色触发 Activity 重建时一并恢复（喵~）。
+        val saveableStateHolder = rememberSaveableStateHolder()
         Scaffold(
             // 外层不重复吃系统栏 inset：每个页面自己的 Scaffold/TopAppBar 负责状态栏，
             // 否则聊天/设置页会出现「双倍状态栏空隙」（外层垫一层 + 内层 TopAppBar 又垫一层）。
@@ -135,15 +169,28 @@ fun MainScreen(repository: SettingsRepository) {
                     // 聊天页底图要铺满全屏（含导航栏下方），所以底部占位传入 ChatScreen，
                     // 由它只垫「内容区」而不压缩底图层；imeZoom 用于输入法同步缩放动画。
                     HomeTab.CHAT -> ChatScreen(bottomPadding = bottomPad, imeZoom = imeZoom)
-                    HomeTab.FILES -> Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(bottom = bottomPad),
-                    ) {
-                        FilesScreen(onOpenTerminal = { dir ->
-                            terminalInitialDir = dir
-                            terminalOpen = true
-                        })
+                    // 文件 tab：编辑/预览状态只在「文件管理」tab 内渲染——切到聊天/文档时
+                    // SaveableStateProvider 退出 composition（不叠加），切回本 tab 时由
+                    // rememberSaveable 恢复编辑态（mode/fieldValue/scroll/undo 全部回原位）。
+                    // removeState("files") 在 onCloseEditor 触发，保证打开新文件是全新态（喵~）。
+                    HomeTab.FILES -> saveableStateHolder.SaveableStateProvider("files") {
+                        FileTabContent(
+                            editingPath = editingPath,
+                            previewPath = previewPath,
+                            bottomPad = bottomPad,
+                            fileRepository = fileRepository,
+                            filesViewModel = filesViewModel,
+                            onOpenFile = { entry -> editingPath = entry.path },
+                            onOpenImage = { entry -> previewPath = entry.path },
+                            onCloseEditor = {
+                                editingPath = null
+                                saveableStateHolder.removeState("files")
+                            },
+                            onOpenTerminal = { dir ->
+                                terminalInitialDir = dir
+                                terminalOpen = true
+                            },
+                        )
                     }
                     HomeTab.SETTINGS -> Box(
                         modifier = Modifier
@@ -242,6 +289,85 @@ fun MainScreen(repository: SettingsRepository) {
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * 「文件管理」tab 内容容器。
+ *
+ * 三态互斥：列表 / 编辑 / 图片预览，渲染在 tab 内容区（受 selectedTab 约束，
+ * 切到聊天/文档时整体退出 composition，不再叠加）。editingPath / previewPath
+ * 来自 MainScreen 顶层 rememberSaveable，跨 tab 切走再切回时原地恢复（喵~）。
+ *
+ * 编辑器/图片预览共享同一根 FileRepository，与 FilesScreen 内部用同一份实例，
+ * 保证重命名后的新 path 能被 FileEditorScreen 内部 LaunchedEffect(file.path) 同步（喵~）。
+ */
+@Composable
+private fun FileTabContent(
+    editingPath: String?,
+    previewPath: String?,
+    bottomPad: androidx.compose.ui.unit.Dp,
+    fileRepository: com.meow.academy.data.files.FileRepository,
+    filesViewModel: FilesViewModel,
+    onOpenFile: (com.meow.academy.data.files.FileEntry) -> Unit,
+    onOpenImage: (com.meow.academy.data.files.FileEntry) -> Unit,
+    onCloseEditor: () -> Unit,
+    onOpenTerminal: (String) -> Unit,
+) {
+    // 顶层持有 path（rememberSaveable），渲染时按 path 重新构造 FileEntry——
+    // 列表层 FilesViewModel 也是同 ViewModelStoreOwner 的实例，切回列表时 currentPath
+    // / 多选 / 搜索态都被原样保留（喵~）。
+    val editingFile = remember(editingPath) {
+        editingPath?.let { fileRepository.toFileEntry(java.io.File(it)) }
+    }
+    val previewFile = remember(previewPath) {
+        previewPath?.let { fileRepository.toFileEntry(java.io.File(it)) }
+    }
+    // 文件在编辑/预览期间被外部删掉/重命名 → FileEntry 变 null → 退出浮层回列表
+    LaunchedEffect(editingPath, editingFile) {
+        if (editingPath != null && editingFile == null) onCloseEditor()
+    }
+    LaunchedEffect(previewPath, previewFile) {
+        if (previewPath != null && previewFile == null) onCloseEditor() // 预览关闭复用同回调
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(bottom = bottomPad),
+    ) {
+        when {
+            editingFile != null -> {
+                // 关键：FileEditorScreen 内部已有 LaunchedEffect(file.path) 同步 currentFile，
+                // 重命名时 onRenamed 改 path → editingFile 变新实例 → 内部同步，编辑态保留。
+                FileEditorScreen(
+                    file = editingFile,
+                    repository = fileRepository,
+                    onBack = onCloseEditor,
+                    onSaved = {
+                        filesViewModel.refresh()
+                        onCloseEditor()
+                    },
+                    onRenamed = onOpenFile, // 新 path 交给父级 setEditingPath
+                    onDeleted = {
+                        filesViewModel.refresh()
+                        onCloseEditor()
+                    },
+                )
+            }
+            previewFile != null -> {
+                ImagePreviewOverlay(
+                    model = java.io.File(previewFile.path),
+                    displayName = previewFile.name,
+                    onDismiss = onCloseEditor,
+                )
+            }
+            else -> FilesScreen(
+                onOpenTerminal = onOpenTerminal,
+                onOpenFile = onOpenFile,
+                onOpenImage = onOpenImage,
+            )
         }
     }
 }

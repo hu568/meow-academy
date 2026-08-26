@@ -60,38 +60,22 @@ import java.io.File
  * 📁 文件管理页（M4 数据中心）。
  *
  * 列表态 + 多选态 + 搜索态；文件操作（新建/重命名/删除/复制/移动/导入）经 [FilesViewModel] 调度；
- * 点击文本文件打开 [FileEditorScreen]（编辑 + Markdown 预览）；「终端」按钮联动真终端自动 cd 到当前目录。
+ * 点击文件通过 [onOpenFile] / [onOpenImage] 回调交给父级（MainScreen）打开统一的
+ * [FileEditorScreen] / 图片浮层——状态在父层 [androidx.compose.runtime.saveable.rememberSaveable]
+ * 持有，切走 tab / 系统切换明暗色后能原地恢复（喵~）。
  */
 @Composable
-fun FilesScreen(onOpenTerminal: (String) -> Unit = {}) {
+fun FilesScreen(
+    onOpenTerminal: (String) -> Unit = {},
+    onOpenFile: (FileEntry) -> Unit = {},
+    onOpenImage: (FileEntry) -> Unit = {},
+) {
     val vm: FilesViewModel = viewModel()
     val state by vm.uiState.collectAsState()
     val context = LocalContext.current
     val repository = remember(context) { FileRepository(context) }
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
-
-    // 编辑器覆盖页（HTML 也走同一编辑器：默认停在 WebView 预览模式，可一键切编辑）
-    var editingFile by remember { mutableStateOf<FileEntry?>(null) }
-    // 图片浮窗预览（不进独立界面，Dialog 浮在文件页之上，喵~）
-    var previewFile by remember { mutableStateOf<FileEntry?>(null) }
-    editingFile?.let { file ->
-        FileEditorScreen(
-            file = file,
-            repository = repository,
-            onBack = { editingFile = null },
-            onSaved = {
-                editingFile = null
-                vm.refresh()
-            },
-            onRenamed = { newFile -> editingFile = newFile },
-            onDeleted = {
-                editingFile = null
-                vm.refresh()
-            },
-        )
-        return
-    }
 
     // 对话框 / 菜单 / 搜索态（本地转发，实际搜索在 ViewModel）
     var showNewFile by remember { mutableStateOf(false) }
@@ -261,8 +245,8 @@ fun FilesScreen(onOpenTerminal: (String) -> Unit = {}) {
                                             vm.onNavigatedTo(entry.path)
                                         } else {
                                             when (openKind(File(entry.path), repository)) {
-                                                FileKind.IMAGE -> previewFile = entry
-                                                FileKind.TEXT, FileKind.MARKDOWN, FileKind.HTML -> editingFile = entry
+                                                FileKind.IMAGE -> onOpenImage(entry)
+                                                FileKind.TEXT, FileKind.MARKDOWN, FileKind.HTML -> onOpenFile(entry)
                                                 FileKind.LARGE_TEXT -> scope.launch { snackbarHostState.showSnackbar("文件过大，请用终端打开") }
                                                 else -> scope.launch { snackbarHostState.showSnackbar("无法预览（二进制或未知格式）") }
                                             }
@@ -361,14 +345,6 @@ fun FilesScreen(onOpenTerminal: (String) -> Unit = {}) {
                 targetMode = null
             },
             onDismiss = { targetMode = null },
-        )
-    }
-    // 图片浮窗预览：Dialog 浮层，不进入独立页面（喵~）
-    previewFile?.let { file ->
-        ImagePreviewOverlay(
-            model = File(file.path),
-            displayName = file.name,
-            onDismiss = { previewFile = null },
         )
     }
 }
