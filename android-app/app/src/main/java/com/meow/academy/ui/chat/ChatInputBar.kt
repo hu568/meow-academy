@@ -73,9 +73,6 @@ data class PendingAttachment(
     val path: String,
 )
 
-/** DeepSeek 可切换模型（输入栏工具栏下拉；deepseek-chat/reasoner 已弃用，仅 v4 系列有效） */
-private val DEEPSEEK_MODELS = listOf("deepseek-v4-flash", "deepseek-v4-pro")
-
 /** 思考强度档位（llm-deepseek 合法值域 off/high/max） */
 private val REASONING_EFFORTS = listOf("off", "high", "max")
 

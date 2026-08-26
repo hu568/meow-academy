@@ -25,6 +25,9 @@ class ModelCatalogRepository(private val context: Context) {
 
         /** llm/providers 完整目录的 JSON 数组字符串（聊天工具栏用，与真实目录一致） */
         val PROVIDERS_JSON = stringPreferencesKey("providers_json")
+
+        /** 内置 DeepSeek 模型目录 JSON（llm/models 结果；模型管理页离线渲染用） */
+        val DEEPSEEK_MODELS_JSON = stringPreferencesKey("deepseek_models_json")
     }
 
     /** 缓存的模型目录 JSON；从未同步过时为 null */
@@ -32,6 +35,9 @@ class ModelCatalogRepository(private val context: Context) {
 
     /** 缓存的 llm/providers 目录 JSON（LlmProviderInfo 数组）；从未同步过时为 null */
     val providersJson: Flow<String?> = context.modelCatalogDataStore.data.map { it[Keys.PROVIDERS_JSON] }
+
+    /** 缓存的 DeepSeek 模型目录 JSON（llm/models 响应的 models 数组）；从未同步过时为 null */
+    val deepseekModelsJson: Flow<String?> = context.modelCatalogDataStore.data.map { it[Keys.DEEPSEEK_MODELS_JSON] }
 
     /** 覆盖写缓存（DSH 拉取成功后调用） */
     suspend fun saveCatalog(json: String) {
@@ -41,5 +47,10 @@ class ModelCatalogRepository(private val context: Context) {
     /** 覆盖写 llm/providers 目录缓存 */
     suspend fun saveProviders(json: String) {
         context.modelCatalogDataStore.edit { it[Keys.PROVIDERS_JSON] = json }
+    }
+
+    /** 覆盖写 DeepSeek 模型目录缓存 */
+    suspend fun saveDeepseekModels(json: String) {
+        context.modelCatalogDataStore.edit { it[Keys.DEEPSEEK_MODELS_JSON] = json }
     }
 }

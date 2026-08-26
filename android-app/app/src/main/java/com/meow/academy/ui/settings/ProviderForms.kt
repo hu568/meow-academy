@@ -1,7 +1,9 @@
 package com.meow.academy.ui.settings
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -11,13 +13,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -34,10 +40,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.meow.academy.data.model.DEEPSEEK_PROVIDER
+import com.meow.academy.data.model.DEFAULT_DEEPSEEK_MODELS
+import com.meow.academy.data.model.ModelProfile
 
 /** API Key 输入框：默认密码态，点击小眼睛切换明文/密文 */
 @Composable
@@ -68,7 +77,7 @@ private fun ApiKeyField(
     )
 }
 
-/** 内置 DeepSeek 官方直连配置（API Key + 内置模型默认星标） */
+/** 内置 DeepSeek 官方直连配置（API Key + 模型目录：优先后端 llm/models 权威列表，未就绪回退默认目录） */
 @Composable
 fun BuiltinConfig(
     vm: ModelManageViewModel,
@@ -77,11 +86,16 @@ fun BuiltinConfig(
     provider: String,
 ) {
     val apiKey by vm.llmApiKey.collectAsState()
+    val runtimeModels by vm.builtinModels.collectAsState()
+    val modelsLoading by vm.builtinModelsLoading.collectAsState()
     var keyDraft by remember { mutableStateOf(apiKey) }
-    val models = listOf("deepseek-v4-flash" to "DeepSeek-V4-Flash", "deepseek-v4-pro" to "DeepSeek-V4-Pro")
     // DataStore 异步加载晚于首帧时补填已保存 Key（用户已输入则不覆盖）
     LaunchedEffect(apiKey) {
         if (keyDraft.isBlank()) keyDraft = apiKey
+    }
+    // 进入页面自动拉取后端模型目录（llm/models）；DSH 未就绪时展示默认目录
+    LaunchedEffect(Unit) {
+        if (runtimeModels.isEmpty()) vm.refreshBuiltinModels()
     }
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("内置 DeepSeek 官方直连", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -94,20 +108,67 @@ fun BuiltinConfig(
         )
         Button(onClick = { vm.setApiKey(keyDraft) }, modifier = Modifier.fillMaxWidth()) { Text("保存 Key") }
         Spacer(Modifier.height(4.dp))
-        Text("模型", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-        models.forEach { (id, name) ->
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("模型", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.weight(1f))
+            OutlinedButton(onClick = { vm.refreshBuiltinModels() }, enabled = !modelsLoading) {
+                if (modelsLoading) {
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Filled.CloudDownload, null, modifier = Modifier.size(16.dp))
+                }
+                Spacer(Modifier.width(4.dp))
+                Text(if (modelsLoading) "获取中…" else "获取模型列表")
+            }
+        }
+        val models: List<ModelProfile> = if (runtimeModels.isEmpty()) DEFAULT_DEEPSEEK_MODELS
+            else runtimeModels.map { ModelProfile(id = it.id, name = it.name, input = it.inputModalities) }
+        if (runtimeModels.isEmpty() && !modelsLoading) {
+            Text(
+                "DSH 未就绪，暂显示默认模型目录；点「获取模型列表」从后端同步",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        models.forEach { m ->
             Row(
-                modifier = Modifier.fillMaxWidth().clickable { vm.toggleDefault(provider, id) }.padding(vertical = 10.dp),
+                modifier = Modifier.fillMaxWidth().clickable { vm.toggleDefault(provider, m.id) }.padding(vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text(name, style = MaterialTheme.typography.bodyLarge)
-                    Text(id, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(m.name ?: m.id, style = MaterialTheme.typography.bodyLarge)
+                        if (m.supportsImage) {
+                            Spacer(Modifier.width(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                                    .padding(horizontal = 4.dp, vertical = 1.dp),
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        Icons.Filled.Image,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(10.dp),
+                                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    )
+                                    Spacer(Modifier.width(2.dp))
+                                    Text(
+                                        "多模态",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Text(m.id, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Icon(
-                    if (currentProvider == DEEPSEEK_PROVIDER && currentModel == id) Icons.Filled.Star else Icons.Filled.StarBorder,
+                    if (currentProvider == DEEPSEEK_PROVIDER && currentModel == m.id) Icons.Filled.Star else Icons.Filled.StarBorder,
                     "设为默认",
-                    tint = if (currentProvider == DEEPSEEK_PROVIDER && currentModel == id) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = if (currentProvider == DEEPSEEK_PROVIDER && currentModel == m.id) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

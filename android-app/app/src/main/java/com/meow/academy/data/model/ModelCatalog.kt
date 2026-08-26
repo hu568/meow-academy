@@ -23,6 +23,18 @@ data class ProviderProfile(
     val models: List<ModelProfile> = emptyList(),
 )
 
+/**
+ * 内置 DeepSeek 默认模型目录：后端 llm-deepseek DEFAULT_MODELS 的镜像
+ * （deepseek-v4-flash / deepseek-v4-pro / deepseek-v4-flash-vision-exp）。
+ * 仅作 DSH 未就绪且本地无缓存时的兜底展示；DSH 运行时会用 llm/models 的
+ * 权威列表覆盖（llm-deepseek 的 models 配置变化后自动跟随，无需改 App 代码）。
+ */
+val DEFAULT_DEEPSEEK_MODELS: List<ModelProfile> = listOf(
+    ModelProfile(id = "deepseek-v4-flash", name = "DeepSeek-V4-Flash"),
+    ModelProfile(id = "deepseek-v4-pro", name = "DeepSeek-V4-Pro"),
+    ModelProfile(id = "deepseek-v4-flash-vision-exp", name = "DeepSeek-V4-Flash-Vision-Exp", input = listOf("text", "image")),
+)
+
 /** provider 下单个模型的扩展配置 */
 data class ModelProfile(
     val id: String,

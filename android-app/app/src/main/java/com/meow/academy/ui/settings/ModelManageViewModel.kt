@@ -8,6 +8,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.meow.academy.MeowAcademyApp
 import com.meow.academy.data.model.DEEPSEEK_PROVIDER
+import com.meow.academy.data.model.DEFAULT_DEEPSEEK_MODELS
 import com.meow.academy.data.model.PROVIDER_PRESETS
 import com.meow.academy.data.model.ProviderProfile
 import com.meow.academy.data.model.buildProviderDirectory
@@ -30,6 +31,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -77,6 +81,14 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
     val providerApiKeys: StateFlow<Map<String, String>> = settingsRepository.providerApiKeys
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
+    /** 内置 DeepSeek 模型目录（llm/models 权威列表；本地缓存兜底，非硬编码） */
+    private val _builtinModels = MutableStateFlow<List<LlmModelInfo>>(emptyList())
+    val builtinModels: StateFlow<List<LlmModelInfo>> = _builtinModels.asStateFlow()
+
+    /** 内置 DeepSeek 模型目录拉取中 */
+    private val _builtinModelsLoading = MutableStateFlow(false)
+    val builtinModelsLoading: StateFlow<Boolean> = _builtinModelsLoading.asStateFlow()
+
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
 
@@ -103,6 +115,15 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
             _profiles.value = profiles
             _items.value = buildItems(profiles)
         }
+        // 内置 DeepSeek 模型目录：先渲染本地缓存（llm/models 结果），DSH 就绪后由 refresh() 覆盖
+        viewModelScope.launch {
+            val cached = modelCatalog.deepseekModelsJson.first()
+            if (cached != null) {
+                runCatching {
+                    _builtinModels.value = json.decodeFromString(ListSerializer(LlmModelInfo.serializer()), cached)
+                }
+            }
+        }
     }
 
     /** 拉取 provider 列表 + profile（进入页面时调用；DSH 未就绪时回退本地缓存） */
@@ -123,6 +144,9 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
                 val result = c.settingsDescribe("llm-pi-ai")
                 val profiles = parseCatalogProfiles(result)
                 _profiles.value = profiles
+                // 内置 DeepSeek 模型目录：llm/models 权威列表（含 llm-deepseek 配置新增的模型），
+                // 拉取成功后写本地缓存供离线渲染，再重建列表让模型数徽标用真实数量
+                refreshBuiltinModels()
                 _items.value = buildItems(profiles)
                 // 老版本只把 Key 存在 DSH credential 里、本地没有回显缓存：
                 // DSH 就绪时把明文 Key 拉一次落本地，详情页才能显示 `·····` / 小眼睛回显
@@ -144,7 +168,12 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
                 key = entry.key,
                 displayName = entry.displayName,
                 baseURL = profile?.baseURL ?: preset?.baseURL,
-                modelCount = if (entry.key == DEEPSEEK_PROVIDER) 2 else profile?.models?.size ?: 0,
+                modelCount = if (entry.key == DEEPSEEK_PROVIDER) {
+                    // 真实模型数（llm/models 拉取结果；无缓存且 DSH 未就绪时回退默认目录）
+                    _builtinModels.value.size.takeIf { it > 0 } ?: DEFAULT_DEEPSEEK_MODELS.size
+                } else {
+                    profile?.models?.size ?: 0
+                },
                 registered = entry.registered,
                 isBuiltin = entry.key == DEEPSEEK_PROVIDER,
             )
@@ -171,7 +200,25 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    suspend fun loadModels(provider: String): List<LlmModelInfo>? = client?.llmModels(provider)
+    /** 拉取内置 DeepSeek 模型目录（llm/models 权威列表；成功后写本地缓存供离线渲染） */
+    fun refreshBuiltinModels() {
+        viewModelScope.launch {
+            val c = client ?: return@launch
+            _builtinModelsLoading.value = true
+            try {
+                val models = c.llmModels(DEEPSEEK_PROVIDER) ?: emptyList()
+                if (models.isNotEmpty()) {
+                    _builtinModels.value = models
+                    _items.value = buildItems(_profiles.value)
+                    runCatching {
+                        modelCatalog.saveDeepseekModels(json.encodeToString(ListSerializer(LlmModelInfo.serializer()), models))
+                    }
+                }
+            } finally {
+                _builtinModelsLoading.value = false
+            }
+        }
+    }
 
     /** 保存 provider（写 credential + profile；返回错误信息，成功为 null） */
     suspend fun saveProvider(

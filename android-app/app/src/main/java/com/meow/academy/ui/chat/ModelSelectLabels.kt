@@ -2,10 +2,11 @@ package com.meow.academy.ui.chat
 
 import com.meow.academy.rpc.LlmProviderInfo
 
-/** 模型短名：内置 DeepSeek 显示 v4-flash / v4-pro，其余原样 */
+/** 模型短名：内置 DeepSeek 显示 v4-flash / v4-pro / v4-flash 视觉，其余原样 */
 internal fun modelLabel(model: String): String = when (model) {
     "deepseek-v4-flash" -> "v4-flash"
     "deepseek-v4-pro" -> "v4-pro"
+    "deepseek-v4-flash-vision-exp" -> "v4-flash 视觉"
     else -> model
 }
 
