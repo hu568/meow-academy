@@ -184,6 +184,7 @@ fun MainScreen(repository: SettingsRepository) {
                             onOpenImage = { entry -> previewPath = entry.path },
                             onCloseEditor = {
                                 editingPath = null
+                                previewPath = null
                                 saveableStateHolder.removeState("files")
                             },
                             onOpenTerminal = { dir ->
