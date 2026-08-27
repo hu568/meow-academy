@@ -123,7 +123,7 @@ private fun ChatDetailView(
     val attachedPaths = attachments.map { it.path }.toSet()
     // 右侧功能看板：开合 + 当前功能页（快捷文件用独立 FilesViewModel，key 固定避免与文件页互踩）
     var dashboardOpen by rememberSaveable { mutableStateOf(false) }
-    var dashboardFeature by rememberSaveable { mutableStateOf(DashboardFeature.MODELS) }
+    val dashboardFeature by vm.dashboardFeature.collectAsState()
     val quickVm: FilesViewModel = viewModel(key = "quickFiles")
     val sessionUsageStats by vm.sessionUsageStats.collectAsState()
     val listState = rememberLazyListState()
@@ -440,7 +440,7 @@ private fun ChatDetailView(
             DashboardDrawer(
                 open = dashboardOpen,
                 feature = dashboardFeature,
-                onFeatureChange = { dashboardFeature = it },
+                onFeatureChange = vm::selectDashboardFeature,
                 onClose = { dashboardOpen = false },
                 modelPanel = {
                     ModelManagePanel(

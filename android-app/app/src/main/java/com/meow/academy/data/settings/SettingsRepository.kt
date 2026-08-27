@@ -47,6 +47,8 @@ class SettingsRepository(private val context: Context) {
         val DISABLED_PROVIDERS = stringSetPreferencesKey("disabled_providers")
         // 用户手动调整后的 provider 顺序（DataStore 本地保存；DSH settings 只按 key 存 profile）
         val PROVIDER_ORDER = stringPreferencesKey("provider_order")
+        // 右侧功能看板当前功能页（默认 MODELS；退出 App 后仍记住上次切换的模式）
+        val DASHBOARD_FEATURE = stringPreferencesKey("dashboard_feature")
     }
 
     val themeMode: Flow<ThemeMode> = context.settingsDataStore.data.map { prefs ->
@@ -204,5 +206,16 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setWebSearchEnabled(enabled: Boolean) {
         context.settingsDataStore.edit { it[Keys.WEB_SEARCH_ENABLED] = enabled }
+    }
+
+    // ── 右侧功能看板功能页（M6：退出后仍记住上次的模式） ──
+
+    /** 右侧看板当前功能页（DashboardFeature.name，默认 "MODELS"） */
+    val dashboardFeature: Flow<String> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.DASHBOARD_FEATURE] ?: "MODELS"
+    }
+
+    suspend fun setDashboardFeature(feature: String) {
+        context.settingsDataStore.edit { it[Keys.DASHBOARD_FEATURE] = feature }
     }
 }

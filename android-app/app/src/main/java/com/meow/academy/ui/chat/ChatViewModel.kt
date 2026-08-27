@@ -158,6 +158,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val _sessionUsageStats = MutableStateFlow<SessionUsageStats?>(null)
     val sessionUsageStats: StateFlow<SessionUsageStats?> = _sessionUsageStats.asStateFlow()
 
+    // ── 右侧功能看板当前功能页（M6：持久化到 DataStore，退出 App 后仍记住上次的模式） ──
+    val dashboardFeature: StateFlow<DashboardFeature> = settingsRepository.dashboardFeature
+        .map { raw -> runCatching { DashboardFeature.valueOf(raw) }.getOrDefault(DashboardFeature.MODELS) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, DashboardFeature.MODELS)
+
     init {
         // ① 前端解耦：立即用本地缓存渲染工具栏（无缓存则回退内置 DeepSeek），
         //    不等 DSH 后端加载完成——控件一进页面就是完整可用的
@@ -504,6 +509,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             settingsRepository.setWebSearchEnabled(enabled)
             runtimeManager.restart()
         }
+    }
+
+    /** 切换右侧功能看板功能页：持久化到 DataStore，退出 App 后仍记住 */
+    fun selectDashboardFeature(feature: DashboardFeature) {
+        viewModelScope.launch { settingsRepository.setDashboardFeature(feature.name) }
     }
 
     /** 重命名会话（抽屉） */
