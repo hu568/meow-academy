@@ -1,17 +1,19 @@
 package com.meow.academy.ui.chat
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.exponentialDecay
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.AnchoredDraggableState
+import androidx.compose.foundation.gestures.DraggableAnchors
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.anchoredDraggable
+import androidx.compose.foundation.gestures.animateTo
+import androidx.compose.foundation.gestures.snapTo
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,14 +44,19 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Outline
@@ -57,7 +64,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -65,6 +71,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 
 /** 功能看板三个功能页（图标：选中填充 / 未选中描边，风格同底部导航） */
 enum class DashboardFeature(
@@ -76,6 +83,9 @@ enum class DashboardFeature(
     FILES("快捷文件", Icons.Filled.AttachFile, Icons.Outlined.AttachFile),
     STATS("调用量", Icons.Filled.Insights, Icons.Outlined.Insights),
 }
+
+/** 右侧看板锚定拖拽位置：Open = 面板完全展开（translationX 0），Closed = 面板滑出屏幕右侧 */
+private enum class DrawerPos { Closed, Open }
 
 // ─────────────────── 几何常量（真机目检可微调） ───────────────────
 
@@ -172,12 +182,17 @@ private class FusedPanelShape(
  * 性能：抽屉本体仅白色透明（surface 80%），背景模糊由 ChatScreen 打开抽屉时统一 blur，
  * 这里不做任何逐元素 backdrop 模糊。
  *
- * 交互：
+ * 交互（2026-08-27 起改为锚定拖拽，复刻左抽屉 ModalNavigationDrawer 手感）：
  *  - 无黑色遮罩（透明点击区，点外部关闭）；
  *  - 头部：X 在左、功能名在右（标题区）；
  *  - 打开：顶栏「功能看板」按钮，或聊天内容区任意位置向左滑（手势在 ChatScreen 挂载）；
+ *  - 面板上：**左右拖拽跟随手指**，松手时按偏移/速度自动 settle 到开/关（半拉支持）；
  *  - 面板上向右滑可收回（与左抽屉一致）。
+ *
+ * 状态：内部用 [AnchoredDraggableState] 管理 offset（Open=0px / Closed=panelWidthPx），
+ * 外部仍以 `open: Boolean` 驱动打开/关闭；内部手势 settle 到 Closed 时回调 [onClose]。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun DashboardDrawer(
     open: Boolean,
@@ -189,6 +204,67 @@ fun DashboardDrawer(
     statsPanel: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    // 面板实际宽度（px）：锚点依赖它，首次布局测量后才可用
+    var panelWidthPx by remember { mutableFloatStateOf(0f) }
+    // 锚点是否已初始化（避免「首次测量」与「open 变化」两个 effect 竞争 animateTo）
+    var initialized by remember { mutableStateOf(false) }
+
+    // 锚定拖拽状态机（与 Material3 DrawerState 同源）：Open=0 / Closed=panelWidth
+    val dragState = remember {
+        AnchoredDraggableState<DrawerPos>(
+            DrawerPos.Closed,
+            { totalDistance -> totalDistance * 0.5f },
+            { with(density) { 125.dp.toPx() } },
+            tween(durationMillis = 300, easing = FastOutSlowInEasing),
+            exponentialDecay(),
+            { true },
+        )
+    }
+
+    // 首次测量到面板宽度后建立锚点，并把偏移摆到与外部 open 一致的位置。
+    // 注意 initialized 的时机：
+    //  - open=true：先初始化（让面板可见），再 animateTo 从屏幕外滑入，产生滑入动画
+    //  - open=false：先 snapTo 移到屏幕外（关闭位置），再初始化（面板始终不可见）
+    // 无论如何，updateAnchors 必须在 initialized=true 之前执行，
+    // 否则 alpha=1 时 offset 还是 NaN（回退到 0），面板会覆盖 95% 屏幕拦截所有点击。
+    LaunchedEffect(panelWidthPx) {
+        if (panelWidthPx > 0f && !initialized) {
+            dragState.updateAnchors(
+                DraggableAnchors {
+                    DrawerPos.Closed at panelWidthPx
+                    DrawerPos.Open at 0f
+                },
+                DrawerPos.Closed,
+            )
+            if (open) {
+                initialized = true  // 先让面板可见（offset=panelWidth，在屏幕外）
+                dragState.animateTo(DrawerPos.Open)  // 从屏幕外滑入
+            } else {
+                dragState.snapTo(DrawerPos.Closed)  // 先 snap 到屏幕外
+                initialized = true  // 再初始化（面板始终不可见，在屏幕外）
+            }
+        }
+    }
+
+    // 外部 open 变化 → 动画开/关
+    LaunchedEffect(open, panelWidthPx) {
+        if (panelWidthPx > 0f && initialized) {
+            if (open) {
+                dragState.animateTo(DrawerPos.Open)
+            } else {
+                dragState.animateTo(DrawerPos.Closed)
+            }
+        }
+    }
+
+    // 内部手势 settle 到 Closed 后同步外部状态（避免 ChatScreen 的 dashboardOpen 与面板脱节）
+    LaunchedEffect(dragState.currentValue) {
+        if (dragState.currentValue == DrawerPos.Closed && open) {
+            onClose()
+        }
+    }
+
     // 凸起水平 bounds（页签列 48dp 内居中 44dp 方块）
     val bumpLeftPx = with(density) { BUMP_OFFSET.toPx() }
     val bumpRightPx = with(density) { (BUMP_OFFSET + TAB_SQUARE).toPx() }
@@ -238,123 +314,141 @@ fun DashboardDrawer(
         onFeatureChange(f)
     }
 
+    // 关闭：统一走锚定动画（外部按钮/遮罩/BackHandler 都会落到这里）
+    val close = {
+        scope.launch { dragState.animateTo(DrawerPos.Closed) }
+    }
+
+    // 面板是否「正在/已经打开」：决定透明遮罩与面板交互是否启用。
+    // 注意：graphicsLayer.translationX 不影响命中测试位置，面板关闭时（offset=panelWidth）
+    // 视觉在屏幕外但命中测试仍在屏幕右侧，所以这里用 offset < panelWidth 判断「未完全关闭」，
+    // 完全关闭时 panelActive=false → clickable/anchoredDraggable 禁用，事件穿透到下层。
+    val panelActive = dragState.offset < panelWidthPx
+
     Box(Modifier.fillMaxSize()) {
-        AnimatedVisibility(
-            visible = open,
-            enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
-            exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
+        // 透明遮罩：没有黑色盖层，面板未打开时不拦截任何事件
+        if (panelActive) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = { close() },
+                    ),
+            )
+        }
+
+        // 抽屉本体：左侧页签列 + 右侧融合面板（半透明 + 白色透明，性能优先）。
+        // 始终参与布局，用 translationX 控制开/关位置（0=开，panelWidth=关），
+        // 由 AnchoredDraggableState 驱动 offset → 支持半拉与跟手。
+        Box(
+            Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .fillMaxWidth(0.95f)
+                .widthIn(max = 380.dp)
+                // 标题与聊天页 TopAppBar 对齐：点击区与拖拽覆盖整块面板。
+                // 注意：位置用 graphicsLayer.translationX 而非 Modifier.offset——
+                // offset 是布局修饰符，实测它的命中测试不跟随偏移，导致面板滑到屏幕外后
+                // clickable 仍在屏幕内拦截所有点击；graphicsLayer 是纯视觉变换，
+                // 命中测试固定在屏幕右侧，所以必须用 enabled=panelActive 让面板关闭时不拦截。
+                .graphicsLayer {
+                    translationX = dragState.offset.takeIf { !it.isNaN() } ?: 0f
+                }
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {},
+                    enabled = panelActive,
+                )
+                // 首次测量到宽度前不可见，避免初始 offset=0 导致面板闪现在打开位置
+                // （alpha=0 同时让未初始化时的面板不参与命中测试）
+                .onGloballyPositioned {
+                    val w = it.size.width.toFloat()
+                    if (w != panelWidthPx) panelWidthPx = w
+                }
+                .alpha(if (panelWidthPx > 0f && initialized) 1f else 0f)
+                // 锚定拖拽：左右跟手，松手 settle（半拉）。
+                // 同样用 enabled=panelActive：面板完全关闭时禁用，避免拦截下层事件。
+                .anchoredDraggable(
+                    state = dragState,
+                    orientation = Orientation.Horizontal,
+                    enabled = panelActive,
+                ),
         ) {
-            Box(Modifier.fillMaxSize()) {
-                // 透明遮罩：没有黑色盖层，但点击面板外区域仍可关闭
-                val scrimInteraction = remember { MutableInteractionSource() }
+            // 内容容器：统一做系统栏 padding，所有子元素以此为坐标基准
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding(),
+            ) {
+                // ① 融合表面 + 内容：整层按 FusedPanelShape 剪裁 + 白色透明背景
+                //    onGloballyPositioned 测量自身 bounds 作为凸起坐标基准
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .clickable(
-                            interactionSource = scrimInteraction,
-                            indication = null,
-                            onClick = onClose,
-                        ),
-                )
-                // 抽屉本体：左侧页签列 + 右侧融合面板（半透明 + 白色透明，性能优先）
-                Box(
-                    Modifier
-                        .align(Alignment.CenterEnd)
-                        .fillMaxHeight()
-                        .fillMaxWidth(0.95f)
-                        .widthIn(max = 380.dp)
-                        // 标题与聊天页 TopAppBar 对齐：点击区与右滑收回覆盖整块面板
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = {},
-                        )
-                        // 反向滑动收回：在面板上向右滑，和左抽屉一样可以把面板收回去
-                        .pointerInput(Unit) {
-                            detectHorizontalDragGestures(
-                                onHorizontalDrag = { change, dragAmount ->
-                                    if (dragAmount > 0) {
-                                        change.consume()
-                                        onClose()
-                                    }
-                                },
-                            )
-                        },
+                        .onGloballyPositioned { surfaceBounds = it.boundsInWindow() }
+                        .clip(fusedShape)
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.80f)),
                 ) {
-                    // 内容容器：统一做系统栏 padding，所有子元素以此为坐标基准
-                    Box(
+                    Column(
                         Modifier
                             .fillMaxSize()
-                            .statusBarsPadding()
-                            .navigationBarsPadding(),
+                            .padding(start = CONTENT_START_PADDING),
                     ) {
-                        // ① 融合表面 + 内容：整层按 FusedPanelShape 剪裁 + 白色透明背景
-                        //    onGloballyPositioned 测量自身 bounds 作为凸起坐标基准
-                        Box(
+                        // 头部：X 在左、功能名（抽屉标题）在右
+                        Row(
                             Modifier
-                                .fillMaxSize()
-                                .onGloballyPositioned { surfaceBounds = it.boundsInWindow() }
-                                .clip(fusedShape)
-                                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.80f)),
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Column(
-                                Modifier
-                                    .fillMaxSize()
-                                    .padding(start = CONTENT_START_PADDING),
-                            ) {
-                                // 头部：X 在左、功能名（抽屉标题）在右
-                                Row(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 8.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    IconButton(onClick = onClose) {
-                                        Icon(Icons.Filled.Close, contentDescription = "关闭功能看板")
-                                    }
-                                    Spacer(Modifier.width(4.dp))
-                                    Text(
-                                        feature.label,
-                                        style = MaterialTheme.typography.titleLarge,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                }
-                                HorizontalDivider()
-                                // 内容区：切换时淡入淡出
-                                Box(Modifier.weight(1f).fillMaxWidth()) {
-                                    Crossfade(
-                                        targetState = feature,
-                                        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
-                                        label = "dashboardPanel",
-                                    ) { f ->
-                                        when (f) {
-                                            DashboardFeature.MODELS -> modelPanel()
-                                            DashboardFeature.FILES -> filesPanel()
-                                            DashboardFeature.STATS -> statsPanel()
-                                        }
-                                    }
+                            IconButton(onClick = { close() }) {
+                                Icon(Icons.Filled.Close, contentDescription = "关闭功能看板")
+                            }
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                feature.label,
+                                style = MaterialTheme.typography.titleLarge,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        HorizontalDivider()
+                        // 内容区：切换时淡入淡出
+                        Box(Modifier.weight(1f).fillMaxWidth()) {
+                            Crossfade(
+                                targetState = feature,
+                                animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                                label = "dashboardPanel",
+                            ) { f ->
+                                when (f) {
+                                    DashboardFeature.MODELS -> modelPanel()
+                                    DashboardFeature.FILES -> filesPanel()
+                                    DashboardFeature.STATS -> statsPanel()
                                 }
                             }
                         }
-                        // ② 左侧竖向模式页签列（不参与融合剪裁，选中页签透明靠凸起供底）
-                        Column(
-                            Modifier
-                                .align(Alignment.TopStart)
-                                .width(RAIL_WIDTH)
-                                .fillMaxHeight()
-                                .padding(top = RAIL_TOP_PADDING),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(TAB_SPACING),
-                        ) {
-                            DashboardFeature.entries.forEach { f ->
-                                FeatureTab(
-                                    feature = f,
-                                    selected = f == feature,
-                                    reportBounds = if (f == feature) { rect -> selectedBounds = rect } else null,
-                                    onClick = { onTabClick(f) },
-                                )
-                            }
-                        }
+                    }
+                }
+                // ② 左侧竖向模式页签列（不参与融合剪裁，选中页签透明靠凸起供底）
+                Column(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .width(RAIL_WIDTH)
+                        .fillMaxHeight()
+                        .padding(top = RAIL_TOP_PADDING),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(TAB_SPACING),
+                ) {
+                    DashboardFeature.entries.forEach { f ->
+                        FeatureTab(
+                            feature = f,
+                            selected = f == feature,
+                            reportBounds = if (f == feature) { rect -> selectedBounds = rect } else null,
+                            onClick = { onTabClick(f) },
+                        )
                     }
                 }
             }
