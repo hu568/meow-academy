@@ -26,11 +26,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -126,92 +128,104 @@ fun SessionDrawer(
             .fillMaxWidth(0.85f)
             .widthIn(max = 340.dp),
         drawerContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.80f),
+        // 关闭 ModalDrawerSheet 自带的 systemBars insets（避免底部再叠一层系统导航栏 padding）：
+        // - 面板背景仍铺满整个抽屉区域，上边贴应用边缘、下边由 ChatScreen 外层 Box 的
+        //   bottomPadding 垫到导航栏顶部（上边框贴应用边缘 / 下边框贴导航栏，喵~）
+        // - 内容顶部由内部 Column 单独 statusBarsPadding，标题行与聊天页 TopAppBar 对齐
+        windowInsets = WindowInsets(0, 0, 0, 0),
     ) {
-        // 工具栏
-        Row(
+        // 内容容器：仅顶部避开状态栏（标题与聊天页标题对齐），底部不额外垫系统栏
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .fillMaxSize()
+                .statusBarsPadding(),
         ) {
-            if (selectionMode) {
-                // 多选模式工具栏：✕ 退出 + 标题（已选 N 项）+ 删除
-                IconButton(onClick = exitSelection) {
-                    Icon(Icons.Filled.Close, contentDescription = "取消多选")
-                }
-                Text(
-                    text = "已选 ${selectedIds.size} 项",
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(start = 4.dp),
-                )
-                IconButton(
-                    onClick = { if (selectedSessions.isNotEmpty()) batchDeleting = true },
-                    enabled = selectedSessions.isNotEmpty(),
-                ) {
-                    Icon(
-                        Icons.Filled.Delete,
-                        contentDescription = "批量删除",
-                        tint = if (selectedSessions.isNotEmpty()) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
+            // 工具栏
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (selectionMode) {
+                    // 多选模式工具栏：✕ 退出 + 标题（已选 N 项）+ 删除
+                    IconButton(onClick = exitSelection) {
+                        Icon(Icons.Filled.Close, contentDescription = "取消多选")
+                    }
+                    Text(
+                        text = "已选 ${selectedIds.size} 项",
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(start = 4.dp),
                     )
-                }
-            } else {
-                // 普通模式工具栏：标题 + 多选（紧贴新建左边） + 新建
-                Text(
-                    text = "会话",
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(start = 8.dp),
-                )
-                IconButton(onClick = {
-                    selectionMode = true
-                    selectedIds = emptySet()
-                }) {
-                    Icon(
-                        Icons.Outlined.ChecklistRtl,
-                        contentDescription = "多选",
-                        tint = MaterialTheme.colorScheme.onSurface,
+                    IconButton(
+                        onClick = { if (selectedSessions.isNotEmpty()) batchDeleting = true },
+                        enabled = selectedSessions.isNotEmpty(),
+                    ) {
+                        Icon(
+                            Icons.Filled.Delete,
+                            contentDescription = "批量删除",
+                            tint = if (selectedSessions.isNotEmpty()) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    // 普通模式工具栏：标题 + 多选（紧贴新建左边） + 新建
+                    Text(
+                        text = "会话",
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(start = 8.dp),
                     )
-                }
-                IconButton(onClick = onNew) {
-                    Icon(Icons.Filled.Add, contentDescription = "新建会话")
+                    IconButton(onClick = {
+                        selectionMode = true
+                        selectedIds = emptySet()
+                    }) {
+                        Icon(
+                            Icons.Outlined.ChecklistRtl,
+                            contentDescription = "多选",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    IconButton(onClick = onNew) {
+                        Icon(Icons.Filled.Add, contentDescription = "新建会话")
+                    }
                 }
             }
-        }
 
-        if (sessions.isEmpty()) {
-            EmptyStateCompact(
-                icon = Icons.Outlined.Forum,
-                title = "暂无会话",
-            )
-        } else {
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
-                items(sessions, key = { it.id }) { session ->
-                    val isSelected = session.id in selectedIds
-                    SwipeableSessionRow(
-                        session = session,
-                        isCurrent = session.id == currentId,
-                        selectionMode = selectionMode,
-                        isSelected = isSelected,
-                        onTap = {
-                            if (selectionMode) toggleSelected(session.id)
-                            else onOpen(session.id)
-                        },
-                        onSwipeRightTrigger = {
-                            // 右滑触发：进入多选 + 勾选该项
-                            if (!selectionMode) {
-                                selectionMode = true
-                                selectedIds = setOf(session.id)
-                            } else {
-                                toggleSelected(session.id)
-                            }
-                        },
-                        onEdit = { renaming = session },
-                        onDelete = { deleting = session },
-                    )
+            if (sessions.isEmpty()) {
+                EmptyStateCompact(
+                    icon = Icons.Outlined.Forum,
+                    title = "暂无会话",
+                )
+            } else {
+                LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    items(sessions, key = { it.id }) { session ->
+                        val isSelected = session.id in selectedIds
+                        SwipeableSessionRow(
+                            session = session,
+                            isCurrent = session.id == currentId,
+                            selectionMode = selectionMode,
+                            isSelected = isSelected,
+                            onTap = {
+                                if (selectionMode) toggleSelected(session.id)
+                                else onOpen(session.id)
+                            },
+                            onSwipeRightTrigger = {
+                                // 右滑触发：进入多选 + 勾选该项
+                                if (!selectionMode) {
+                                    selectionMode = true
+                                    selectedIds = setOf(session.id)
+                                } else {
+                                    toggleSelected(session.id)
+                                }
+                            },
+                            onEdit = { renaming = session },
+                            onDelete = { deleting = session },
+                        )
+                    }
                 }
             }
         }

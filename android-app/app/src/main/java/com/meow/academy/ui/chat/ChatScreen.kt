@@ -224,8 +224,12 @@ private fun ChatDetailView(
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameText by remember { mutableStateOf("") }
 
-    // 抽屉打开时给「底图 + 聊天内容」一起加毛玻璃模糊（API < 31 自动退化为不模糊）
-    val drawerOpen = drawerState.isOpen
+    // 抽屉打开时给「底图 + 聊天内容」一起加毛玻璃模糊（API < 31 自动退化为不模糊）。
+    // 注意这里必须用 targetValue 而不是 isOpen：isOpen 等价于 currentValue == Open，
+    // 要等抽屉动画完全结束才变 true，会导致左侧模糊「等抽屉完全出来才开始处理」；
+    // targetValue 在调用 open()/close() 或松手 settle() 决定方向的那一刻就更新，
+    // 让模糊和抽屉滑入/滑出动画并行跟随（与右侧 dashboardOpen 的即时布尔行为一致，喵~）。
+    val drawerOpen = drawerState.targetValue == DrawerValue.Open
     val blurRadius by animateDpAsState(if (drawerOpen || dashboardOpen) 8.dp else 0.dp)
 
     // 唤出输入法时底图放大（模拟导航栏退场时的视觉张力），收起时缩回原尺寸。
