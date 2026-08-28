@@ -187,6 +187,8 @@ fun FileEditorScreen(
     var suppressCursorFollow by remember { mutableStateOf(false) }
     // 瞬态：本次切回编辑模式后是否还有「恢复滚动」待执行
     var pendingRestore by remember { mutableStateOf(false) }
+    // 瞬态：恢复流程结束（释放 suppressCursorFollow）后 +1，强制光标跟随协程补跑一次（喵~）
+    var followTick by remember { mutableIntStateOf(0) }
     // 布局瞬态：切回时由 onSizeChanged / onGloballyPositioned / onTextLayout 重新填充
     var textLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
     var viewportHeightPx by remember { mutableIntStateOf(0) }
@@ -227,12 +229,16 @@ fun FileEditorScreen(
 
     // 切回编辑模式：等编辑区布局就绪后按锚点比例恢复滚动，并把光标同步到恢复位置。
     // 光标同步是关键：光标跟随逻辑即使随后触发，也会发现光标已在视口内，不会把滚动拉回原光标处（喵~）
-    LaunchedEffect(mode, textLayout, viewportHeightPx, fieldOffsetY, pendingRestore) {
+    // ⚠️ pendingRestore 不能放进 LaunchedEffect 的 key：恢复流程末尾 pendingRestore=false
+    // 会触发重组 → key 变化 → 当前协程被取消，导致挂起后的 suppressCursorFollow=false
+    // 永远执行不到，光标跟随被永久抑制（喵~）
+    LaunchedEffect(mode, textLayout, viewportHeightPx, fieldOffsetY) {
         if (mode != EditorMode.EDIT || !pendingRestore) return@LaunchedEffect
         // 编辑区不渲染（大 HTML 提示 / 不可预览）时无需恢复，直接放行（喵~）
         if (editBlocked != null || previewError != null) {
             pendingRestore = false
             suppressCursorFollow = false
+            followTick++
             return@LaunchedEffect
         }
         val layout = textLayout ?: return@LaunchedEffect
@@ -242,6 +248,7 @@ fun FileEditorScreen(
         if (editScroll.maxValue <= 0) {
             pendingRestore = false
             suppressCursorFollow = false
+            followTick++
             return@LaunchedEffect
         }
         suppressCursorFollow = true
@@ -252,10 +259,14 @@ fun FileEditorScreen(
         if (fieldValue.selection.start != topOffset || fieldValue.selection.end != topOffset) {
             fieldValue = fieldValue.copy(selection = TextRange(topOffset))
         }
-        pendingRestore = false
         // 等一帧：让 selection 变化触发的光标跟随协程在 suppressCursorFollow=true 下跳过
         withFrameNanos { }
+        // 先解除抑制，再清除待恢复标记：pendingRestore=false 会触发重组把协程取消，
+        // 顺序反了的话（pendingRestore=false 在前）下面这行永远执行不到（喵~）
         suppressCursorFollow = false
+        // 释放抑制后立刻 +1：把上面「selection 变化时因抑制而跳过」的光标跟随补跑一次（喵~）
+        followTick++
+        pendingRestore = false
     }
 
     // 切回预览模式（Markdown / 纯文本）：内容布局就绪后按锚点比例恢复；HTML 由 WebView 内部恢复
@@ -572,7 +583,7 @@ fun FileEditorScreen(
                 // 光标或视口（键盘弹出/收起）变化时，把光标行滚进视口上半部。
                 // 模式切换恢复滚动期间先跳过，避免刚恢复的位置被光标自动滚动覆盖（喵~）
                 // fieldOffsetY 参与触发：键盘弹出/收起时布局偏移更新后再计算，避免用旧值算错跳顶
-                LaunchedEffect(fieldValue.selection, textLayout, viewportHeightPx, fieldOffsetY) {
+                LaunchedEffect(fieldValue.selection, textLayout, viewportHeightPx, fieldOffsetY, followTick) {
                     if (suppressCursorFollow) return@LaunchedEffect
                     // 等一帧：让同帧的 onSizeChanged / onGloballyPositioned 布局值先落定（喵~）
                     withFrameNanos { }
