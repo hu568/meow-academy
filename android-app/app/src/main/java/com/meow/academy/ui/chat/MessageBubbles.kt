@@ -41,6 +41,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.meow.academy.ui.theme.LocalThemeExtras
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -296,13 +297,15 @@ fun ToolGroup(segments: List<Segment>, status: MessageStatus) {
     var userExpanded by remember { mutableStateOf(false) }
     val expanded = hasRunning || userExpanded
 
+    val extras = LocalThemeExtras.current
+
     Column {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 2.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.secondaryContainer)
+                .background(extras.toolGroupBackground ?: MaterialTheme.colorScheme.secondaryContainer)
                 .clickable { userExpanded = !userExpanded }
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -311,7 +314,7 @@ fun ToolGroup(segments: List<Segment>, status: MessageStatus) {
                 Icons.Outlined.Handyman,
                 contentDescription = "工具调用",
                 modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                tint = extras.toolGroupContent ?: MaterialTheme.colorScheme.onSecondaryContainer,
             )
             Spacer(Modifier.width(4.dp))
             Text(
@@ -451,6 +454,7 @@ fun ThinkingCard(thinking: String) {
 @Composable
 fun ToolCard(tool: ToolCallInfo) {
     var expanded by remember(tool.id) { mutableStateOf(false) }
+    val extras = LocalThemeExtras.current
     val statusMark = when {
         tool.isError -> "✗"
         tool.result.isNotBlank() -> "✓"
@@ -458,7 +462,7 @@ fun ToolCard(tool: ToolCallInfo) {
     }
     val statusColor = when {
         tool.isError -> MaterialTheme.colorScheme.error
-        tool.result.isNotBlank() -> MaterialTheme.colorScheme.primary
+        tool.result.isNotBlank() -> extras.toolStatusColor ?: MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val containerColor = if (tool.isError) MaterialTheme.colorScheme.errorContainer

@@ -18,13 +18,17 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        val repository = (application as MeowAcademyApp).settingsRepository
+        val app = application as MeowAcademyApp
+        val repository = app.settingsRepository
         setContent {
             val themeMode by repository.themeMode.collectAsState(initial = ThemeMode.SYSTEM)
             val themeSeedColor by repository.themeSeedColor.collectAsState(initial = DEFAULT_THEME_SEED_ARGB)
+            // 主题颜色动态配置（CONFIG 模式用）：FileObserver 热更 → 收集即实时换肤
+            val themeConfig by app.themeConfigRepository.config.collectAsState(initial = null)
             MeowAcademyTheme(
                 themeMode = themeMode,
                 themeSeedColor = themeSeedColor,
+                themeConfigRaw = themeConfig,
             ) {
                 MainScreen(repository = repository)
             }

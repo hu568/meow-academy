@@ -19,18 +19,21 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.meow.academy.R
+import kotlinx.coroutines.launch
 import com.meow.academy.data.settings.HomeTab
 import com.meow.academy.data.settings.ResidentMode
 import com.meow.academy.data.settings.SettingsRepository
 import com.meow.academy.data.settings.ThemeMode
 import com.meow.academy.data.settings.chatBackgroundLabel
 import com.meow.academy.data.settings.displayName
+import com.meow.academy.data.settings.resolveChatBackgroundUi
 import com.meow.academy.data.settings.themeSeedToHex
 import com.meow.academy.ui.components.AppTopBar
 
@@ -46,10 +49,18 @@ fun SettingsScreen(
     onOpenTerminal: () -> Unit = {},
 ) {
     val vm: SettingsViewModel = viewModel(factory = SettingsViewModel.factory(repository))
+    val app = LocalContext.current.applicationContext as com.meow.academy.MeowAcademyApp
 
     val themeMode by vm.themeMode.collectAsState()
     val themeSeedColor by vm.themeSeedColor.collectAsState()
     val chatBackground by vm.chatBackground.collectAsState()
+    val backgroundDynamicEnabled by vm.backgroundDynamicEnabled.collectAsState()
+    // theme-config.jsonc（动态配置模式的背景预设 / 当前选择）
+    val themeConfigRaw by app.themeConfigRepository.config.collectAsState(initial = null)
+    // 统一背景视图：简单模式（DataStore + 内置预设）/ 动态模式（JSONC active + 配置预设）
+    val bgUi = remember(backgroundDynamicEnabled, chatBackground, themeConfigRaw) {
+        resolveChatBackgroundUi(backgroundDynamicEnabled, chatBackground, themeConfigRaw)
+    }
     val defaultHome by vm.defaultHome.collectAsState()
     val residentMode by vm.residentMode.collectAsState()
     val residentMinutes by vm.residentMinutes.collectAsState()
@@ -101,7 +112,7 @@ fun SettingsScreen(
                 SettingsRow(
                     icon = Icons.Outlined.Wallpaper,
                     title = stringResource(R.string.settings_chat_background),
-                    subtitle = chatBackgroundLabel(chatBackground),
+                    subtitle = chatBackgroundLabel(bgUi.raw),
                     onClick = { showChatBgDialog = true },
                 )
             }
@@ -175,9 +186,19 @@ fun SettingsScreen(
         )
     }
     if (showChatBgDialog) {
+        val scope = rememberCoroutineScope()
         ChatBackgroundDialog(
-            current = chatBackground,
-            onSelect = vm::setChatBackground,
+            current = bgUi.raw,
+            presets = bgUi.presets,
+            dynamicEnabled = backgroundDynamicEnabled,
+            onToggleDynamic = vm::setBackgroundDynamicEnabled,
+            onSelect = { raw ->
+                if (backgroundDynamicEnabled) {
+                    scope.launch { app.themeConfigRepository.updateBackgroundActive(raw) }
+                } else {
+                    vm.setChatBackground(raw)
+                }
+            },
             onDismiss = { showChatBgDialog = false },
         )
     }

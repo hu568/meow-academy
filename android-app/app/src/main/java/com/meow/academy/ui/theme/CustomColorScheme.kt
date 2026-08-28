@@ -15,6 +15,8 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import com.meow.academy.data.settings.ThemeConfigRaw
+import com.meow.academy.data.settings.resolveThemeConfig
 
 /** 由种子色生成浅色 Material You 风格色板 */
 fun customLightColorScheme(seed: Color): ColorScheme {
@@ -101,6 +103,65 @@ fun customDarkColorScheme(seed: Color): ColorScheme {
         surfaceContainerLow = hsv(h, 0.05f, 0.14f),
         surfaceContainerLowest = hsv(h, 0.06f, 0.09f),
     )
+}
+
+/**
+ * 由 theme-config.jsonc 动态配置构建整套色板（ThemeMode.CONFIG）。
+ *
+ * 双重覆盖（docs/design-dynamic-config.md §11）：
+ * 1. 先用「配置里的种子色」（没写用 [fallbackSeedArgb] 内置默认）自动派生整套浅/深色板；
+ * 2. 再用 `overrides` 里显式写的色槽逐项覆盖（只认 [KNOWN_THEME_SLOTS] 白名单），
+ *    没覆盖的继续用种子派生值。
+ *
+ * 深浅各调一次：theme-config.jsonc 里支持 `{ light, dark }` 主题感知，深浅色可分别定制。
+ *
+ * @param raw           深合并后的 theme-config.jsonc 原始 Map（null = 全默认）
+ * @param isDark        当前实际深浅（跟随系统）
+ * @param fallbackSeedArgb 配置没写种子色时的内置默认种子（ARGB Int）
+ */
+fun buildConfigColorScheme(
+    raw: ThemeConfigRaw?,
+    isDark: Boolean,
+    fallbackSeedArgb: Int,
+): ColorScheme {
+    val config = resolveThemeConfig(raw, isDark)
+    val seed = config.seed?.let(::parseHexColor) ?: Color(fallbackSeedArgb)
+    val base = if (isDark) customDarkColorScheme(seed) else customLightColorScheme(seed)
+    val o = config.overrides
+    if (o.isEmpty()) return base
+    return base.copy(
+        primary = o["primary"]?.let(::parseHexColor) ?: base.primary,
+        onPrimary = o["onPrimary"]?.let(::parseHexColor) ?: base.onPrimary,
+        primaryContainer = o["primaryContainer"]?.let(::parseHexColor) ?: base.primaryContainer,
+        onPrimaryContainer = o["onPrimaryContainer"]?.let(::parseHexColor) ?: base.onPrimaryContainer,
+        secondary = o["secondary"]?.let(::parseHexColor) ?: base.secondary,
+        onSecondary = o["onSecondary"]?.let(::parseHexColor) ?: base.onSecondary,
+        secondaryContainer = o["secondaryContainer"]?.let(::parseHexColor) ?: base.secondaryContainer,
+        onSecondaryContainer = o["onSecondaryContainer"]?.let(::parseHexColor) ?: base.onSecondaryContainer,
+        tertiary = o["tertiary"]?.let(::parseHexColor) ?: base.tertiary,
+        onTertiary = o["onTertiary"]?.let(::parseHexColor) ?: base.onTertiary,
+        tertiaryContainer = o["tertiaryContainer"]?.let(::parseHexColor) ?: base.tertiaryContainer,
+        onTertiaryContainer = o["onTertiaryContainer"]?.let(::parseHexColor) ?: base.onTertiaryContainer,
+        background = o["background"]?.let(::parseHexColor) ?: base.background,
+        onBackground = o["onBackground"]?.let(::parseHexColor) ?: base.onBackground,
+        surface = o["surface"]?.let(::parseHexColor) ?: base.surface,
+        onSurface = o["onSurface"]?.let(::parseHexColor) ?: base.onSurface,
+        surfaceVariant = o["surfaceVariant"]?.let(::parseHexColor) ?: base.surfaceVariant,
+        onSurfaceVariant = o["onSurfaceVariant"]?.let(::parseHexColor) ?: base.onSurfaceVariant,
+        surfaceTint = o["surfaceTint"]?.let(::parseHexColor) ?: base.surfaceTint,
+        error = o["error"]?.let(::parseHexColor) ?: base.error,
+        onError = o["onError"]?.let(::parseHexColor) ?: base.onError,
+        errorContainer = o["errorContainer"]?.let(::parseHexColor) ?: base.errorContainer,
+        onErrorContainer = o["onErrorContainer"]?.let(::parseHexColor) ?: base.onErrorContainer,
+        outline = o["outline"]?.let(::parseHexColor) ?: base.outline,
+        outlineVariant = o["outlineVariant"]?.let(::parseHexColor) ?: base.outlineVariant,
+    )
+}
+
+/** HEX 颜色串 → Compose Color（解析器已保证 6/8 位合法；#RRGGBB 补满 alpha） */
+internal fun parseHexColor(hex: String): Color {
+    val value = hex.removePrefix("#").toLong(16)
+    return if (hex.length == 9) Color(value) else Color(0xFF000000L or value)
 }
 
 /** HSV → Color（h 0..360，s/v 0..1） */

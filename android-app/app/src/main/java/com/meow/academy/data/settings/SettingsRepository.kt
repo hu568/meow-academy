@@ -30,8 +30,10 @@ class SettingsRepository(private val context: Context) {
         val THEME_MODE = stringPreferencesKey("theme_mode")
         // 自定义主题的种子色（ARGB Long，0..0xFFFFFFFF；默认喵仓粉紫）
         val THEME_SEED_COLOR = longPreferencesKey("theme_seed_color")
-        // 聊天底图："none" / "preset:<id>" / "file:<absPath>"（见 ChatBackgrounds.kt）
+        // 聊天底图："none" / "preset:<id>" / "file:<相对 appconfig/ 的路径>"（见 ChatBackgrounds.kt）
         val CHAT_BACKGROUND = stringPreferencesKey("chat_background")
+        // 「使用动态配置」背景管理开关：勾选 = 背景预设/选择从 theme-config.jsonc 读，不勾选 = DataStore + 固定文件
+        val BACKGROUND_DYNAMIC_ENABLED = booleanPreferencesKey("background_dynamic_enabled")
         val DEFAULT_HOME = stringPreferencesKey("default_home")
         val RESIDENT_MODE = stringPreferencesKey("resident_mode")
         val RESIDENT_MINUTES = intPreferencesKey("resident_minutes")
@@ -61,9 +63,14 @@ class SettingsRepository(private val context: Context) {
         prefs[Keys.THEME_SEED_COLOR] ?: DEFAULT_THEME_SEED_ARGB
     }
 
-    /** 聊天底图持久化字符串（"none" / "preset:<id>" / "file:<absPath>"，默认无背景） */
+    /** 聊天底图持久化字符串（"none" / "preset:<id>" / "file:<路径>"，默认无背景） */
     val chatBackground: Flow<String> = context.settingsDataStore.data.map { prefs ->
         prefs[Keys.CHAT_BACKGROUND] ?: CHAT_BG_NONE
+    }
+
+    /** 「使用动态配置」背景管理开关（勾选 = 背景从 theme-config.jsonc 读；默认不勾选 = 简单模式） */
+    val backgroundDynamicEnabled: Flow<Boolean> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.BACKGROUND_DYNAMIC_ENABLED] ?: false
     }
 
     val defaultHome: Flow<HomeTab> = context.settingsDataStore.data.map { prefs ->
@@ -98,9 +105,14 @@ class SettingsRepository(private val context: Context) {
             val oldPath = chatBackgroundFilePath(old)
             val newPath = chatBackgroundFilePath(raw)
             if (oldPath != null && oldPath != newPath) {
-                runCatching { File(oldPath).delete() }
+                runCatching { resolveChatBgFile(context, oldPath).delete() }
             }
         }
+    }
+
+    /** 设置「使用动态配置」背景管理开关 */
+    suspend fun setBackgroundDynamicEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { it[Keys.BACKGROUND_DYNAMIC_ENABLED] = enabled }
     }
 
     suspend fun setDefaultHome(tab: HomeTab) {

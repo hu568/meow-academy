@@ -26,9 +26,13 @@ class SettingsViewModel(private val repository: SettingsRepository) : ViewModel(
     val themeSeedColor: StateFlow<Long> = repository.themeSeedColor
         .stateIn(viewModelScope, SharingStarted.Eagerly, DEFAULT_THEME_SEED_ARGB)
 
-    /** 聊天底图（"none" / "preset:<id>" / "file:<absPath>"） */
+    /** 聊天底图（"none" / "preset:<id>" / "file:<路径>"） */
     val chatBackground: StateFlow<String> = repository.chatBackground
         .stateIn(viewModelScope, SharingStarted.Eagerly, CHAT_BG_NONE)
+
+    /** 「使用动态配置」背景管理开关 */
+    val backgroundDynamicEnabled: StateFlow<Boolean> = repository.backgroundDynamicEnabled
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     val defaultHome: StateFlow<HomeTab> = repository.defaultHome
         .stateIn(viewModelScope, SharingStarted.Eagerly, HomeTab.CHAT)
@@ -65,6 +69,10 @@ class SettingsViewModel(private val repository: SettingsRepository) : ViewModel(
 
     fun setChatBackground(raw: String) = viewModelScope.launch {
         repository.setChatBackground(raw)
+    }
+
+    fun setBackgroundDynamicEnabled(enabled: Boolean) = viewModelScope.launch {
+        repository.setBackgroundDynamicEnabled(enabled)
     }
 
     fun setDefaultHome(tab: HomeTab) = viewModelScope.launch {

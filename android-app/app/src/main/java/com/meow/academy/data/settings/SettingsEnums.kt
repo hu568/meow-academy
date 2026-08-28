@@ -7,8 +7,10 @@ package com.meow.academy.data.settings
  * - [LIGHT]  强制浅色
  * - [DARK]   强制深色
  * - [CUSTOM] 自定义配色：用户种子色（theme_seed_color）自动派生整套浅/深色板，跟随系统深浅
+ * - [CONFIG] 动态配置配色：读取 appconfig/theme-config.jsonc（JSONC + FileObserver 热更），
+ *   支持种子色 + 具体色槽双重覆盖，跟随系统深浅
  */
-enum class ThemeMode { SYSTEM, LIGHT, DARK, CUSTOM }
+enum class ThemeMode { SYSTEM, LIGHT, DARK, CUSTOM, CONFIG }
 
 /** 底部导航三个板块，同时用作「默认首页」的候选 */
 enum class HomeTab { CHAT, FILES, SETTINGS }

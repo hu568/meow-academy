@@ -28,7 +28,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import com.meow.academy.data.settings.ChatBackground
-import com.meow.academy.data.settings.parseChatBackground
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -47,12 +46,11 @@ private val chatBgCache = object : LruCache<String, ImageBitmap>(32 * 1024 * 102
 /**
  * 聊天页底图 + 遮罩。
  *
- * @param raw 设置持久化的聊天底图字符串（"none" / "preset:<id>" / "file:<absPath>"）
+ * @param bg 已解析的聊天底图模型（由 ChatViewModel 统一双模式解析：简单模式 DataStore / 动态模式 JSONC）
  * @param modifier 外部修饰
  */
 @Composable
-fun ChatBackgroundLayer(raw: String, modifier: Modifier = Modifier) {
-    val bg = parseChatBackground(raw)
+fun ChatBackgroundLayer(bg: ChatBackground, modifier: Modifier = Modifier) {
     Box(modifier = modifier.fillMaxSize()) {
         when (bg) {
             ChatBackground.None -> {

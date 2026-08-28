@@ -7,6 +7,8 @@ import com.meow.academy.data.model.ModelCatalogRepository
 import com.meow.academy.data.settings.MarkdownConfigRepository
 import com.meow.academy.data.settings.ResidentMode
 import com.meow.academy.data.settings.SettingsRepository
+import com.meow.academy.data.settings.ThemeConfigRepository
+import com.meow.academy.data.settings.migrateLegacyChatBg
 import com.meow.academy.runtime.AppLifecycleObserver
 import com.meow.academy.runtime.DshKeepAliveWorker
 import com.meow.academy.runtime.RuntimeExtractor
@@ -29,6 +31,9 @@ class MeowAcademyApp : Application() {
     /** Markdown 渲染配置（appconfig/markdown-config.jsonc，JSONC 热更 + AI 可编排） */
     val markdownConfigRepository: MarkdownConfigRepository by lazy { MarkdownConfigRepository(this) }
 
+    /** 主题颜色动态配置（appconfig/theme-config.jsonc，JSONC 热更 + AI 可编排换肤） */
+    val themeConfigRepository: ThemeConfigRepository by lazy { ThemeConfigRepository(this) }
+
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override fun onCreate() {
@@ -38,6 +43,12 @@ class MeowAcademyApp : Application() {
         RuntimeExtractor.ensureAppDirs(this)
         // Markdown 渲染配置：config-defaults 同步 + seed appconfig/markdown-config.jsonc + FileObserver 热更
         markdownConfigRepository.start()
+        // 主题颜色动态配置：config-defaults 同步 + seed appconfig/theme-config.jsonc + FileObserver 热更换肤
+        themeConfigRepository.start()
+        // 旧 filesDir/chat-bg/ → appconfig/images/ 一次性迁移（文件 + DataStore 路径修复）
+        appScope.launch {
+            migrateLegacyChatBg(this@MeowAcademyApp, settingsRepository)
+        }
         // 前后台档位策略（M2.6）
         AppLifecycleObserver(this, appScope).install()
         // 心跳守护：跟随档位变化同步调度（OFF 取消；切回 ②/③ 立即恢复，无需重启 App）

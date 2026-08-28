@@ -46,6 +46,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -89,6 +90,7 @@ import com.meow.academy.data.files.FileRepository
 import com.meow.academy.data.files.FileRoot
 import com.meow.academy.data.files.IMAGE_EXTENSIONS
 import com.meow.academy.ui.theme.LocalFileTypeColors
+import com.meow.academy.ui.theme.LocalThemeExtras
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -321,6 +323,8 @@ fun EditableBreadcrumb(
     // 编辑态下系统返回键优先退出编辑，而不是返回上级目录
     BackHandler(enabled = editing) { editing = false }
 
+    val extras = LocalThemeExtras.current
+
     if (editing) {
         PathEditField(
             value = draft,
@@ -355,7 +359,7 @@ fun EditableBreadcrumb(
                         style = MaterialTheme.typography.labelMedium,
                         color = when {
                             index == segments.lastIndex -> MaterialTheme.colorScheme.onSurface
-                            segment.navigable -> MaterialTheme.colorScheme.primary
+                            segment.navigable -> extras.quickBarColor ?: MaterialTheme.colorScheme.primary
                             else -> MaterialTheme.colorScheme.onSurfaceVariant // 根外前缀：弱化仅展示
                         },
                         maxLines = 1,
@@ -514,6 +518,7 @@ fun ShortcutBar(
     onNavigate: (FileShortcut) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val extras = LocalThemeExtras.current
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -526,6 +531,11 @@ fun ShortcutBar(
                 selected = currentPath == shortcut.path,
                 onClick = { onNavigate(shortcut) },
                 label = { Text(shortcut.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = extras.quickBarSelectedContainer
+                        ?: MaterialTheme.colorScheme.primaryContainer,
+                    selectedLabelColor = extras.quickBarColor ?: MaterialTheme.colorScheme.onPrimaryContainer,
+                ),
             )
         }
     }

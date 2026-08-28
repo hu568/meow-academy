@@ -10,6 +10,9 @@ import com.meow.academy.data.model.DEEPSEEK_PROVIDER
 import com.meow.academy.data.model.ProviderProfile
 import com.meow.academy.data.model.buildProviderDirectory
 import com.meow.academy.data.model.parseCatalogProfiles
+import com.meow.academy.data.settings.ChatBackground
+import com.meow.academy.data.settings.resolveChatBackground
+import com.meow.academy.runtime.RuntimeExtractor
 import com.meow.academy.data.chat.MessageEntity
 import com.meow.academy.data.chat.MessageRole
 import com.meow.academy.data.chat.MessageStatus
@@ -31,6 +34,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
@@ -112,8 +116,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.Eagerly, "high")
     val webSearchEnabled: StateFlow<Boolean> = settingsRepository.webSearchEnabled
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val chatBackground: StateFlow<String> = settingsRepository.chatBackground
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "none")
+
+    /** 聊天底图（统一双模式解析：简单模式 DataStore / 动态模式 JSONC，输出可直接渲染的模型） */
+    val chatBackground: StateFlow<ChatBackground> = combine(
+        settingsRepository.backgroundDynamicEnabled,
+        settingsRepository.chatBackground,
+        (app as MeowAcademyApp).themeConfigRepository.config,
+    ) { dynamic, dsRaw, configRaw ->
+        resolveChatBackground(dynamic, dsRaw, configRaw, RuntimeExtractor.appConfigDir(app))
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, ChatBackground.None)
 
     // ── 模型管理：可切换 provider 与模型列表（M4，从 DSH RPC 读取） ──
     private val DEFAULT_MODELS = listOf("deepseek-v4-flash", "deepseek-v4-pro")

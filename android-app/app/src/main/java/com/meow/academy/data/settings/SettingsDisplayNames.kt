@@ -18,6 +18,7 @@ fun ThemeMode.displayName(): String = when (this) {
     ThemeMode.LIGHT -> "浅色"
     ThemeMode.DARK -> "深色"
     ThemeMode.CUSTOM -> "自定义"
+    ThemeMode.CONFIG -> "动态配置"
 }
 
 fun ResidentMode.displayName(minutes: Int): String = when (this) {

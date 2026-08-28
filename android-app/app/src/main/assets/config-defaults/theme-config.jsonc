@@ -1,0 +1,72 @@
+// 🐾 喵仓 主题颜色 配置
+// 使用说明见 appconfig/README.md
+// 可修改项：50 · 版本：2026-08-27T14:06:52Z
+{
+  "version": "2026-08-27T14:06:52Z",
+  "_editableCount": 50,
+
+  // ── 种子色（整套色板自动派生的根） ─────────────────────
+  "seed": null,   // 种子色 #RRGGBB；null = 内置默认（喵仓粉紫 #8A5CF6），浅/深两套色板自动派生（主题感知）
+
+  // ── 具体色槽覆盖 ─────────────────────────────────────
+  // 每个色槽可写 #RRGGBB / #AARRGGBB，或 { "light": X, "dark": Y } 按深浅分别取值；
+  // null = 不覆盖，继续用「种子色自动派生」的值。
+  "overrides": {
+
+    // ── 品牌主色 ─────────────────────────────────────
+    "primary": null,              // 主色（按钮 / 高亮 / 选中态）
+    "onPrimary": null,            // 主色上的文字 / 图标色
+    "primaryContainer": null,     // 主色容器背景
+    "onPrimaryContainer": null,   // 主色容器上的文字色
+
+    // ── 辅助色 ───────────────────────────────────────
+    "secondary": null,            // 次要色（次级按钮 / 徽标）
+    "onSecondary": null,          // 次要色上的文字色
+    "secondaryContainer": null,   // 次要容器背景
+    "onSecondaryContainer": null, // 次要容器文字色
+    "tertiary": null,             // 第三色（点缀 / 强调）
+    "onTertiary": null,           // 第三色上的文字色
+    "tertiaryContainer": null,    // 第三容器背景
+    "onTertiaryContainer": null,  // 第三容器文字色
+
+    // ── 背景与表面 ───────────────────────────────────
+    "background": null,           // 页面背景
+    "onBackground": null,         // 页面背景上的文字色
+    "surface": null,              // 表面色（卡片 / 弹层）
+    "onSurface": null,            // 表面上的文字色
+    "surfaceVariant": null,       // 表面变体（侧栏 / 输入框底）
+    "onSurfaceVariant": null,     // 表面变体上的次要文字
+    "surfaceTint": null,          // 表面色调（通常 = 主色）
+
+    // ── 错误色 ───────────────────────────────────────
+    "error": null,                // 错误提示色
+    "onError": null,              // 错误色上的文字色
+    "errorContainer": null,       // 错误容器背景
+    "onErrorContainer": null,     // 错误容器文字色
+
+    // ── 描边 ─────────────────────────────────────────
+    "outline": null,              // 分隔线 / 描边（强）
+    "outlineVariant": null        // 分隔线 / 描边（弱）
+  },
+
+  // ── 聊天背景（backgrounds） ──────────────────────────
+  // 设置页「使用动态配置」勾选后，背景预设与当前选择都从这里读；
+  // 自定义背景图片是二进制资源，必须放在 appconfig/images/ 子文件夹（见 appconfig/README.md）。
+  "backgrounds": {
+    "active": "none",   // 当前选中的聊天背景："none" / "preset:<id>" / "file:images/<文件名>"（相对 appconfig/ 的路径）
+    "presets": [        // 预设渐变定义（数组整体替换）；留空 [] = 使用内置 6 个预设
+      // { "id": "dusk", "name": "暮色紫", "colors": ["#2E1A47", "#7A5AF8", "#B388FF"] }
+    ]
+  },
+
+  // ── 组件级颜色（components） ──────────────────────────
+  // 为特定 UI 组件提供独立色槽，不影响整体主题色板；
+  // null = 跟随主题色板对应色槽（如 toolGroupBackground 默认回退 secondaryContainer）。
+  "components": {
+    "toolGroupBackground": null,       // 工具调用折叠条背景色，null = secondaryContainer
+    "toolGroupContent": null,          // 工具调用折叠条图标/文字色，null = onSecondaryContainer
+    "toolStatusColor": null,           // 工具调用成功（✓）状态色，null = primary
+    "quickBarColor": null,             // 文件面包屑导航文字/图标色，null = primary
+    "quickBarSelectedContainer": null  // 文件快捷栏（FilterChip）选中态容器色，null = primaryContainer
+  }
+}
