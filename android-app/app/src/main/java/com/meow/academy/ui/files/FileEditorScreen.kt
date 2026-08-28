@@ -10,6 +10,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -700,10 +701,22 @@ fun FileEditorScreen(
                             // 不换行：horizontalScroll 包在 BasicTextField 外层提供无限宽约束，
                             // CoreTextField 排版为内容宽度 → 不会软换行，且可左右滑动看整行（喵~）。
                             // ⚠️ BasicTextField 不能加 fillMaxWidth：否则又会把排版限制回视口宽度导致换行
+                            // ⚠️ 这里**完全不能用** OutlinedTextFieldDefaults.DecorationBox：
+                            // 它内部用 OutlinedTextFieldMeasurePolicy 排版，会把内容实际宽度
+                            // （超长 HTML 行可达 26 万 px）写进 Constraints，而 Compose 1.7 的
+                            // Constraints 上限是 16383px → 崩 "Can't represent a width of ..."（喵~）。
+                            // 所以不换行分支退化为「纯 Box 描边框 + contentPadding」，
+                            // 视口固定描边框由外层 Box 负责，滚动内容不受边框尺寸限制。
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
                                     .fillMaxWidth()
+                                    .clip(OutlinedTextFieldDefaults.shape)
+                                    .border(
+                                        width = 1.dp,
+                                        color = MaterialTheme.colorScheme.outline,
+                                        shape = OutlinedTextFieldDefaults.shape,
+                                    )
                                     .onSizeChanged { editorViewportWidthPx = it.width }
                                     .horizontalScroll(editorHScroll),
                             ) {
@@ -722,16 +735,16 @@ fun FileEditorScreen(
                                     interactionSource = interactionSource,
                                     modifier = Modifier.defaultMinSize(minHeight = 56.dp),
                                 ) { innerTextField ->
-                                    EditorTextFieldDecorationBox(
-                                        value = fieldValue.text,
-                                        interactionSource = interactionSource,
-                                        contentPadding = editorContentPadding,
-                                        onFieldPositioned = { coords ->
-                                            fieldOffsetY = coords.positionInWindow().y.toInt() -
-                                                containerY + editScroll.value
-                                        },
-                                        innerTextField = innerTextField,
-                                    )
+                                    // 复刻 DecorationBox 的内容内边距 + 文本区位置上报，但不用官方
+                                    // DecorationBox（它的 MeasurePolicy 扛不住无限宽内容，喵~）
+                                    Box(modifier = Modifier.padding(editorContentPadding)) {
+                                        Box(
+                                            modifier = Modifier.onGloballyPositioned { coords ->
+                                                fieldOffsetY = coords.positionInWindow().y.toInt() -
+                                                    containerY + editScroll.value
+                                            },
+                                        ) { innerTextField() }
+                                    }
                                 }
                             }
                         }
@@ -1131,10 +1144,13 @@ private fun EditorLineNumbers(
 /**
  * 编辑器描边框（DecorationBox）包装（喵~）。
  *
- * 换行/不换行两种模式的 [BasicTextField] 共用同一套官方
+ * 自动换行模式的 [BasicTextField] 使用官方
  * [OutlinedTextFieldDefaults.DecorationBox] + [OutlinedTextFieldDefaults.Container]
- * 外观，避免两分支重复。内层通过 [onFieldPositioned] 上报文本区在滚动容器中的偏移，
+ * 外观。内层通过 [onFieldPositioned] 上报文本区在滚动容器中的偏移，
  * 供垂直光标跟随计算使用。
+ *
+ * ⚠️ 不换行模式不要用本组件：官方 DecorationBox 的 MeasurePolicy 会把内容实际宽度
+ * 写进 Constraints，超长行（>16383px）会崩；那边用纯 Box + 描边框替代（喵~）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
