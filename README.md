@@ -8,7 +8,7 @@
 
 | 状态 | 信息 |
 | --- | --- |
-| 最新版本 | [0.2.0（debug）](https://github.com/hu568/meow-academy/releases/latest) |
+| 最新版本 | [0.2.5（debug）](https://github.com/hu568/meow-academy/releases/latest) |
 | 平台 | Android 8.0+（minSdk 26 / targetSdk 34） |
 | 技术栈 | Kotlin · Jetpack Compose · Material 3 · Room · DataStore · Markwon |
 | Agent 后端 | 内置 DeepSeek Harness 运行时（真终端 PTY + 本地 socket JSON-RPC） |
@@ -120,12 +120,12 @@ cd android-app
 ./gradlew assembleDebug
 ```
 
-构建产物自动同步到 `release/meow-academy-0.2.2-debug.apk`（约 86MB，内置 DSH 运行时 `runtime.bin` 约 62MB）。
+构建产物自动同步到 `release/meow-academy-0.2.5-debug.apk`（约 94MB，内置 DSH 运行时 `runtime.bin` 约 62MB）。
 
 ### 安装到真机
 
 ```bash
-adb install -r release/meow-academy-0.2.2-debug.apk
+adb install -r release/meow-academy-0.2.5-debug.apk
 ```
 
 ### 首次配置
@@ -199,7 +199,7 @@ meow-academy/
 | [docs/notes/meow-dynamic-architecture-note.md](docs/notes/meow-dynamic-architecture-note.md) | 动态架构笔记：JSONC 配置、默认模板 + 用户覆盖、WebView 背景等 |
 | [docs/notes/embedded-dsh-capabilities.md](docs/notes/embedded-dsh-capabilities.md) | 内置 DSH 运行时能力盘点 |
 | [docs/reference/](docs/reference/) | RAG 算法 / Cherry Studio / RikkaHub 参考实现 |
-| [release/RELEASE_NOTES_0.2.2.md](release/RELEASE_NOTES_0.2.2.md) | 版本更新记录（最新） |
+| [release/RELEASE_NOTES_0.2.5.md](release/RELEASE_NOTES_0.2.5.md) | 版本更新记录（最新） |
 
 ---
 
