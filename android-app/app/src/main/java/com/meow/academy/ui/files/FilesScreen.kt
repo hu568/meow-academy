@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.outlined.FolderOpen
@@ -28,6 +29,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -156,6 +158,16 @@ fun FilesScreen(
                             ascending = state.sortAscending,
                             onSort = { m, a -> vm.setSortMode(m, a) },
                         )
+                        // 多选开关（排序右边、更多左边）：再点一次退出多选（喵~）
+                        IconButton(
+                            onClick = { if (state.isMultiSelect) vm.exitMultiSelect() else vm.enterMultiSelect() },
+                        ) {
+                            Icon(
+                                Icons.Filled.Checklist,
+                                contentDescription = "多选",
+                                tint = if (state.isMultiSelect) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                            )
+                        }
                         Box {
                             IconButton(onClick = { showMoreMenu = true }) {
                                 Icon(Icons.Filled.MoreVert, contentDescription = "更多")

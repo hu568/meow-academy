@@ -60,6 +60,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -207,7 +208,7 @@ fun formatSize(bytes: Long): String = when {
 fun formatTime(millis: Long): String =
     SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(millis))
 
-/** 列表行：图标 + 名称 + 副标题（大小/时间）+ 多选勾选框 */
+/** 列表行：图标 + 名称 + 副标题（大小/时间）+ 多选勾选框；选中项整行亮起（Windows 多选风格，喵~） */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FileListRow(
@@ -218,9 +219,11 @@ fun FileListRow(
     onLongClick: () -> Unit,
 ) {
     val kind = listKind(entry)
+    // 选中亮起：primaryContainer 底色铺在 ListItem 容器后面（容器本身置透明露出高亮）
     ListItem(
         modifier = Modifier
             .fillMaxWidth()
+            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
             .then(
                 if (multiSelect) {
                     Modifier.clickable { onClick() }
@@ -228,6 +231,7 @@ fun FileListRow(
                     Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
                 },
             ),
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         leadingContent = {
             if (kind == FileKind.IMAGE) {
                 FileThumbnail(path = entry.path, name = entry.name)
@@ -342,18 +346,17 @@ private fun FileGridCell(
     onLongClick: () -> Unit,
 ) {
     val kind = listKind(entry)
+    // 选中亮起：Windows 多选风格高亮底色（与列表行同色），卡片态盖过默认 surfaceContainer（喵~）
+    val containerColor = when {
+        selected -> MaterialTheme.colorScheme.primaryContainer
+        card -> MaterialTheme.colorScheme.surfaceContainer
+        else -> Color.Transparent
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .then(
-                if (card) {
-                    Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(MaterialTheme.colorScheme.surfaceContainer)
-                } else {
-                    Modifier
-                },
-            )
+            .clip(RoundedCornerShape(if (card) 16.dp else 8.dp))
+            .background(containerColor)
             .then(
                 if (multiSelect) {
                     Modifier.clickable { onClick() }
