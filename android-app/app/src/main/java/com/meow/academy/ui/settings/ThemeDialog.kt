@@ -13,6 +13,8 @@ package com.meow.academy.ui.settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -85,7 +87,9 @@ fun ThemeDialog(
         onDismissRequest = onDismiss,
         title = { Text("主题") },
         text = {
-            Column {
+            // 内容可滚动：四档单选 + 色卡 + HEX 输入总高可能超出对话框上限，
+            // 不滚动时 OutlinedTextField 会被垂直压缩、框内文字只显示一半
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 // ── 第一行：使用动态配置开关（与聊天背景对话框一致） ──
                 Row(
                     modifier = Modifier
