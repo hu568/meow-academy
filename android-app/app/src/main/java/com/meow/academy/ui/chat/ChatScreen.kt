@@ -145,6 +145,7 @@ private fun ChatDetailView(
                 if (result != null) {
                     val existing = attachments.firstOrNull { it.path == result.file.absolutePath }
                     if (existing == null) {
+                        quickVm.recordRecent(result.file.absolutePath) // 上传即使用（喵~）
                         val refId = nextAttachmentRefId(attachments, result.file.name)
                         attachments = attachments + PendingAttachment(refId, result.file.name, result.file.absolutePath)
                     }
@@ -159,6 +160,8 @@ private fun ChatDetailView(
     val onToggleAttach: (FileEntry) -> Unit = { file ->
         val existing = attachments.firstOrNull { it.path == file.path }
         if (existing == null) {
+            // 附加即使用：记入「最近使用」，最近模式里置顶（喵~）
+            quickVm.recordRecent(file.path)
             attachments = attachments + PendingAttachment(
                 refId = nextAttachmentRefId(attachments, file.name),
                 displayName = file.name,

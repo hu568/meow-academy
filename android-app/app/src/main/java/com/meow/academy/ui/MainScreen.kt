@@ -180,8 +180,14 @@ fun MainScreen(repository: SettingsRepository) {
                             bottomPad = bottomPad,
                             fileRepository = fileRepository,
                             filesViewModel = filesViewModel,
-                            onOpenFile = { entry -> editingPath = entry.path },
-                            onOpenImage = { entry -> previewPath = entry.path },
+                            onOpenFile = { entry ->
+                                editingPath = entry.path
+                                filesViewModel.recordRecent(entry.path) // 打开即使用，进「最近使用」（喵~）
+                            },
+                            onOpenImage = { entry ->
+                                previewPath = entry.path
+                                filesViewModel.recordRecent(entry.path)
+                            },
                             onCloseEditor = {
                                 editingPath = null
                                 previewPath = null
