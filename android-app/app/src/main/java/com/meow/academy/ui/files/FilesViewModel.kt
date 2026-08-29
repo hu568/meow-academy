@@ -6,10 +6,11 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.meow.academy.data.files.FileEntry
+import com.meow.academy.data.files.FileFavoritesRepository
+import com.meow.academy.data.files.FileRecentRepository
 import com.meow.academy.data.files.FileRepository
 import com.meow.academy.data.files.FileRoot
 import com.meow.academy.data.files.FileSearchResult
-import com.meow.academy.data.files.displayName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -20,13 +21,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-
-/** 快捷栏条目：标签 + 目标路径；root 非空表示该条是根目录快捷项（切根用） */
-data class FileShortcut(
-    val label: String,
-    val path: String,
-    val root: FileRoot? = null,
-)
 
 /** 文件列表排序模式 */
 enum class FileSortMode { DEFAULT, NAME, SIZE, MODIFIED }
@@ -43,7 +37,9 @@ data class FilesUiState(
     val root: FileRoot = FileRoot.INTERNAL,
     val currentPath: String = "",               // 当前目录绝对路径
     val entries: List<FileEntry> = emptyList(),
-    val shortcuts: List<FileShortcut> = emptyList(), // 快捷栏：根 + 当前根一级子目录
+    val favoritePaths: List<String> = emptyList(), // 收藏的绝对路径（收藏顺序，长按菜单判断是否已收藏用）
+    val favorites: List<FileEntry> = emptyList(),  // 收藏抽屉展示条目（文件已删的自动剔除）
+    val recents: List<FileEntry> = emptyList(),    // 最近使用展示条目（最新在前，文件已删的自动剔除）
     val sortMode: FileSortMode = FileSortMode.DEFAULT,
     val sortAscending: Boolean = true,
     val viewMode: FileViewMode = FileViewMode.LIST, // 视图显示方式（右上角更多菜单切换）
@@ -62,12 +58,15 @@ data class FilesUiState(
 /**
  * 📁 文件管理页 ViewModel（M4.2）。
  *
- * 职责：根切换、目录栈、多模式排序、视图切换（列表/宫格/瀑布流）、多选、搜索（防抖 300ms）、增删改查操作调度。
+ * 职责：根切换、目录栈、多模式排序、视图切换（列表/宫格/瀑布流）、多选、搜索（防抖 300ms）、
+ * 收藏（快捷方式抽屉）、增删改查操作调度。
  * 所有文件 IO 均走 [FileRepository]（内部已切 Dispatchers.IO），本类不再自行碰主线程阻塞。
  */
 class FilesViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repository = FileRepository(app)
+    private val favoritesRepository = FileFavoritesRepository(app)
+    private val recentsRepository = FileRecentRepository(app)
 
     private val _uiState = MutableStateFlow(FilesUiState())
     val uiState: StateFlow<FilesUiState> = _uiState.asStateFlow()
@@ -89,6 +88,19 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         refresh()
+
+        // 收藏 / 最近数据流：存储变化 → 解析为展示条目（文件已删的剔除）并同步进 UI 状态
+        viewModelScope.launch {
+            favoritesRepository.favoritePaths.collect { paths ->
+                val resolved = resolveShortcutEntries(paths)
+                _uiState.update { it.copy(favoritePaths = paths, favorites = resolved) }
+            }
+        }
+        viewModelScope.launch {
+            recentsRepository.recentPaths.collect { paths ->
+                _uiState.update { it.copy(recents = resolveShortcutEntries(paths)) }
+            }
+        }
     }
 
     // ── 导航 ──
@@ -143,21 +155,20 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
 
     // ── 列表加载与排序 ──
 
-    /** 重新加载当前目录列表（IO 线程），按当前排序规则排序，同时刷新快捷栏 */
+    /** 重新加载当前目录列表（IO 线程），按当前排序规则排序，同时重算收藏条目存在性 */
     fun refresh() {
         val path = _uiState.value.currentPath
         if (path.isBlank()) return
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
-                val root = _uiState.value.root
-                val (entries, shortcuts) = withContext(Dispatchers.IO) {
-                    repository.listDirectory(path) to computeShortcuts(root)
+                val (entries, favoriteEntries) = withContext(Dispatchers.IO) {
+                    repository.listDirectory(path) to resolveShortcutEntries(favoritesRepository.current())
                 }
-                // 隐藏文件过滤（Linux 习惯：. 开头不显示；快捷栏的隐藏目录在 computeShortcuts 里已滤）
+                // 隐藏文件过滤（Linux 习惯：. 开头不显示）
                 val visible = if (_uiState.value.showHiddenFiles) entries else entries.filterNot { it.name.startsWith('.') }
                 val sorted = sortEntries(visible, _uiState.value.sortMode, _uiState.value.sortAscending)
-                _uiState.update { it.copy(entries = sorted, shortcuts = shortcuts, isLoading = false) }
+                _uiState.update { it.copy(entries = sorted, favorites = favoriteEntries, isLoading = false) }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
@@ -219,21 +230,49 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
         return stack
     }
 
-    /** 拼装快捷栏数据：根目录 + 当前根下的一级子目录（不含隐藏目录） */
-    private fun computeShortcuts(root: FileRoot): List<FileShortcut> {
-        val result = mutableListOf<FileShortcut>()
-        val internalRoot = repository.resolveRoot(FileRoot.INTERNAL)?.absolutePath
-        if (internalRoot != null) result += FileShortcut(FileRoot.INTERNAL.displayName(), internalRoot, FileRoot.INTERNAL)
-        val externalRoot = repository.resolveRoot(FileRoot.EXTERNAL)?.absolutePath
-        if (externalRoot != null) result += FileShortcut(FileRoot.EXTERNAL.displayName(), externalRoot, FileRoot.EXTERNAL)
-        val base = repository.resolveRoot(root)
-        if (base != null) {
-            base.listFiles()
-                ?.filter { it.isDirectory && !it.name.startsWith('.') }
-                ?.sortedBy { it.name.lowercase() }
-                ?.forEach { result += FileShortcut(it.name, it.absolutePath) }
+    /** 收藏/最近路径 → 展示条目（IO 线程探测存在性；文件已删除的条目自动剔除，喵~） */
+    private suspend fun resolveShortcutEntries(paths: List<String>): List<FileEntry> =
+        withContext(Dispatchers.IO) {
+            paths.mapNotNull { path ->
+                val file = File(path)
+                if (file.exists()) {
+                    FileEntry(file.name, path, file.isDirectory, file.length(), file.lastModified())
+                } else {
+                    null
+                }
+            }
         }
-        return result
+
+    // ── 收藏（快捷方式抽屉） ──
+
+    /** 收藏 / 取消收藏（长按菜单、抽屉长按取消共用）；新收藏置顶，收起时优先露出最近收藏（喵~） */
+    fun toggleFavorite(path: String) {
+        viewModelScope.launch {
+            val current = favoritesRepository.current()
+            val wasFavorite = path in current
+            val next = if (wasFavorite) current - path else listOf(path) + current
+            favoritesRepository.setFavorites(next)
+            showSnackbar(if (wasFavorite) "已取消收藏" else "已收藏")
+        }
+    }
+
+    /** 按转换函数更新收藏存储：重命名/移动/删除后同步收藏路径，避免收藏指向失效位置 */
+    private fun updateFavorites(transform: (List<String>) -> List<String>) {
+        viewModelScope.launch {
+            favoritesRepository.setFavorites(transform(favoritesRepository.current()))
+        }
+    }
+
+    // ── 最近使用 ──
+
+    /** 记录一次文件使用（打开/附加），数据流自动刷新「最近使用」列表（喵~） */
+    fun recordRecent(path: String) {
+        viewModelScope.launch { recentsRepository.record(path) }
+    }
+
+    /** 移除单条最近使用记录（「最近使用」长按删除用） */
+    fun removeRecent(path: String) {
+        viewModelScope.launch { recentsRepository.remove(path) }
     }
 
     /** 切排序模式：更新状态并按新规则就地重排当前 entries */
@@ -328,7 +367,7 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 重命名（校验新名） */
+    /** 重命名（校验新名）；收藏中的旧路径同步改指新路径 */
     fun rename(path: String, newName: String) {
         if (!repository.isValidName(newName)) {
             showSnackbar("文件名不合法")
@@ -337,6 +376,8 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val ok = repository.rename(path, newName)
             if (ok) {
+                val renamedPath = File(path).parentFile?.let { File(it, newName).absolutePath } ?: path
+                updateFavorites { list -> list.map { if (it == path) renamedPath else it } }
                 refresh()
                 showSnackbar("已重命名")
             } else {
@@ -345,11 +386,12 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 删除单个文件 / 文件夹 */
+    /** 删除单个文件 / 文件夹；从收藏中同步移除 */
     fun delete(path: String) {
         viewModelScope.launch {
             val ok = repository.delete(path)
             if (ok) {
+                updateFavorites { list -> list - path }
                 refresh()
                 showSnackbar("已删除")
             } else {
@@ -376,7 +418,7 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 移动选中的文件到目标目录，成功后刷新并退出多选 */
+    /** 移动选中的文件到目标目录，成功后刷新并退出多选；收藏中的旧路径同步改指新位置 */
     fun moveSelection(targetDir: String) {
         val selection = _uiState.value.selection.toList()
         if (selection.isEmpty()) return
@@ -384,6 +426,8 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
             val ok = repository.move(selection, targetDir)
             exitMultiSelect()
             if (ok) {
+                val movedTo = selection.associateWith { File(targetDir, File(it).name).absolutePath }
+                updateFavorites { list -> list.map { movedTo[it] ?: it } }
                 refresh()
                 showSnackbar("已移动 ${selection.size} 项")
             } else {
@@ -392,7 +436,7 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 批量删除选中的文件（确认弹框由 UI 层负责），逐项删除后刷新并退出多选 */
+    /** 批量删除选中的文件（确认弹框由 UI 层负责），逐项删除后刷新并退出多选；收藏同步移除 */
     fun deleteSelection() {
         val selection = _uiState.value.selection.toList()
         if (selection.isEmpty()) return
@@ -402,6 +446,7 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
                 if (!repository.delete(path)) failed++
             }
             exitMultiSelect()
+            updateFavorites { list -> list - selection.toSet() }
             refresh()
             showSnackbar(if (failed == 0) "已删除 ${selection.size} 项" else "删除失败 $failed 项")
         }

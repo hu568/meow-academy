@@ -45,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,7 +56,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.meow.academy.data.files.FileEntry
 import com.meow.academy.data.files.FileRepository
 import com.meow.academy.data.files.FileSearchResult
-import com.meow.academy.data.files.displayName
 import com.meow.academy.ui.components.AppTopBar
 import com.meow.academy.ui.components.EmptyState
 import kotlinx.coroutines.launch
@@ -93,6 +93,8 @@ fun FilesScreen(
     var searchOpen by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var fabMenuExpanded by remember { mutableStateOf(false) }
+    // 收藏抽屉展开态（切 tab / 旋转后原地恢复）
+    var drawerExpanded by rememberSaveable { mutableStateOf(false) }
 
     // SAF 多选导入到当前目录
     val importLauncher = rememberLauncherForActivityResult(
@@ -120,6 +122,16 @@ fun FilesScreen(
 
     val searchActive = searchOpen || state.isSearching
 
+    // 打开单个文件：图片浮层 / 统一编辑器 / 超大转终端 / 二进制提示（列表点击与收藏抽屉共用，喵~）
+    val openFileEntry: (FileEntry) -> Unit = { entry ->
+        when (openKind(File(entry.path), repository)) {
+            FileKind.IMAGE -> onOpenImage(entry)
+            FileKind.TEXT, FileKind.MARKDOWN, FileKind.HTML -> onOpenFile(entry)
+            FileKind.LARGE_TEXT -> scope.launch { snackbarHostState.showSnackbar("文件过大，请用终端打开") }
+            else -> scope.launch { snackbarHostState.showSnackbar("无法预览（二进制或未知格式）") }
+        }
+    }
+
     // 条目点击 / 长按：列表 / 宫格 / 瀑布流三种视图共用同一套打开与多选逻辑（喵~）
     val onEntryClick: (FileEntry) -> Unit = { entry ->
         if (state.isMultiSelect) {
@@ -127,12 +139,7 @@ fun FilesScreen(
         } else if (entry.isDirectory) {
             vm.onNavigatedTo(entry.path)
         } else {
-            when (openKind(File(entry.path), repository)) {
-                FileKind.IMAGE -> onOpenImage(entry)
-                FileKind.TEXT, FileKind.MARKDOWN, FileKind.HTML -> onOpenFile(entry)
-                FileKind.LARGE_TEXT -> scope.launch { snackbarHostState.showSnackbar("文件过大，请用终端打开") }
-                else -> scope.launch { snackbarHostState.showSnackbar("无法预览（二进制或未知格式）") }
-            }
+            openFileEntry(entry)
         }
     }
     val onEntryLongClick: (FileEntry) -> Unit = { entry ->
@@ -228,13 +235,22 @@ fun FilesScreen(
                     },
                     isNavigable = remember(repository) { { p -> repository.isWithinRoot(p) } },
                 )
-                ShortcutBar(
-                    shortcuts = state.shortcuts,
+                // 收藏抽屉（替代原快捷栏）：收起显示最近 4 个收藏，下拉展开全部（含根目录切换）
+                FavoritesDrawer(
+                    favorites = state.favorites,
+                    expanded = drawerExpanded,
+                    externalRootAvailable = state.externalAvailable,
                     currentPath = state.currentPath,
-                    onNavigate = { shortcut ->
-                        if (shortcut.root != null) vm.switchRoot(shortcut.root)
-                        else vm.navigateToPath(shortcut.path)
+                    onExpandChange = { drawerExpanded = it },
+                    onOpenFavorite = { favorite ->
+                        if (favorite.isDirectory) {
+                            vm.navigateToPath(favorite.path)
+                        } else {
+                            openFileEntry(favorite)
+                        }
                     },
+                    onRemoveFavorite = { favorite -> vm.toggleFavorite(favorite.path) },
+                    onOpenRoot = { vm.switchRoot(it) },
                 )
             }
 
@@ -351,6 +367,15 @@ fun FilesScreen(
             title = { Text(target.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             text = {
                 androidx.compose.foundation.layout.Column {
+                    TextButton(onClick = {
+                        menuEntry = null
+                        vm.toggleFavorite(target.path)
+                    }, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            if (target.path in state.favoritePaths) "取消收藏" else "收藏",
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                     TextButton(onClick = {
                         menuEntry = null
                         vm.enterMultiSelect()

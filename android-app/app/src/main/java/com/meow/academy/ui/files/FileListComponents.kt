@@ -54,8 +54,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -217,6 +215,7 @@ fun FileListRow(
     selected: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    subtitle: String? = null, // 覆盖默认「大小 · 时间」副标题（快捷面板最近/收藏显示相对路径用，喵~）
 ) {
     val kind = listKind(entry)
     // 选中亮起：primaryContainer 底色铺在 ListItem 容器后面（容器本身置透明露出高亮）
@@ -244,7 +243,7 @@ fun FileListRow(
         },
         supportingContent = {
             Text(
-                if (entry.isDirectory) formatTime(entry.lastModified)
+                subtitle ?: if (entry.isDirectory) formatTime(entry.lastModified)
                 else "${formatSize(entry.size)} · ${formatTime(entry.lastModified)}",
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -652,40 +651,6 @@ private fun PathEditField(
                 )
             },
         )
-    }
-}
-
-/**
- * 快捷栏（替代原根目录切换）：根目录 + 当前根下的一级子目录，一键跳转目标文件夹。
- * 横向可滚动；当前所在目录对应的项高亮（喵~）。
- */
-@Composable
-fun ShortcutBar(
-    shortcuts: List<FileShortcut>,
-    currentPath: String,
-    onNavigate: (FileShortcut) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val extras = LocalThemeExtras.current
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        shortcuts.forEach { shortcut ->
-            FilterChip(
-                selected = currentPath == shortcut.path,
-                onClick = { onNavigate(shortcut) },
-                label = { Text(shortcut.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = extras.quickBarSelectedContainer
-                        ?: MaterialTheme.colorScheme.primaryContainer,
-                    selectedLabelColor = extras.quickBarColor ?: MaterialTheme.colorScheme.onPrimaryContainer,
-                ),
-            )
-        }
     }
 }
 
