@@ -30,6 +30,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -117,6 +118,27 @@ fun FilesScreen(
 
     val searchActive = searchOpen || state.isSearching
 
+    // 条目点击 / 长按：列表 / 宫格 / 瀑布流三种视图共用同一套打开与多选逻辑（喵~）
+    val onEntryClick: (FileEntry) -> Unit = { entry ->
+        if (state.isMultiSelect) {
+            vm.toggleSelect(entry.path)
+        } else if (entry.isDirectory) {
+            vm.onNavigatedTo(entry.path)
+        } else {
+            when (openKind(File(entry.path), repository)) {
+                FileKind.IMAGE -> onOpenImage(entry)
+                FileKind.TEXT, FileKind.MARKDOWN, FileKind.HTML -> onOpenFile(entry)
+                FileKind.LARGE_TEXT -> scope.launch { snackbarHostState.showSnackbar("文件过大，请用终端打开") }
+                else -> scope.launch { snackbarHostState.showSnackbar("无法预览（二进制或未知格式）") }
+            }
+        }
+    }
+    val onEntryLongClick: (FileEntry) -> Unit = { entry ->
+        if (!state.isMultiSelect) {
+            menuEntry = entry
+        }
+    }
+
     Scaffold(
         topBar = {
             AppTopBar(
@@ -146,6 +168,8 @@ fun FilesScreen(
                                 onImport = { importLauncher.launch(arrayOf("*/*")) },
                                 showHiddenFiles = state.showHiddenFiles,
                                 onToggleShowHidden = { vm.toggleShowHidden() },
+                                viewMode = state.viewMode,
+                                onSelectViewMode = { vm.setViewMode(it) },
                             )
                         }
                     }
@@ -236,33 +260,36 @@ fun FilesScreen(
                         )
                     }
                     else -> {
-                        LazyColumn(contentPadding = PaddingValues(bottom = 88.dp)) {
-                            items(state.entries, key = { it.path }) { entry ->
-                                FileListRow(
-                                    entry = entry,
-                                    multiSelect = state.isMultiSelect,
-                                    selected = entry.path in state.selection,
-                                    onClick = {
-                                        if (state.isMultiSelect) {
-                                            vm.toggleSelect(entry.path)
-                                        } else if (entry.isDirectory) {
-                                            vm.onNavigatedTo(entry.path)
-                                        } else {
-                                            when (openKind(File(entry.path), repository)) {
-                                                FileKind.IMAGE -> onOpenImage(entry)
-                                                FileKind.TEXT, FileKind.MARKDOWN, FileKind.HTML -> onOpenFile(entry)
-                                                FileKind.LARGE_TEXT -> scope.launch { snackbarHostState.showSnackbar("文件过大，请用终端打开") }
-                                                else -> scope.launch { snackbarHostState.showSnackbar("无法预览（二进制或未知格式）") }
-                                            }
-                                        }
-                                    },
-                                    onLongClick = {
-                                        if (!state.isMultiSelect) {
-                                            menuEntry = entry
-                                        }
-                                    },
-                                )
+                        when (state.viewMode) {
+                            FileViewMode.LIST -> LazyColumn(contentPadding = PaddingValues(bottom = 88.dp)) {
+                                items(state.entries, key = { it.path }) { entry ->
+                                    FileListRow(
+                                        entry = entry,
+                                        multiSelect = state.isMultiSelect,
+                                        selected = entry.path in state.selection,
+                                        onClick = { onEntryClick(entry) },
+                                        onLongClick = { onEntryLongClick(entry) },
+                                    )
+                                }
                             }
+                            FileViewMode.GRID -> FileEntryGrid(
+                                entries = state.entries,
+                                columns = 3,
+                                card = false,
+                                multiSelect = state.isMultiSelect,
+                                selection = state.selection,
+                                onClick = onEntryClick,
+                                onLongClick = onEntryLongClick,
+                            )
+                            FileViewMode.WATERFALL -> FileEntryGrid(
+                                entries = state.entries,
+                                columns = 2,
+                                card = true,
+                                multiSelect = state.isMultiSelect,
+                                selection = state.selection,
+                                onClick = onEntryClick,
+                                onLongClick = onEntryLongClick,
+                            )
                         }
                     }
                 }
@@ -378,7 +405,9 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit, onClose:
 
 /**
  * 「新建/导入」菜单：顶栏更多与右下角 FAB 共用同一组动作。
- * [showHiddenFiles] 非空时（仅顶栏更多传入）追加「显示隐藏文件」开关项（. 开头，Linux 习惯）。
+ * [showHiddenFiles] 非空时（仅顶栏更多传入）追加「显示隐藏文件」开关项（. 开头，Linux 习惯）；
+ * [viewMode] 非空时（仅顶栏更多传入）再追加「查看方式」分组：列表 / 宫格（一行三项）/ 瀑布流（一行两项），
+ * 当前模式用 RadioButton 标出（喵~）。
  */
 @Composable
 private fun NewItemMenu(
@@ -389,6 +418,8 @@ private fun NewItemMenu(
     onImport: () -> Unit,
     showHiddenFiles: Boolean? = null,
     onToggleShowHidden: (() -> Unit)? = null,
+    viewMode: FileViewMode? = null,
+    onSelectViewMode: ((FileViewMode) -> Unit)? = null,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
         DropdownMenuItem(text = { Text("新建文件") }, onClick = { onDismiss(); onNewFile() })
@@ -402,7 +433,29 @@ private fun NewItemMenu(
                 onClick = { onDismiss(); onToggleShowHidden() },
             )
         }
+        if (viewMode != null && onSelectViewMode != null) {
+            HorizontalDivider()
+            ViewModeMenuItem("列表视图", FileViewMode.LIST, viewMode, onSelectViewMode, onDismiss)
+            ViewModeMenuItem("宫格视图", FileViewMode.GRID, viewMode, onSelectViewMode, onDismiss)
+            ViewModeMenuItem("瀑布流视图", FileViewMode.WATERFALL, viewMode, onSelectViewMode, onDismiss)
+        }
     }
+}
+
+/** 查看方式菜单项：名称 + RadioButton 标示当前模式，点击切换并收起菜单 */
+@Composable
+private fun ViewModeMenuItem(
+    label: String,
+    mode: FileViewMode,
+    current: FileViewMode,
+    onSelectViewMode: (FileViewMode) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    DropdownMenuItem(
+        text = { Text(label) },
+        trailingIcon = { RadioButton(selected = current == mode, onClick = null) },
+        onClick = { onDismiss(); onSelectViewMode(mode) },
+    )
 }
 
 /** 搜索结果列表：显示相对路径，点击进入所在目录/文件 */

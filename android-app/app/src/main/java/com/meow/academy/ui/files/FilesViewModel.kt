@@ -31,6 +31,9 @@ data class FileShortcut(
 /** 文件列表排序模式 */
 enum class FileSortMode { DEFAULT, NAME, SIZE, MODIFIED }
 
+/** 文件视图显示方式：列表（一行一项）/ 宫格（一行三项）/ 瀑布流（一行两项卡片）（喵~） */
+enum class FileViewMode { LIST, GRID, WATERFALL }
+
 /**
  * 文件管理页 UI 状态。
  *
@@ -43,6 +46,7 @@ data class FilesUiState(
     val shortcuts: List<FileShortcut> = emptyList(), // 快捷栏：根 + 当前根一级子目录
     val sortMode: FileSortMode = FileSortMode.DEFAULT,
     val sortAscending: Boolean = true,
+    val viewMode: FileViewMode = FileViewMode.LIST, // 视图显示方式（右上角更多菜单切换）
     val showHiddenFiles: Boolean = false,       // 是否显示 . 开头的隐藏文件（Linux 习惯，默认隐藏）
     val isMultiSelect: Boolean = false,
     val selection: Set<String> = emptySet(),    // 已选文件的绝对路径
@@ -58,7 +62,7 @@ data class FilesUiState(
 /**
  * 📁 文件管理页 ViewModel（M4.2）。
  *
- * 职责：根切换、目录栈、多模式排序、多选、搜索（防抖 300ms）、增删改查操作调度。
+ * 职责：根切换、目录栈、多模式排序、视图切换（列表/宫格/瀑布流）、多选、搜索（防抖 300ms）、增删改查操作调度。
  * 所有文件 IO 均走 [FileRepository]（内部已切 Dispatchers.IO），本类不再自行碰主线程阻塞。
  */
 class FilesViewModel(app: Application) : AndroidViewModel(app) {
@@ -248,6 +252,9 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
         _uiState.update { it.copy(showHiddenFiles = !it.showHiddenFiles) }
         refresh()
     }
+
+    /** 切换视图显示方式（列表 / 宫格 / 瀑布流）：只影响展示形态，不动数据 */
+    fun setViewMode(mode: FileViewMode) = _uiState.update { it.copy(viewMode = mode) }
 
     /**
      * 排序：文件夹永远优先（先分组再排序），升/降序只影响组内顺序。

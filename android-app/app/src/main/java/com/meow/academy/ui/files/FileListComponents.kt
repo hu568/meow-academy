@@ -3,18 +3,27 @@ package com.meow.academy.ui.files
 import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -82,6 +91,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.SubcomposeAsyncImage
@@ -244,19 +254,24 @@ fun FileListRow(
     )
 }
 
-/** 图片文件列表缩略图：Coil 按 40dp 采样加载，失败回退图片图标（喵~） */
+/**
+ * 图片文件缩略图：Coil 采样加载，失败回退图片图标（喵~）。
+ * 尺寸与圆角由 [modifier] 决定（默认 40dp 圆角小图给列表行用；网格视图传 fillMaxWidth 覆盖媒体区）。
+ */
 @Composable
-internal fun FileThumbnail(path: String, name: String) {
+internal fun FileThumbnail(
+    path: String,
+    name: String,
+    modifier: Modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)),
+) {
     SubcomposeAsyncImage(
         model = File(path),
         contentDescription = name,
         contentScale = ContentScale.Crop,
-        modifier = Modifier
-            .size(40.dp)
-            .clip(RoundedCornerShape(8.dp)),
+        modifier = modifier,
         loading = {
             Box(
-                modifier = Modifier.size(40.dp),
+                modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
             ) {
                 CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 1.5.dp)
@@ -264,7 +279,7 @@ internal fun FileThumbnail(path: String, name: String) {
         },
         error = {
             Box(
-                modifier = Modifier.size(40.dp),
+                modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -275,6 +290,136 @@ internal fun FileThumbnail(path: String, name: String) {
             }
         },
     )
+}
+
+/**
+ * 宫格 / 瀑布流网格视图：[columns] 一行列数（宫格 3、瀑布流 2），
+ * [card] 为 true 时条目带圆角卡片底（瀑布流样式），false 为宫格扁平样式。
+ * 点击 / 长按 / 多选行为与列表行一致，由调用方注入（喵~）。
+ */
+@Composable
+fun FileEntryGrid(
+    entries: List<FileEntry>,
+    columns: Int,
+    card: Boolean,
+    multiSelect: Boolean,
+    selection: Set<String>,
+    onClick: (FileEntry) -> Unit,
+    onLongClick: (FileEntry) -> Unit,
+) {
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(columns),
+        contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 88.dp),
+        horizontalArrangement = Arrangement.spacedBy(if (card) 10.dp else 2.dp),
+        verticalArrangement = Arrangement.spacedBy(if (card) 10.dp else 2.dp),
+    ) {
+        items(entries, key = { it.path }) { entry ->
+            FileGridCell(
+                entry = entry,
+                card = card,
+                multiSelect = multiSelect,
+                selected = entry.path in selection,
+                onClick = { onClick(entry) },
+                onLongClick = { onLongClick(entry) },
+            )
+        }
+    }
+}
+
+/**
+ * 网格单格：媒体区（图片显示缩略图，其余显示类型大图标）+ 名称 + 大小/时间。
+ * [card] 瀑布流卡片样式（圆角底色 + 大图标 + 完整副标题）；false 为宫格扁平紧凑样式。
+ * 多选时媒体区右上角浮勾选框，与列表行的勾选语义一致（喵~）。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FileGridCell(
+    entry: FileEntry,
+    card: Boolean,
+    multiSelect: Boolean,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    val kind = listKind(entry)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (card) {
+                    Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainer)
+                } else {
+                    Modifier
+                },
+            )
+            .then(
+                if (multiSelect) {
+                    Modifier.clickable { onClick() }
+                } else {
+                    Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                },
+            )
+            .padding(
+                horizontal = if (card) 12.dp else 6.dp,
+                vertical = if (card) 12.dp else 8.dp,
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        // 媒体区：固定高度保证同行格子等高对齐（喵~）
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(if (card) 96.dp else 64.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (kind == FileKind.IMAGE) {
+                FileThumbnail(
+                    path = entry.path,
+                    name = entry.name,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(if (card) 12.dp else 8.dp)),
+                )
+            } else {
+                Icon(
+                    fileIcon(kind),
+                    contentDescription = null,
+                    tint = fileColor(kind),
+                    modifier = Modifier.size(if (card) 56.dp else 40.dp),
+                )
+            }
+            if (multiSelect) {
+                Checkbox(
+                    checked = selected,
+                    onCheckedChange = { onClick() },
+                    modifier = Modifier.align(Alignment.TopEnd),
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            entry.name,
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            when {
+                entry.isDirectory -> formatTime(entry.lastModified)
+                card -> "${formatSize(entry.size)} · ${formatTime(entry.lastModified)}"
+                else -> formatSize(entry.size)
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+    }
 }
 
 /** 面包屑分段：label 展示名 + 点击跳转的累计路径 + 是否可点击跳转（可用根外的前缀段仅作展示） */
