@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -36,6 +37,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
@@ -123,15 +125,22 @@ fun SessionDrawer(
     }
 
     ModalDrawerSheet(
-        // 只占约 85% 宽度，右侧留一条聊天页可见；半透明容器露出模糊后的聊天内容（毛玻璃）
+        // 只占约 85% 宽度，右侧留一条聊天页可见；半透明容器露出模糊后的聊天内容（毛玻璃）。
+        // 上下悬浮与右抽屉（DashboardDrawer）对齐：modifier 上垫 statusBarsPadding/
+        // navigationBarsPadding，面板背景不再贴应用边缘——顶部收进状态栏、底部收进系统
+        // 导航栏，上下留出缝隙、圆角露出来；底部另由 ChatScreen 外层 Box 的 bottomPadding
+        // 垫到应用底部导航栏上方（与 DashboardDrawer 外层同款 padding，喵~）
         modifier = Modifier
             .fillMaxWidth(0.85f)
-            .widthIn(max = 340.dp),
+            .widthIn(max = 340.dp)
+            .statusBarsPadding()
+            .navigationBarsPadding(),
+        // 右侧上下圆角显式声明（镜像右抽屉 FusedPanelShape 的 16dp：非贴屏幕边的一侧圆角）
+        drawerShape = RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp),
         drawerContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.80f),
-        // 关闭 ModalDrawerSheet 自带的 systemBars insets（避免底部再叠一层系统导航栏 padding）：
-        // - 面板背景仍铺满整个抽屉区域，上边贴应用边缘、下边由 ChatScreen 外层 Box 的
-        //   bottomPadding 垫到导航栏顶部（上边框贴应用边缘 / 下边框贴导航栏，喵~）
-        // - 内容顶部由内部 Column 单独 statusBarsPadding，标题行与聊天页 TopAppBar 对齐
+        // 关闭 ModalDrawerSheet 自带的 systemBars insets（避免与 modifier 上的 insets padding 叠两层）：
+        // 内容顶部由内部 Column 的 statusBarsPadding 兜底（insets 已在 sheet 上消费，实际为 0，
+        // 保留它是防御性的——若外层 padding 调整，标题行仍与聊天页 TopAppBar 对齐）
         windowInsets = WindowInsets(0, 0, 0, 0),
     ) {
         // 内容容器：仅顶部避开状态栏（标题与聊天页标题对齐），底部不额外垫系统栏
