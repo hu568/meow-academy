@@ -67,16 +67,23 @@ copy_elf_with_deps() {
   done
 }
 
-copy_elf_with_deps "$NODE_BIN" "$RUNTIME/bin/node" node
-# bash 二进制放 lib/bash.bin：Termux 编译的私有 ELF 不能直接 exec（untrusted_app EACCES），
-# 真终端（terminal-host）用 linker64 直接加载它；DSH 的 bash-local/tool-bash spawn ['bash','-c']
-# 走 bin/bash wrapper 脚本（exec → linker64 → lib/bash.bin），绕开直接 exec 私有 ELF 的限制。
+# node / bash 真 ELF 都放 lib/：untrusted_app + targetSdk ≥ 29 的 W^X 限制下，App 域 exec app
+# 数据文件一律 EACCES（私有 ELF 与 shebang wrapper 脚本一视同仁，实测 bad interpreter: Permission
+# denied），须由 linker64 加载。bin/ 下 wrapper 仅供 run-as/Termux 手测域使用（App 域内 PATH 命中
+# node/bash 的实际通道是 launcher 注入的 BASH_FUNC_* 导出函数，见 DshProcessLauncher.kt）；
+# wrapper 用 MEOW_RUNTIME_DIR 定位（launcher 注入的 runtime 绝对路径，分身用户路径也能对上），
+# 保留 $HOME/meow-runtime fallback 供 Termux 侧手工测试。
+copy_elf_with_deps "$NODE_BIN" "$RUNTIME/lib/node.bin" node
 copy_elf_with_deps "$BASH_BIN" "$RUNTIME/lib/bash.bin" bash
 cat > "$RUNTIME/bin/bash" <<'EOF'
 #!/system/bin/sh
-exec /system/bin/linker64 "$HOME/meow-runtime/lib/bash.bin" --norc --noprofile "$@"
+exec /system/bin/linker64 "${MEOW_RUNTIME_DIR:-$HOME/meow-runtime}/lib/bash.bin" --norc --noprofile "$@"
 EOF
-chmod +x "$RUNTIME/bin/bash"
+cat > "$RUNTIME/bin/node" <<'EOF'
+#!/system/bin/sh
+exec /system/bin/linker64 "${MEOW_RUNTIME_DIR:-$HOME/meow-runtime}/lib/node.bin" "$@"
+EOF
+chmod +x "$RUNTIME/bin/bash" "$RUNTIME/bin/node"
 echo "  lib/ 现有 $(ls "$RUNTIME/lib" | grep -c '\.so' || true) 个 .so"
 
 # ── 3. DSH 闭包（PC 端 pnpm deploy 产物：node_modules + dsh/）──

@@ -14,7 +14,8 @@ import java.io.IOException
  * DSH_TERMINAL_SOCKET，两者都不占用 stdio（stdio 已被 PTY 占用）。
  *
  * 关键点：
- *  - node / bash 二进制位于 filesDir/meow-runtime/bin/（自包含，见 build-runtime.sh）；
+ *  - node / bash 真 ELF 位于 filesDir/meow-runtime/lib/（私有 ELF 须经 linker64 加载），
+ *    bin/ 下是 wrapper 脚本（PATH 命中用，经 MEOW_RUNTIME_DIR 定位，见 build-runtime.sh）；
  *  - DSH closure 位于 filesDir/meow-runtime/node_modules/；
  *  - 通过环境变量注入 API Key / HOME / PATH / socket 路径 / 会话与 cwd。
  */
@@ -43,7 +44,7 @@ object DshProcessLauncher {
         RuntimeExtractor.ensureAppDirs(context)
 
         val runtimeDir = RuntimeExtractor.runtimeDir(context)
-        val node = File(runtimeDir, "bin/node")
+        val node = File(runtimeDir, "lib/node.bin")
         val entry = File(runtimeDir, ENTRY_REL)
         if (!node.exists() || !entry.exists()) {
             throw IOException(
@@ -76,7 +77,21 @@ object DshProcessLauncher {
             put("DSH_TERMINAL_SOCKET", terminalSocket)
             put("DSH_JSONRPC_SOCKET", jsonRpcSocket)
             put("DSH_RUNTIME_DIR", runtimeDir.absolutePath)
-            // node 绝对路径（terminal-host 的 launchDsh 用它启动 DSH；linker64 下 process.execPath 会指向 linker64）
+            // bin/node、bin/bash wrapper 经它定位 lib/ 真 ELF（$HOME fallback 供 Termux 手测）
+            put("MEOW_RUNTIME_DIR", runtimeDir.absolutePath)
+            // PATH 命中 node/bash 时走 bash 导出函数（bash 启动自动导入 BASH_FUNC_*）：untrusted_app 域
+            // SELinux 禁 exec app 数据文件，bin/* wrapper 脚本同样 EACCES（实测 bad interpreter:
+            // Permission denied）；函数体不用 exec（会替换当前 shell），fork 子进程跑 linker64 → lib 真 ELF。
+            // PTY bash 与 DSH bash 工具两条链路都经 env 继承拿到（scrub 只滤 KEY/PASSWORD/SECRET/TOKEN 与 DSH_ 前缀）。
+            put(
+                "BASH_FUNC_node%%",
+                "() { /system/bin/linker64 \"\$MEOW_RUNTIME_DIR/lib/node.bin\" \"\$@\"; }",
+            )
+            put(
+                "BASH_FUNC_bash%%",
+                "() { /system/bin/linker64 \"\$MEOW_RUNTIME_DIR/lib/bash.bin\" \"\$@\"; }",
+            )
+            // node 真 ELF 绝对路径（terminal-host 的 launchDsh 用 linker64 加载它启动 DSH；linker64 下 process.execPath 会指向 linker64）
             put("DSH_NODE_BIN", node.absolutePath)
             // bash 二进制绝对路径（terminal-host 用 linker64 加载；bin/bash 是 wrapper 脚本）
             put("DSH_BASH_BIN", runtimeDir.absolutePath + "/lib/bash.bin")

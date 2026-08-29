@@ -16,7 +16,7 @@ import java.util.zip.GZIPInputStream
  * 安全措施：
  *  - 解压到临时目录，完成后原子 rename（避免半解压状态被当成「已就绪」）；
  *  - 校验 tar 条目路径，拒绝 `..` 穿越；
- *  - 解压后对 `bin/node` 显式加可执行位。
+ *  - 解压后对 lib 下的 .bin 与 bin 下的 wrapper 脚本显式加可执行位。
  */
 object RuntimeExtractor {
 
@@ -136,16 +136,16 @@ object RuntimeExtractor {
             }
         }
 
-        // bin/node 加可执行位（Termux 的 node 是动态链接，经 linker64 加载；执行位备用）
-        val nodeBin = File(tmpDir, "bin/node")
-        if (nodeBin.exists()) {
-            nodeBin.setExecutable(true, false)
+        // lib/*.bin（node/bash 真 ELF）加可执行位：经 linker64 加载，执行位备用
+        for (bin in listOf("lib/node.bin", "lib/bash.bin")) {
+            val f = File(tmpDir, bin)
+            if (f.exists()) f.setExecutable(true, false)
         }
-        // bin/bash 是 wrapper 脚本（#!/system/bin/sh），DSH 的 bash 工具 spawn ['bash','-c']
+        // bin/node、bin/bash 是 wrapper 脚本（#!/system/bin/sh），终端/bash 工具按 PATH 命中
         // 时 kernel 要 exec 它，必须带可执行位（否则 EACCES）
-        val bashWrapper = File(tmpDir, "bin/bash")
-        if (bashWrapper.exists()) {
-            bashWrapper.setExecutable(true, false)
+        for (wrapper in listOf("bin/node", "bin/bash")) {
+            val f = File(tmpDir, wrapper)
+            if (f.exists()) f.setExecutable(true, false)
         }
 
         // 原子替换
@@ -165,7 +165,7 @@ object RuntimeExtractor {
     /** 运行时是否已解压就绪，且与当前 assets 的 runtime.bin 版本一致 */
     fun isInstalled(context: Context): Boolean {
         val dir = File(context.filesDir, RUNTIME_DIR)
-        if (!File(dir, "bin/node").exists()
+        if (!File(dir, "lib/node.bin").exists()
             || !File(dir, "node_modules").exists()
             || !File(dir, "dsh/cordis.yml").exists()
         ) return false
