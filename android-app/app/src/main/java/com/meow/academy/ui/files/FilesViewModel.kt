@@ -43,6 +43,7 @@ data class FilesUiState(
     val shortcuts: List<FileShortcut> = emptyList(), // 快捷栏：根 + 当前根一级子目录
     val sortMode: FileSortMode = FileSortMode.DEFAULT,
     val sortAscending: Boolean = true,
+    val showHiddenFiles: Boolean = false,       // 是否显示 . 开头的隐藏文件（Linux 习惯，默认隐藏）
     val isMultiSelect: Boolean = false,
     val selection: Set<String> = emptySet(),    // 已选文件的绝对路径
     val isSearching: Boolean = false,
@@ -149,7 +150,9 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
                 val (entries, shortcuts) = withContext(Dispatchers.IO) {
                     repository.listDirectory(path) to computeShortcuts(root)
                 }
-                val sorted = sortEntries(entries, _uiState.value.sortMode, _uiState.value.sortAscending)
+                // 隐藏文件过滤（Linux 习惯：. 开头不显示；快捷栏的隐藏目录在 computeShortcuts 里已滤）
+                val visible = if (_uiState.value.showHiddenFiles) entries else entries.filterNot { it.name.startsWith('.') }
+                val sorted = sortEntries(visible, _uiState.value.sortMode, _uiState.value.sortAscending)
                 _uiState.update { it.copy(entries = sorted, shortcuts = shortcuts, isLoading = false) }
             } catch (e: Exception) {
                 _uiState.update {
@@ -238,6 +241,12 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
                 entries = sortEntries(it.entries, mode, ascending),
             )
         }
+    }
+
+    /** 切换是否显示隐藏文件（. 开头，Linux 习惯）：更新状态并重新加载当前目录 */
+    fun toggleShowHidden() {
+        _uiState.update { it.copy(showHiddenFiles = !it.showHiddenFiles) }
+        refresh()
     }
 
     /**

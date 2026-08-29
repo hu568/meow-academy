@@ -19,10 +19,12 @@ import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -142,6 +144,8 @@ fun FilesScreen(
                                 onNewFile = { showNewFile = true },
                                 onNewFolder = { showNewFolder = true },
                                 onImport = { importLauncher.launch(arrayOf("*/*")) },
+                                showHiddenFiles = state.showHiddenFiles,
+                                onToggleShowHidden = { vm.toggleShowHidden() },
                             )
                         }
                     }
@@ -372,7 +376,10 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit, onClose:
     )
 }
 
-/** 「新建/导入」菜单：顶栏更多与右下角 FAB 共用同一组动作 */
+/**
+ * 「新建/导入」菜单：顶栏更多与右下角 FAB 共用同一组动作。
+ * [showHiddenFiles] 非空时（仅顶栏更多传入）追加「显示隐藏文件」开关项（. 开头，Linux 习惯）。
+ */
 @Composable
 private fun NewItemMenu(
     expanded: Boolean,
@@ -380,11 +387,21 @@ private fun NewItemMenu(
     onNewFile: () -> Unit,
     onNewFolder: () -> Unit,
     onImport: () -> Unit,
+    showHiddenFiles: Boolean? = null,
+    onToggleShowHidden: (() -> Unit)? = null,
 ) {
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
         DropdownMenuItem(text = { Text("新建文件") }, onClick = { onDismiss(); onNewFile() })
         DropdownMenuItem(text = { Text("新建文件夹") }, onClick = { onDismiss(); onNewFolder() })
         DropdownMenuItem(text = { Text("导入文件") }, onClick = { onDismiss(); onImport() })
+        if (showHiddenFiles != null && onToggleShowHidden != null) {
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text("显示隐藏文件") },
+                trailingIcon = { Checkbox(checked = showHiddenFiles, onCheckedChange = null) },
+                onClick = { onDismiss(); onToggleShowHidden() },
+            )
+        }
     }
 }
 
