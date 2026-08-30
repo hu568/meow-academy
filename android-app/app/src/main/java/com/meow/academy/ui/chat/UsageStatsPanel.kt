@@ -146,11 +146,16 @@ fun UsageStatsPanel(
         // ④ 双环：缓存命中 + 上下文使用量（context 缺失时缓存环独占一行）
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             val cacheHit = cacheHitPercent(s.inputTokens, s.cacheReadTokens, s.cacheWriteTokens)
+            // 有缓存活动时环下给绝对值；全 0 = 端点未返回缓存字段或本会话未命中
+            val cacheSub = if (s.cacheReadTokens > 0 || s.cacheWriteTokens > 0) {
+                "命中 ${formatTokens(s.cacheReadTokens)} · 写入 ${formatTokens(s.cacheWriteTokens)} tok"
+            } else null
             RingCard(
                 modifier = Modifier.weight(1f),
                 percentText = cacheHit ?: "—",
                 label = "缓存命中",
                 progress = cacheHit?.toFloatOrNull()?.div(100f) ?: 0f,
+                sub = cacheSub,
             )
             if (s.context != null) {
                 val used = s.context.usedTokens.toFloat()
@@ -166,7 +171,7 @@ fun UsageStatsPanel(
             }
         }
 
-        // ⑤ Token 用量比例条
+        // ⑤ Token 用量比例条（「输入」为未缓存口径；缓存命中/写入单独列出，不进比例条分母）
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
                 Text("Token 用量", style = MaterialTheme.typography.titleSmall)
@@ -177,8 +182,16 @@ fun UsageStatsPanel(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Text("输入 ${formatTokens(s.inputTokens)} tok", style = MaterialTheme.typography.bodySmall)
+                    Text("未缓存输入 ${formatTokens(s.inputTokens)} tok", style = MaterialTheme.typography.bodySmall)
                     Text("输出 ${formatTokens(s.outputTokens)} tok", style = MaterialTheme.typography.bodySmall)
+                }
+                if (s.cacheReadTokens > 0 || s.cacheWriteTokens > 0) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "缓存命中 ${formatTokens(s.cacheReadTokens)} · 缓存写入 ${formatTokens(s.cacheWriteTokens)} tok",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
                 Spacer(Modifier.height(6.dp))
                 LinearProgressIndicator(

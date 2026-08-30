@@ -8,7 +8,10 @@ package com.meow.academy.data.model
  * result（value.providers.<name>）解析出各自的视图数据。
  */
 
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -21,6 +24,8 @@ data class ProviderProfile(
     /** DSH 侧凭据引用（如 MEOW_OPENAI_API_KEY），用于判断是否已有 credential 引用；不承载明文 */
     val apiKeyEnv: String? = null,
     val models: List<ModelProfile> = emptyList(),
+    /** 思考参数方言（compat.thinkingFormat，如 qwen/zai/deepseek）；null=自动，交运行时探测 */
+    val thinkingFormat: String? = null,
 )
 
 /**
@@ -43,6 +48,12 @@ data class ModelProfile(
     val maxTokens: Int? = null,
     /** 模型接受的输入模态（text / image）；null=未知，非空且不含 image=明确不支持图片 */
     val input: List<String>? = null,
+    /**
+     * 思考档位声明（key=档位，value=wire 拼写；off 等不发参数的档位 value=null）。
+     * null=不声明，模型按无思考能力处理（聊天页思考按钮禁用）；
+     * 非空=声明可用档位，聊天页按此动态渲染思考强度下拉。
+     */
+    val reasoningEfforts: Map<String, String?>? = null,
 ) {
     /** 是否支持图片输入（未知时返回 true，让发送端尝试后由后端裁决） */
     val supportsImage: Boolean get() = input?.contains("image") ?: true
@@ -121,7 +132,7 @@ fun buildProviderDirectory(
 
 /**
  * 解析 settingsDescribe("llm-pi-ai") 的 result 为 provider 名 → [ProviderProfile]。
- * result 结构：namespaces[].value.providers.<name> = { displayName, api, baseURL, models[] }。
+ * result 结构：namespaces[].value.providers.<name> = { displayName, api, baseURL, compat?, models[] }。
  */
 fun parseCatalogProfiles(result: JsonObject?): Map<String, ProviderProfile> {
     if (result == null) return emptyMap()
@@ -141,6 +152,7 @@ fun parseCatalogProfiles(result: JsonObject?): Map<String, ProviderProfile> {
                 contextWindow = mo["contextWindow"]?.jsonPrimitive?.content?.toIntOrNull(),
                 maxTokens = mo["maxTokens"]?.jsonPrimitive?.content?.toIntOrNull(),
                 input = mo["input"]?.jsonArray?.mapNotNull { it.jsonPrimitive.content },
+                reasoningEfforts = parseReasoningEfforts(mo["reasoningEfforts"]),
             )
         } ?: emptyList()
         map[name] = ProviderProfile(
@@ -149,7 +161,18 @@ fun parseCatalogProfiles(result: JsonObject?): Map<String, ProviderProfile> {
             baseURL = p["baseURL"]?.jsonPrimitive?.content,
             apiKeyEnv = p["apiKeyEnv"]?.jsonPrimitive?.content,
             models = models,
+            thinkingFormat = p["compat"]?.jsonObject?.get("thinkingFormat")?.jsonPrimitive?.content,
         )
     }
     return map
+}
+
+/** reasoningEfforts dict → Map<档位, wire 拼写>（off 等档位 value 为 JSON null；畸形条目跳过） */
+private fun parseReasoningEfforts(element: JsonElement?): Map<String, String?>? {
+    val obj = element as? JsonObject ?: return null
+    return buildMap {
+        obj.forEach { (level, v) ->
+            put(level, if (v is JsonNull) null else (v as? JsonPrimitive)?.content)
+        }
+    }
 }

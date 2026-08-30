@@ -113,6 +113,7 @@ private fun ChatDetailView(
     val isGenerating by vm.isGenerating.collectAsState()
     val llmModel by vm.llmModel.collectAsState()
     val reasoningEffort by vm.reasoningEffort.collectAsState()
+    val supportedEfforts by vm.supportedEfforts.collectAsState()
     val webSearchEnabled by vm.webSearchEnabled.collectAsState()
     val providers by vm.providers.collectAsState()
     val availableModels by vm.availableModels.collectAsState()
@@ -407,6 +408,7 @@ private fun ChatDetailView(
                             isGenerating = isGenerating,
                             pendingCount = pendingCount,
                             reasoningEffort = reasoningEffort,
+                            supportedEfforts = supportedEfforts,
                             webSearchEnabled = webSearchEnabled,
                             attachedMode = attachedMode,
                             hasSession = currentId != null,
@@ -456,8 +458,6 @@ private fun ChatDetailView(
                                 }
                             },
                     ) {
-                        // 上方悬浮栏（§5.5）：todo / subagent 两态；两态都无数据 → 整条不渲染
-                        ChatStatusBar(todos = todoState, subagentRuns = subagentRuns)
                         Box(modifier = Modifier.weight(1f)) {
                         if (messages.isEmpty() && streaming == null) {
                             Box(
@@ -521,6 +521,13 @@ private fun ChatDetailView(
                                 )
                             }
                         }
+                        // 上方悬浮栏（§5.5）：浮在消息列表上层（消息从面板下方透过），
+                        // todo / subagent 两态；两态都无数据 → 整条不渲染
+                        ChatStatusBar(
+                            todos = todoState,
+                            subagentRuns = subagentRuns,
+                            modifier = Modifier.align(Alignment.TopCenter),
+                        )
                         }
                     }
                 }

@@ -192,13 +192,17 @@ async function composeAgent(presetId) {
 
 ## 7. 下一步行动（先讨论定案，计划文档另立）
 
-- [ ] 立细化计划文档（对齐 plan-phase1 格式，按 §5 A-F 拆任务）
-- [ ] manifest 加包 + pnpm-workspace/lockfile importer → 重打闭包 → 实测体积
-- [ ] `meow-standard` / `meow-cordis` / `meow-minimal` / `meow-code` 四个 preset 编写 + 两个 skill 中文化改写
-- [ ] meow-jsonrpc `composeAgent` 移植 + presets/list / session/setPreset + 错误映射
-- [ ] 确认 DshProcessLauncher 的 DSH_HOME 注入
-- [ ] App 侧模式管理 UI + 会话创建参数 + 错误呈现
-- [ ] 真机验收清单（§5 F）
+> 2026-08-30 晚回填：标准模式随 0.2.6 落地（`plan-standard-mode.md`）；创造模式同日晚随 0.2.6 落地
+> （`plan-creative-mode.md`，Web 前端砍掉——host-only 全程无审批，§2.2 的审批通道不再需要）；
+> PTC（§8）/极简（§10）仍为占位待后续。细化计划未按 §5 A-F 拆任务，按喵仓惯例立独立 plan 文档。
+
+- [x] 立细化计划文档（→ `plan/plan-standard-mode.md` + `plan/plan-creative-mode.md`，未对齐 plan-phase1 格式）
+- [x] manifest 加包 + pnpm-workspace/lockfile importer → 重打闭包 → 实测体积（标准=0002 patch；创造=0004 patch：tool-cordis + cordis-host-runner）
+- [x] ~~四个 preset~~ → `meow-standard`（0.2.6）与 `meow-cordis`（0.2.6 晚，两份 skill 中文化魔改：路径/deny/无沙箱无审批/外观路由 appconfig/工具名对齐 baseline）；`meow-minimal` / `meow-code` 仍占位
+- [x] meow-jsonrpc `composeAgent` 移植 + presets/list / 错误映射（0.2.6 完成；session/setPreset 演进为 prompt 携带 presetId + session/command）
+- [x] 确认 DshProcessLauncher 的 DSH_HOME 注入（0.2.6 起显式注入，另注入 DSH_FILES_DIR）
+- [x] App 侧模式管理 UI + 会话创建参数 + 错误呈现（0.2.6 完成）
+- [ ] 真机验收清单（§5 F）——标准部分已过；创造部分待验收（plan-creative-mode §四）
 
 ## 8. PTC 模式评估（2026-08-30 追加）
 

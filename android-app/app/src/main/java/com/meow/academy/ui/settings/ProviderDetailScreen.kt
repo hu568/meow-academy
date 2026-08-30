@@ -66,6 +66,8 @@ fun ProviderDetailScreen(
     var baseURL by remember(provider) { mutableStateOf(existing?.baseURL ?: item?.baseURL ?: "") }
     var apiKey by remember(provider) { mutableStateOf(savedApiKeys[provider] ?: "") }
     var models by remember(provider) { mutableStateOf<MutableList<ModelProfile>>(existing?.models?.toMutableList() ?: mutableListOf()) }
+    // 思考参数方言（compat.thinkingFormat）；空串 = 自动，交运行时按端点探测
+    var thinkingFormat by remember(provider) { mutableStateOf(existing?.thinkingFormat ?: "") }
 
     // DataStore 异步加载可能晚于首帧：已保存的 Key 到达后补填（用户已手动输入时不覆盖）
     LaunchedEffect(provider, savedApiKeys[provider]) {
@@ -98,7 +100,7 @@ fun ProviderDetailScreen(
         models = next.toMutableList()
         val key = routeKey()
         scope.launch {
-            val err = vm.saveModels(key, next.map { LlmModelInput(it.id, it.name, it.contextWindow, it.maxTokens, it.input) })
+            val err = vm.saveModels(key, next.map { it.toInput() })
             if (err != null) snackbar.showSnackbar("模型保存失败：" + err)
         }
     }
@@ -124,8 +126,9 @@ fun ProviderDetailScreen(
                 displayName = displayName,
                 baseURL = baseURL,
                 api = "openai-completions",
-                models = models.map { LlmModelInput(it.id, it.name, it.contextWindow, it.maxTokens, it.input) },
+                models = models.map { it.toInput() },
                 apiKey = apiKey,
+                thinkingFormat = thinkingFormat,
             )
             busy = false
             if (err == null) {
@@ -173,6 +176,8 @@ fun ProviderDetailScreen(
                     onBaseURL = { baseURL = it },
                     apiKey = apiKey,
                     onApiKey = { apiKey = it },
+                    thinkingFormat = thinkingFormat,
+                    onThinkingFormat = { thinkingFormat = it },
                     enabled = enabled,
                     onToggle = { vm.toggleDisabled(provider, !it) },
                     onSave = { doSave() },
@@ -272,3 +277,13 @@ fun ProviderDetailScreen(
         )
     }
 }
+
+/** ModelProfile → RPC 提交条目（含思考档位声明） */
+private fun ModelProfile.toInput(): LlmModelInput = LlmModelInput(
+    id = id,
+    name = name,
+    contextWindow = contextWindow,
+    maxTokens = maxTokens,
+    input = input,
+    reasoningEfforts = reasoningEfforts,
+)

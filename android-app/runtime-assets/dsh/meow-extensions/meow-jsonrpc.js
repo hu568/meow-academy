@@ -18,6 +18,9 @@
  *   - presets/list           {}                     → Agent 预设名单（自动扫描接口，§三.1）
  *   - presets/read           {id}                   → 读预设组合全文（§三.2）
  *   - presets/delete         {id}                   → 删用户预设（trust=user 才可删，§三.3）
+ *   - prompt 变量 soul/soul_path                     → 灵魂注入：每次组装提示词时实时读
+ *       files/.agents/memory/SOUL.md（mtime 缓存），基座 persona 经 {{soul}}/{{soul_path}}
+ *       引用；人物设定与 Agent 预设分离（plan-soul.md）
  *
  * 错误通道：预设/命令类错误以 MeowRpcError 抛出，经 MeowJsonRpcTransport 序列化为
  * 带 code（-32001..-32005）与 data 的 JSON-RPC error（官方 transport 只透传 message）。
@@ -28,6 +31,7 @@
 
 import { createServer } from 'node:net'
 import { randomUUID } from 'node:crypto'
+import { readFileSync, statSync } from 'node:fs'
 import { JsonRpcLineTransport } from '@deepseek-ai/dsh-sdk-protocol'
 import { HarnessSdkJsonRpcServer } from '@deepseek-ai/dsh-sdk-jsonrpc-server'
 import { SessionId } from '@deepseek-ai/dsh-session'
@@ -41,8 +45,8 @@ import z from '@deepseek-ai/schemastery'
 
 export const name = 'meow-jsonrpc'
 
-/** 需要 agents（cancel/官方 server 建会话）与 shell（终端命令）两个服务 */
-export const inject = ['agents', 'shell']
+/** 需要 agents（cancel/官方 server 建会话）、shell（终端命令）与 systemPrompt（灵魂变量注册，apply 等它就绪才跑）三个服务 */
+export const inject = ['agents', 'shell', 'systemPrompt']
 
 /** 插件配置：全部可选，缺省值即喵仓部署形态 */
 export const Config = z.object({
@@ -640,7 +644,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     return { providers }
   }
 
-  /** llm/models：某 provider 的模型目录 */
+  /** llm/models：某 provider 的模型目录（逐模型附 reasoning 元数据，供聊天页动态渲染思考档位） */
   async listModels(params) {
     const provider = String(params.provider ?? '')
     if (provider === '') throw new Error('llm/models: provider is required')
@@ -648,11 +652,27 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     if (llm === undefined) throw new Error('llm service unavailable')
     const models = await llm.listModels(provider)
     return {
-      models: models.map((m) => ({
-        id: m.id,
-        name: m.name,
-        ...(m.description === undefined ? {} : { description: m.description }),
-        ...(m.inputModalities === undefined ? {} : { inputModalities: [...m.inputModalities] }),
+      models: await Promise.all(models.map(async (m) => {
+        // resolveModelInfo 是适配器本地查表；个别模型解析失败（目录与路由不同步等）只丢 reasoning 不影响条目
+        let reasoning
+        try {
+          const resolved = await llm.resolveModelInfo(provider, m.id)
+          if (resolved?.reasoning !== undefined) {
+            reasoning = {
+              efforts: resolved.reasoning.efforts.map((entry) => String(entry.id)),
+              ...(resolved.reasoning.defaultEffort === undefined
+                ? {}
+                : { defaultEffort: String(resolved.reasoning.defaultEffort) }),
+            }
+          }
+        } catch {}
+        return {
+          id: m.id,
+          name: m.name,
+          ...(m.description === undefined ? {} : { description: m.description }),
+          ...(m.inputModalities === undefined ? {} : { inputModalities: [...m.inputModalities] }),
+          ...(reasoning === undefined ? {} : { reasoning }),
+        }
       })),
     }
   }
@@ -732,6 +752,10 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     if (params.baseURL !== undefined && params.baseURL !== '') profile.baseURL = String(params.baseURL)
     if (params.api !== undefined && params.api !== '') profile.api = String(params.api)
     if (params.models !== undefined) profile.models = params.models
+    // compat（思考参数方言 thinkingFormat 等）随 profile 整体 set：
+    // 不传 = 清除交回 pi-ai detectCompat 自动探测，与 UI 的「自动」档语义一致
+    if (params.compat !== undefined && params.compat !== null && typeof params.compat === 'object'
+      && !Array.isArray(params.compat)) profile.compat = params.compat
 
     const expectedRevision = params.expectedRevision !== undefined ? Number(params.expectedRevision) : undefined
     await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', provider], value: profile }], expectedRevision)
@@ -1251,6 +1275,28 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
 export function apply(ctx, config) {
   const resolved = config
   const exit = (code) => process.exit(code)
+
+  // ── 灵魂注入（plan-soul.md）───────────────────────────────────────────────
+  // 人物设定与 Agent 预设分离：SOUL.md 是灵魂的唯一定义处，这里注册成全局 prompt
+  // 变量，基座 persona 经 {{soul}}/{{soul_path}} 引用。provider 每次提示词组装重估
+  // （mtime 缓存避免重复读盘），AI/用户改完 SOUL.md 下一条消息即生效；文件缺失或
+  // 不可读 → 空灵魂（纯净模式，persona 剩环境说明）。变量必须无条件注册：persona
+  // 的 {{soul}} 引用是严格插值，缺变量会让所有会话组装报错。
+  const soulPath = (process.env.DSH_FILES_DIR ?? process.cwd()) + '/.agents/memory/SOUL.md'
+  let soulCache = { mtimeMs: Number.NaN, text: '' }
+  // 变量名只能小写（system-prompt 的 VARIABLE_NAME = /^[a-z][a-z0-9_]*$/），大写会炸严格插值
+  ctx.systemPrompt.variable('soul_path', () => soulPath)
+  ctx.systemPrompt.variable('soul', () => {
+    try {
+      const mtimeMs = statSync(soulPath).mtimeMs
+      if (mtimeMs !== soulCache.mtimeMs) {
+        soulCache = { mtimeMs, text: readFileSync(soulPath, 'utf8').trim() }
+      }
+      return soulCache.text
+    } catch {
+      return ''
+    }
+  })
 
   let exitTask
   const disposeAndExit = (transport) => {

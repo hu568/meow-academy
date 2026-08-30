@@ -1,0 +1,124 @@
+# meow-cordis —— 喵仓「创造模式」Agent 预设（plan-creative-mode，0.2.6）。
+#
+# 本文件是 AGENT-PLANE 组合：meow-standard 全量 + 自指 Cordis 工具集 + 两份教学技能，
+# 存在意义 = 让 agent 能编写另一个 agent：读运行时（cordis_inspect_*）、挂载模型写的
+# 动态插件（cordis_define/run）、创作可复用的 Agent 预设（roster + 用户预设根）。
+# 相对官方 cordis 预设的魔改全部沉淀在 skills/ 两份中文技能与本头注释（沙箱审批流程
+# 删除、Client 半边删除、路径改喵仓部署形态、工具名对齐 baseline）。
+#
+# TRUST：本工具集对活运行时求值模型写的 JavaScript，写出的组合会成为其它会话挂载的
+# preset —— 把本预设上的会话当 shell 权限对待（tool-cordis 自带提示词同此声明）。
+#
+# 两平面纪律（模型教育的载体 = skills/ 两份技能 + tool-cordis 自带提示词）：
+#   - HOST 组合（runtime-assets/dsh/cordis.yml）：注册表/服务本体、持久化、模型路由 ——
+#     预设不可动；本部署该文件由 APK 播种，对模型只读不可写。
+#   - AGENT PRESET：单个会话贡献给注册表的东西（工具行、prompt 节、压缩策略）。
+#
+# 喵仓路径纪律（与 config-defaults/appconfig 双目录同构，AI 学一次就通用）：
+#   - 系统预设 = filesDir/dsh-presets/（APK 播种；fs-local deny 读写都拒 —— AI 访问
+#     一律走 roster 服务的 list/read/copy，别用文件工具直接碰）；
+#   - 用户预设 = ${DSH_HOME}/.agent-presets/<id>/（可读可写可删，创作的落点）。
+#
+# 裁剪项（在 meow-standard 之上只加不减；同源纪律见 meow-standard 头注释）：
+#   - 不带 persona 行（plan-soul：灵魂唯一定义在 .agents/memory/SOUL.md，经基座
+#     {{soul}} 注入，换预设不换人）；本模式的行为纪律全在 skills/ 两份技能里。
+#   - 上游 cordis 的 tool-fs-search / tool-pwsh / workflow 全家 / tool-subagent-fork /
+#     agent-instructions 照 meow-standard 口径继续裁（fs-search 无 rg 二进制、pwsh 无
+#     PowerShell、workflow worker_threads 未真机验证、fork 驱动未验证、环境文案在基座）。
+
+# ── 规划模式（与 meow-standard 一致）────────────────────────────────────────
+- id: planning
+  name: cordis:group
+  group: true
+  isolate:
+    planMode: true
+  config:
+    - id: plan-mode
+      name: '@deepseek-ai/dsh-plan-mode'
+      config:
+        section: |
+              You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+
+              Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
+
+              The tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed to keep the tool catalog unchanged. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs in exit_plan_mode.
+
+              Resolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or material ambiguity that inspection cannot answer. Do not ask the user where code lives or how current behavior works when you can find out.
+
+              Make the plan decision-complete: state the goal and success criteria; group implementation changes by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes, tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed enough that another engineer can implement it without making design decisions.
+
+              When ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Do not paste the final plan as a plain reply or ask "should I proceed?" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.
+
+# ── 目标（goal）与后台任务（jobs）──────────────────────────────────────────
+# 只挂模型面工具：goals/jobs 注册表与驱动都在基座（同 meow-standard）。
+- id: tool-goal
+  name: '@deepseek-ai/dsh-tool-goal'
+
+- id: tool-jobs
+  name: '@deepseek-ai/dsh-tool-jobs'
+
+# ── 技能（skills）───────────────────────────────────────────────────────────
+# 与 meow-standard 的唯一差别：customSkillDirs 把本预设自带的 skills/ 目录（两份创造
+# 教学）注册进技能发现根 —— baseUrl 是组合文件所在目录，roster copy() 整目录复制后
+# 技能随预设副本走（上游 cordis 同款机制）。读取走 node:fs，不受 fs-local deny 影响。
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+  config:
+    customSkillDirs:
+      - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"
+
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+
+# ── 子代理委派（与 meow-standard 一致：spawn 三件套，无 fork/codex/claude-code）──
+- id: tool-subagent
+  name: '@deepseek-ai/dsh-tool-subagent'
+  config:
+    provider: spawn
+    toolName: subagent
+    backgroundMode: continuable
+
+- id: tool-subagent-control
+  name: '@deepseek-ai/dsh-tool-subagent-control'
+
+- id: tool-subagent-list-agents
+  name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+
+# ── 问答（与 meow-standard 一致：经基座 userQuestions 接缝落 App 问答卡）──────
+- id: tool-ask-user
+  name: '@deepseek-ai/dsh-tool-ask-user'
+
+# ── 压缩（compaction，与 meow-standard 同参数同结构）────────────────────────
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+      config:
+        thresholdRatio: 0.8
+        retainRatio: 0.16
+        maxTokens: 8192
+        compactionRetries: 1
+
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'
+
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 8192
+        headChars: 4096
+        tailChars: 1024
+
+# ── 自指工具集（本预设的增量本体）───────────────────────────────────────────
+# 读运行时（inspect_list/query/self）、定义/激活/停止/卸载模型写的动态插件
+# （define/run/stop/undefine）、@pluginId 引用注入。本部署无 Client 半边：插件只写
+# code.host，cordis_run 同步激活、无审批流（部署适配段在 tool-cordis 自带提示词顶部，
+# 闭包 patch 0004）。服务（dynamicCordisRunner/cordisInspect）在基座 host 平面的
+# cordis-host-runner 行。工具是信任边界不是沙箱 —— 见本文件头 TRUST。
+- id: tool-cordis
+  name: '@deepseek-ai/dsh-tool-cordis'

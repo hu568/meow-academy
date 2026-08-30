@@ -36,9 +36,11 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 
 /**
  * 模型管理页 ViewModel：provider 列表（内置 + 常见 + 自定义）+ profile 读写。
@@ -221,6 +223,10 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 保存 provider（写 credential + profile；返回错误信息，成功为 null） */
+    /**
+     * 保存 provider（配置页整体保存；models 携带各模型的思考档位声明）。
+     * thinkingFormat 非空时组装 compat 下发（思考参数方言），空=不传（meow-jsonrpc 整体 set 语义 = 清除交回自动探测）。
+     */
     suspend fun saveProvider(
         provider: String,
         displayName: String,
@@ -228,8 +234,12 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
         api: String,
         models: List<LlmModelInput>,
         apiKey: String,
+        thinkingFormat: String? = null,
     ): String? {
         val c = client ?: return "DSH 运行时未启动"
+        val compat = thinkingFormat?.takeIf { it.isNotBlank() }?.let { format ->
+            buildJsonObject { put("thinkingFormat", format) }
+        }
         val resp = c.request(
             "settings/setProvider",
             DshParams.settingsSetProvider(
@@ -239,6 +249,7 @@ class ModelManageViewModel(app: Application) : AndroidViewModel(app) {
                 api = api.ifBlank { null },
                 models = models,
                 apiKey = apiKey.ifBlank { null },
+                compat = compat,
             ),
             timeoutMs = 20_000,
         )

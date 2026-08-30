@@ -1,0 +1,95 @@
+From 67392624a393427810cd847de27fa381ef4b4f33 Mon Sep 17 00:00:00 2001
+From: meow <meow@localhost>
+Date: Sun, 30 Aug 2026 22:12:12 +0800
+Subject: [PATCH] =?UTF-8?q?=E2=9C=A8=20feat(meow):=20creative-mode=20closu?=
+ =?UTF-8?q?re=20support=20=E2=80=94=20tool-cordis=20+=20host-runner=20+=20?=
+ =?UTF-8?q?headless=20prompt?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+闭包补创造模式两包：@deepseek-ai/dsh-tool-cordis（自指工具集 cordis_inspect_list/query/self + define/run/stop/undefine + @pluginId 注入）与 @deepseek-ai/dsh-cordis-host-runner（dynamicCordisRunner/cordisInspect 服务，host 平面单例，host-only 包 run() 走 index.ts:270 直激活分支不经审批）。两者 peer 依赖全在既有清单，零新外部依赖（zod@4/schemastery 随传递依赖进闭包）。
+
+tool-cordis 的 CORDIS_SYSTEM_PROMPT 顶部附加 headless 部署适配段（additive，原文不动、顶部覆盖语义）：喵仓安卓无浏览器 Client 页面 → 只写 code.host、不注册 Slots/主题/Tool 卡片；host-only 包 cordis_run 同步激活、awaiting-approval 永不出现、后文审批/浏览器流程指引全部不适用；界面/外观/渲染诉求路由 appconfig/*.jsonc 或工作区 HTML 文件；临时能力=动态插件、可复用会话模式=agent-presets 用户根（editing-cordis-compositions 技能）。
+---
+ deploy/meow-runtime/package.json              |  4 +++-
+ packages/extensions/tool-cordis/src/prompt.ts | 11 ++++++++++-
+ pnpm-lock.yaml                                |  6 ++++++
+ 3 files changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/deploy/meow-runtime/package.json b/deploy/meow-runtime/package.json
+index 2e0555da68..8cee55821b 100755
+--- a/deploy/meow-runtime/package.json
++++ b/deploy/meow-runtime/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "meow-academy-dsh-runtime",
+-  "description": "喵仓（meow-academy）安卓 App 内置 DSH jsonrpc 运行时的依赖清单：以官方 python/sdk-runtime 闭包为基，剔除 ACP/subagent 驱动/持久终端(node-pty)/sandbox 原生模块(landlock)/query/lsp/mcp 等；含 SQLite 会话持久化与 DeepSeek web 搜索。",
++  "description": "喵仓（meow-academy）安卓 App 内置 DSH jsonrpc 运行时的依赖清单：以官方 python/sdk-runtime 闭包为基，剔除 ACP/subagent 驱动/持久终端(node-pty)/sandbox 原生模块(landlock)/query/lsp/mcp 等；含 SQLite 会话持久化、DeepSeek web 搜索与创造模式自指工具集（tool-cordis + cordis-host-runner，0.2.6）。",
+   "version": "0.0.1",
+   "private": true,
+   "type": "module",
+@@ -28,6 +28,7 @@
+     "@deepseek-ai/dsh-command-compact": "workspace:^",
+     "@deepseek-ai/dsh-command-goal": "workspace:^",
+     "@deepseek-ai/dsh-commands": "workspace:^",
++    "@deepseek-ai/dsh-cordis-host-runner": "workspace:^",
+     "@deepseek-ai/dsh-credentials": "workspace:^",
+     "@deepseek-ai/dsh-credentials-local": "workspace:^",
+     "@deepseek-ai/dsh-launch-environment": "workspace:^",
+@@ -73,6 +74,7 @@
+     "@deepseek-ai/dsh-token-meter": "workspace:^",
+     "@deepseek-ai/dsh-tool-ask-user": "workspace:^",
+     "@deepseek-ai/dsh-tool-bash": "workspace:^",
++    "@deepseek-ai/dsh-tool-cordis": "workspace:^",
+     "@deepseek-ai/dsh-tool-fs": "workspace:^",
+     "@deepseek-ai/dsh-tool-goal": "workspace:^",
+     "@deepseek-ai/dsh-tool-skill": "workspace:^",
+diff --git a/packages/extensions/tool-cordis/src/prompt.ts b/packages/extensions/tool-cordis/src/prompt.ts
+index 81d91b8e28..0c25b07442 100644
+--- a/packages/extensions/tool-cordis/src/prompt.ts
++++ b/packages/extensions/tool-cordis/src/prompt.ts
+@@ -1,6 +1,15 @@
+ /** Model guidance shared by the Cordis dynamic-plugin tools. */
+ 
+-export const CORDIS_SYSTEM_PROMPT = `# Dynamic Cordis Plugins
++export const CORDIS_SYSTEM_PROMPT = `# Deployment note (headless runtime — read first)
++
++This deployment (meow-academy, an Android app) runs DSH without any browser Client page. The overrides below take precedence over everything later in this document:
++
++- Host-only plugins only. Always provide \`code.host\`; never provide \`code.client\`. Never register Slot UI, theme overrides, Tool cards, overlays, or anything browser-side: no page will ever answer, and a Client half would stall forever.
++- Because packages never carry a Client half, \`cordis_run\` activates them immediately and \`awaiting-approval\` never occurs. Ignore all later approval/browser-flow guidance; after \`cordis_run\` the result is synchronous (\`running\` or a technical failure).
++- Visual, styling, or rendering requests are not plugin work here: change \`appconfig/*.jsonc\` configuration files (hot-reloaded) or generate plain HTML files in the workspace instead. Never express them as a Client plugin.
++- Dynamic plugins (this toolset) are temporary process-local capabilities. Durable, reusable session modes are a different mechanism: author an agent preset under \`\${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/\` — the \`editing-cordis-compositions\` skill teaches that workflow.
++
++# Dynamic Cordis Plugins
+ 
+ Dynamic Cordis plugins temporarily extend the current DSH process. A Plugin uses apply(ctx) to consume Services, listen to Events, provide Services, register model Tools, or register browser UI in Slots.
+ 
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index f6eecaa698..0927404ff2 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -487,6 +487,9 @@ importers:
+       '@deepseek-ai/dsh-compaction-tool-result-pruner':
+         specifier: workspace:^
+         version: link:../../packages/compaction/compaction-tool-result-pruner
++      '@deepseek-ai/dsh-cordis-host-runner':
++        specifier: workspace:^
++        version: link:../../packages/extensions/cordis-host-runner
+       '@deepseek-ai/dsh-credentials':
+         specifier: workspace:^
+         version: link:../../packages/credentials/credentials
+@@ -634,6 +637,9 @@ importers:
+       '@deepseek-ai/dsh-tool-call-timeout-policy':
+         specifier: workspace:^
+         version: link:../../packages/guard/timeout-policy
++      '@deepseek-ai/dsh-tool-cordis':
++        specifier: workspace:^
++        version: link:../../packages/extensions/tool-cordis
+       '@deepseek-ai/dsh-tool-fs':
+         specifier: workspace:^
+         version: link:../../packages/fs/tool-fs
+-- 
+2.43.0
+

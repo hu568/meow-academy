@@ -314,11 +314,12 @@ class DshRpcClient(
         api: String?,
         models: List<LlmModelInput>,
         apiKey: String?,
+        compat: JsonObject? = null,
         expectedRevision: Int? = null,
         timeoutMs: Long = 15_000,
     ): Boolean = requestOk(
         "settings/setProvider",
-        DshParams.settingsSetProvider(provider, displayName, baseURL, api, models, apiKey, expectedRevision),
+        DshParams.settingsSetProvider(provider, displayName, baseURL, api, models, apiKey, compat, expectedRevision),
         timeoutMs,
     )
 

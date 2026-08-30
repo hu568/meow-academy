@@ -24,6 +24,7 @@ fork 出来的**本地源码副本，整体 gitignore 不入库**。本目录把
 > 0002 = 标准 Agent 预设体系的 fork 侧改动（`0002-feat-meow-Agent-presets-str_replace_editor-cwd.patch`，
 > 见下「0002 内容」）；0003 = sharp-wasm32 版本对齐与三方声明记录
 > （`0003-fix-deploy-img-sharp-wasm32-sharp-0.35.4-pnpm-instal.patch`，见下「0003 内容」）。
+> 2026-08-30 晚扩为四个：0004 = 创造模式闭包支撑（`0004-feat-meow-creative-mode-closure-support-tool-cordis-host-runner-headless-prompt.patch`，见下「0004 内容」，`plan/plan-creative-mode.md`）。
 
 ### Android 存活适配
 - **`packages/fs/fs-local/src/fsio.ts`** — guarded-create 发布原语由 `link()` 改为
@@ -114,6 +115,26 @@ fork 出来的**本地源码副本，整体 gitignore 不入库**。本目录把
   保持一致（hoisted 布局下同名不同版本 = 静默丢包）；重打 runtime.bin 后必须真机确认
   DSH 子进程真正起来（`jobs -l` / `/proc` 扫 packaged-bin），不能只看 RPC 握手。
 
+## 0004 内容（feat-meow-creative-mode-closure-support-tool-cordis-host-runner-headless-prompt，2026-08-30）
+
+创造模式（`meow-cordis` 预设，`plan/plan-creative-mode.md`）的 fork 侧支撑：闭包补两个
+上游原包（零新外部依赖，peer 全在既有清单）+ tool-cordis 提示词的 headless 部署适配。
+
+- **`deploy/meow-runtime/package.json`** — + `@deepseek-ai/dsh-tool-cordis`（自指工具集：
+  inspect/define/run/stop/undefine + @pluginId 注入，零运行时依赖）与
+  `@deepseek-ai/dsh-cordis-host-runner`（dynamicCordisRunner/cordisInspect 服务；
+  host-only 包 run() 直激活不经审批，`src/index.ts:270`）。**不装** cordis-client-runner /
+  ui-cordis —— 本部署无 Web 前端，插件只有 Host 半边。
+- **`pnpm-lock.yaml`** — meow-runtime importer 块 +2 条 workspace link。
+- **`packages/extensions/tool-cordis/src/prompt.ts`** — `CORDIS_SYSTEM_PROMPT` 顶部附加
+  headless 部署适配段（additive，原文不动、顶部覆盖语义）：只写 `code.host`、不注册
+  Slots/主题/卡片；`cordis_run` 同步激活、`awaiting-approval` 永不出现；界面/外观诉求路由
+  `appconfig/*.jsonc` 或工作区 HTML；可复用模式走 agent-presets 用户根。动机：上游正文会
+  主动引导「视觉诉求别躲 Client」，无前端部署里 Client 包必卡死 —— 在常驻系统提示词层掐掉。
+- 配套（不入本 patch）：基座 `cordis.yml` 挂 `cordis-host-runner` 行；预设本体
+  `app/src/main/assets/dsh-presets/meow-cordis/`（含两份中文教学技能，上游 skill 按旧 API
+  写、需中文化 + 去沙箱审批 + 去 Client 章节的魔改全记录在 plan-creative-mode）。
+
 ## 从零复现 runtime.bin
 
 ```bash
@@ -124,7 +145,8 @@ git checkout dsh-v0.1.1-rc.2
 git apply ../android-app/runtime-assets/dsh-fork/0001-feat-meow-Android-runtime-adaptations-tavily-web-sea.patch
 git apply ../android-app/runtime-assets/dsh-fork/0002-feat-meow-Agent-presets-str_replace_editor-cwd.patch
 git apply ../android-app/runtime-assets/dsh-fork/0003-fix-deploy-img-sharp-wasm32-sharp-0.35.4-pnpm-instal.patch
-pnpm install          # lockfile 已随 0002/0003 入库，install 为幂等校验（有出入时以重新生成结果为准）
+git apply ../android-app/runtime-assets/dsh-fork/0004-feat-meow-creative-mode-closure-support-tool-cordis-host-runner-headless-prompt.patch
+pnpm install          # lockfile 已随 0002/0003/0004 入库，install 为幂等校验（有出入时以重新生成结果为准）
 
 # 1. PC 构建并打 DSH 闭包（产物 .tmp/dsh-closure.tar.gz）
 npm run build:lib     # workspace 包 files 字段只发布 lib/，必须先构建

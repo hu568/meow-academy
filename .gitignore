@@ -14,6 +14,7 @@ release/*
 android-app/.tmp_build*.log
 
 .agents/
+.zcode/
 
 # DSH fork（本地独立副本，从 github.com/deepseek-ai/deepseek-harness fork，
 # 用于构建 runtime 闭包；源码 92MB + node_modules 964MB，不入库）

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Image
@@ -24,6 +25,8 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -175,7 +178,19 @@ fun BuiltinConfig(
     }
 }
 
-/** 自定义 provider 的配置表单（Base URL / API Key / 启用开关 / 保存删除） */
+/** 思考参数方言可选项（pi-ai compat.thinkingFormat；"" = 自动，交运行时 detectCompat 按端点探测） */
+private val THINKING_FORMATS: List<Pair<String, String>> = listOf(
+    "自动（按端点探测）" to "",
+    "OpenAI（reasoning_effort）" to "openai",
+    "Qwen（enable_thinking）" to "qwen",
+    "Qwen（chat_template_kwargs）" to "qwen-chat-template",
+    "GLM / 智谱（thinking）" to "zai",
+    "DeepSeek（thinking）" to "deepseek",
+    "OpenRouter（reasoning.effort）" to "openrouter",
+    "自定义模板（chat_template_kwargs）" to "chat-template",
+)
+
+/** 自定义 provider 的配置表单（Base URL / API Key / 思考参数格式 / 启用开关 / 保存删除） */
 @Composable
 fun ConfigTab(
     isNew: Boolean,
@@ -183,6 +198,8 @@ fun ConfigTab(
     onBaseURL: (String) -> Unit,
     apiKey: String,
     onApiKey: (String) -> Unit,
+    thinkingFormat: String,
+    onThinkingFormat: (String) -> Unit,
     enabled: Boolean,
     onToggle: (Boolean) -> Unit,
     onSave: () -> Unit,
@@ -205,8 +222,35 @@ fun ConfigTab(
             label = { Text("API Key") },
             placeholder = { Text(if (enabled || isNew) "sk-…（留空则沿用已保存的 Key）" else "sk-…") },
         )
+        // 思考参数格式：决定思考强度以哪种方言下发给端点（readOnly 字段 + DropdownMenu）
+        var formatMenuOpen by remember { mutableStateOf(false) }
+        Box {
+            OutlinedTextField(
+                value = THINKING_FORMATS.firstOrNull { it.second == thinkingFormat }?.first ?: THINKING_FORMATS[0].first,
+                onValueChange = {},
+                readOnly = true,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("思考参数格式") },
+                trailingIcon = {
+                    IconButton(onClick = { formatMenuOpen = !formatMenuOpen }) {
+                        Icon(Icons.Filled.ArrowDropDown, contentDescription = "选择思考参数格式")
+                    }
+                },
+            )
+            DropdownMenu(expanded = formatMenuOpen, onDismissRequest = { formatMenuOpen = false }) {
+                THINKING_FORMATS.forEach { (label, value) ->
+                    DropdownMenuItem(
+                        text = { Text(label) },
+                        onClick = {
+                            onThinkingFormat(value)
+                            formatMenuOpen = false
+                        },
+                    )
+                }
+            }
+        }
         Text(
-            "协议：OpenAI 兼容（/chat/completions、/models 由运行时自动拼接）",
+            "协议：OpenAI 兼容（/chat/completions、/models 由运行时自动拼接）。思考参数格式保持自动即可适配多数 OpenAI 兼容端点；Qwen 系模型选 Qwen，GLM 系选 GLM / 智谱",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

@@ -3,12 +3,14 @@ package com.meow.academy.ui.chat
 /**
  * 聊天页上方悬浮栏（plan-standard-mode §5.5）：
  * todo 与 subagent 两态显示 + 右端小按钮切换（图标轮换 checklist ↔ group）。
- * - todo 态：折叠一行摘要（☑ n/m · 当前：<in_progress 项>），展开三态清单；
- * - subagent 态：折叠一行（-agent n 运行中），展开每个子代理一行（provider/status/stopReason/摘要）；
+ * - 默认折叠 = 仅一行摘要（☑ n/m · 当前：<in_progress 项> / -agent n 运行中）；
+ *   点击摘要行展开半透明面板（浮在消息列表上层，消息从面板下方透过），再点收起；
+ * - todo 态展开 = 三态清单；subagent 态展开 = 每个子代理一行（provider/status/stopReason/摘要）；
  * - 两态都无数据 → 整条不渲染（不占位）。
- * 当前显示态组件内 remember 即可（不持久化）。数据来自 ChatViewModel 的 todoState / subagentRuns。
+ * 当前显示态/展开态组件内 remember 即可（不持久化）。数据来自 ChatViewModel 的 todoState / subagentRuns。
  */
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +27,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowRightAlt
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Group
@@ -40,7 +44,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -61,19 +65,22 @@ fun ChatStatusBar(
     // 显示态：todo 优先；两态都有数据时按钮才可切换（remember 即可，不持久化）
     var preferAgents by remember { mutableStateOf(false) }
     val showAgents = if (hasTodos && hasAgents) preferAgents else hasAgents
+    // 展开态：默认折叠只留摘要行，点击摘要行展开/收起（21+ 项也不会常年盖住半屏）
+    var expanded by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)),
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.80f))
+            .animateContentSize(),
     ) {
-        // 折叠摘要行（点击内容区展开/收起）
+        // 摘要行（点击展开/收起；两态切换走右端小按钮）
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { preferAgents = !showAgents }
+                .clickable { expanded = !expanded }
                 .padding(start = 12.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -105,15 +112,24 @@ fun ChatStatusBar(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-            } else {
-                Spacer(Modifier.width(8.dp))
             }
+            // 展开/收起箭头
+            Icon(
+                if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = if (expanded) "收起" else "展开",
+                modifier = Modifier
+                    .padding(horizontal = 4.dp)
+                    .size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-        // 展开的半透明面板（点击摘要行切换）
-        if (showAgents) {
-            AgentListPanel(subagentRuns)
-        } else {
-            TodoListPanel(todos.orEmpty())
+        // 半透明面板：仅展开时渲染（消息列表从下方透过）
+        if (expanded) {
+            if (showAgents) {
+                AgentListPanel(subagentRuns)
+            } else {
+                TodoListPanel(todos.orEmpty())
+            }
         }
     }
 }
@@ -181,7 +197,7 @@ private fun TodoListPanel(todos: List<TodoItemView>) {
                     textDecoration = if (completed) TextDecoration.LineThrough else null,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.alpha(if (completed) 0.75f else 1f),
+                    modifier = Modifier.graphicsLayer { this.alpha = if (completed) 0.75f else 1f },
                 )
             }
         }

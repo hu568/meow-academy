@@ -95,7 +95,8 @@ fun workspaceShortName(path: String?, filesDirPath: String): String {
     }
 }
 
-/** 本地占位预设卡（plan-standard-mode §5.7②）：真实数据（presets/list）优先，同 id 出现即不渲染占位 */
+/** 本地占位预设卡（plan-standard-mode §5.7②）：真实数据（presets/list）优先，同 id 出现即不渲染占位。
+ *  meow-cordis（创造）已随 0.2.6 播种为真实预设（assets/dsh-presets/meow-cordis/），占位卡删除。 */
 private val PLACEHOLDER_PRESETS = listOf(
     PresetEntry(
         id = "meow-code",
@@ -107,12 +108,6 @@ private val PLACEHOLDER_PRESETS = listOf(
         id = "meow-minimal",
         name = "极简",
         description = "极简预设：仅保留最小工具集，专注纯对话。" +
-            "预设文件与闭包包未随本版启用。",
-    ),
-    PresetEntry(
-        id = "meow-cordis",
-        name = "创造",
-        description = "创造预设：Cordis 插件化创造，模型组装插件完成任务。" +
             "预设文件与闭包包未随本版启用。",
     ),
 )

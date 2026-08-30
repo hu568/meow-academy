@@ -52,10 +52,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -76,9 +82,6 @@ data class PendingAttachment(
     val path: String,
 )
 
-/** 思考强度档位（llm-deepseek 合法值域 off/high/max） */
-private val REASONING_EFFORTS = listOf("off", "high", "max")
-
 /** 输入栏：文本框 + 发送/停止 + 下方工具栏 */
 @Composable
 fun ChatInputArea(
@@ -90,6 +93,8 @@ fun ChatInputArea(
     isGenerating: Boolean,
     pendingCount: Int,
     reasoningEffort: String,
+    /** 当前模型支持的思考档位（ChatViewModel 按模型能力动态给出；空 = 不支持，按钮禁用） */
+    supportedEfforts: List<String>,
     webSearchEnabled: Boolean,
     /** 附加模式当前状态（null = 无附加；胶囊三态由此驱动） */
     attachedMode: AttachedMode?,
@@ -213,6 +218,7 @@ fun ChatInputArea(
             }
             ChatToolbar(
                 reasoningEffort = reasoningEffort,
+                supportedEfforts = supportedEfforts,
                 webSearchEnabled = webSearchEnabled,
                 attachedMode = attachedMode,
                 hasSession = hasSession,
@@ -231,6 +237,7 @@ fun ChatInputArea(
 @Composable
 fun ChatToolbar(
     reasoningEffort: String,
+    supportedEfforts: List<String>,
     webSearchEnabled: Boolean,
     attachedMode: AttachedMode?,
     hasSession: Boolean,
@@ -256,7 +263,8 @@ fun ChatToolbar(
             onAttachGoal = onAttachGoal,
             onDetach = onDetachAttachedMode,
         )
-        // 思考强度：圆形闪电图标，随档位变换底色/图标颜色
+        // 思考强度：圆形闪电图标，随档位变换底色/图标颜色；模型不支持时禁用置灰
+        val effortSupported = supportedEfforts.isNotEmpty()
         val effortContainer = when (reasoningEffort) {
             "off" -> MaterialTheme.colorScheme.surfaceVariant
             "high" -> MaterialTheme.colorScheme.primaryContainer
@@ -271,25 +279,29 @@ fun ChatToolbar(
         }
         Box {
             ToolCircleButton(
-                onClick = { effortMenu = true },
-                contentDescription = "思考强度（当前${effortLabel(reasoningEffort)}）",
+                onClick = { if (effortSupported) effortMenu = true },
+                contentDescription = if (effortSupported) "思考强度（当前${effortLabel(reasoningEffort)}）" else "当前模型不支持思考强度",
                 container = effortContainer,
                 contentColor = effortContent,
+                enabled = effortSupported,
             ) {
                 Icon(Icons.Filled.Bolt, contentDescription = null, modifier = Modifier.size(20.dp))
             }
-            DropdownMenu(
-                expanded = effortMenu,
-                onDismissRequest = { effortMenu = false },
-                // 不抢主窗口焦点，避免输入框失焦导致输入法收起
-                properties = PopupProperties(focusable = false),
-            ) {
-                REASONING_EFFORTS.forEach { e ->
-                    DropdownMenuItem(
-                        modifier = Modifier.focusProperties { canFocus = false },
-                        text = { Text(effortLabel(e)) },
-                        onClick = { onSelectReasoningEffort(e); effortMenu = false },
-                    )
+            if (effortSupported) {
+                DropdownMenu(
+                    expanded = effortMenu,
+                    onDismissRequest = { effortMenu = false },
+                    // 不抢主窗口焦点，避免输入框失焦导致输入法收起
+                    properties = PopupProperties(focusable = false),
+                ) {
+                    // 档位按当前模型能力动态渲染（DeepSeek=off/low/high/max；第三方按声明）
+                    supportedEfforts.forEach { e ->
+                        DropdownMenuItem(
+                            modifier = Modifier.focusProperties { canFocus = false },
+                            text = { Text(effortLabel(e)) },
+                            onClick = { onSelectReasoningEffort(e); effortMenu = false },
+                        )
+                    }
                 }
             }
         }
@@ -319,6 +331,9 @@ private data class CapsuleStyle(
     val contentColor: Color,
     val outlined: Boolean,
 )
+
+/** 胶囊外形（clip 与描边共用，保证同心） */
+private val CapsuleShape = RoundedCornerShape(20.dp)
 
 /** 附加模式胶囊样式：空态描边 → 生效中灰底转圈 → 确认态实色（plan-standard-mode §5.4） */
 @Composable
@@ -388,6 +403,8 @@ private fun AttachedModeCapsule(
     val container = style.container
     val contentColor = style.contentColor
     val outlined = style.outlined
+    // 空态描边色（重组期取值，drawBehind 块内逐帧使用）
+    val outlineColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
     val description = when {
         !hasSession -> "先新建会话"
         mode == null -> "附加模式：规划 / 目标"
@@ -400,20 +417,34 @@ private fun AttachedModeCapsule(
         Row(
             modifier = Modifier
                 .defaultMinSize(minHeight = 36.dp)
-                .clip(RoundedCornerShape(20.dp))
+                .clip(CapsuleShape)
                 .then(
                     if (outlined) {
-                        Modifier.border(
-                            1.dp,
-                            MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
-                            RoundedCornerShape(20.dp),
-                        )
+                        // 空态描边用 drawBehind 逐帧重画，不用 Modifier.border：
+                        // border 的 CacheDrawModifierNode 带绘制缓存，链上任何失效丢失都会
+                        // 让描边「冻结」在旧帧；drawBehind 无缓存，每次绘制 pass 都重新执行。
+                        Modifier.drawBehind {
+                            // 与胶囊外形同心：描边内缩半宽，圆角随 20dp 胶囊（超半高自动收成 stadium）
+                            val strokePx = 1.dp.toPx()
+                            drawRoundRect(
+                                color = outlineColor,
+                                topLeft = Offset(strokePx / 2, strokePx / 2),
+                                size = Size(size.width - strokePx, size.height - strokePx),
+                                cornerRadius = CornerRadius(20.dp.toPx()),
+                                style = Stroke(strokePx),
+                            )
+                        }
                     } else {
                         Modifier
                     }
                 )
                 .background(container)
-                .alpha(if (disabled) 0.45f else 1f)
+                // 禁用置灰用 graphicsLayer 常驻节点改 alpha 属性，不用 Modifier.alpha：
+                // alpha==1f 时 Modifier.alpha 直接从链上移除节点，0.45f→1f 的结构性变化
+                // 会触发 Compose 1.7.1 节点链更新 bug——本 Row 从此丢失所有绘制失效
+                //（真机实测：描边/底色永远停在旧帧，只有文字因图层属性单独更新，
+                // 重进页面才恢复；0.2.6「首启胶囊只剩文字无框」即此因）。
+                .graphicsLayer { this.alpha = if (disabled) 0.45f else 1f }
                 .clickable(enabled = !disabled) {
                     when {
                         mode == null -> menuOpen = true
@@ -531,6 +562,7 @@ private fun ToolCircleButton(
     contentDescription: String,
     modifier: Modifier = Modifier,
     selected: Boolean = false,
+    enabled: Boolean = true,
     container: Color? = null,
     contentColor: Color? = null,
     content: @Composable () -> Unit,
@@ -543,11 +575,14 @@ private fun ToolCircleButton(
             .size(40.dp)
             .clip(CircleShape)
             .background(bg)
+            // 禁用态整体淡化（背景是自绘的，IconButton 的 enabled 不会自动变灰）
+            .alpha(if (enabled) 1f else 0.38f)
             .semantics { this.contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
         IconButton(
             onClick = onClick,
+            enabled = enabled,
             // 工具栏按钮不参与焦点：避免点击时输入框失焦、输入法被系统收起
             modifier = Modifier
                 .fillMaxSize()

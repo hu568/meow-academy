@@ -2,6 +2,7 @@ package com.meow.academy.rpc
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -195,6 +196,27 @@ object DshParams {
 
     // ── 模型管理（可配置 provider，M4） ──
 
+    /**
+     * setProvider/updateProviderModels 的单条模型条目。
+     * reasoningEfforts 的 off 档必须以 `"off": null` 落 wire：DSH 用「声明 null」表达
+     * 「支持该档但不发参数」，与「未声明」（整字段缺失，按无思考能力处理）严格区分，
+     * 所以这里手动写 JsonNull，不走 data class 序列化（防 encodeDefaults 吞 null）。
+     */
+    private fun modelEntry(m: LlmModelInput): JsonObject = buildJsonObject {
+        put("id", m.id)
+        if (m.name != null) put("name", m.name)
+        if (m.contextWindow != null) put("contextWindow", m.contextWindow)
+        if (m.maxTokens != null) put("maxTokens", m.maxTokens)
+        if (m.input != null) put("input", buildJsonArray { m.input.forEach { add(JsonPrimitive(it)) } })
+        if (m.reasoningEfforts != null) {
+            put("reasoningEfforts", buildJsonObject {
+                m.reasoningEfforts.forEach { (level, wire) ->
+                    put(level, wire?.let { JsonPrimitive(it) } ?: JsonNull)
+                }
+            })
+        }
+    }
+
     /** llm/providers：列出可配置 provider 目录 */
     fun llmProviders(): JsonObject = buildJsonObject { }
 
@@ -215,7 +237,7 @@ object DshParams {
         if (ns != null) put("ns", ns)
     }
 
-    /** settings/setProvider：写 provider profile + credential */
+    /** settings/setProvider：写 provider profile + credential（compat=思考参数方言等协议开关，null=清除交给运行时探测） */
     fun settingsSetProvider(
         provider: String,
         displayName: String?,
@@ -223,24 +245,16 @@ object DshParams {
         api: String?,
         models: List<LlmModelInput>,
         apiKey: String?,
+        compat: JsonObject? = null,
         expectedRevision: Int? = null,
     ): JsonObject = buildJsonObject {
         put("provider", provider)
         if (displayName != null) put("displayName", displayName)
         if (baseURL != null) put("baseURL", baseURL)
         if (api != null) put("api", api)
-        put("models", buildJsonArray {
-            models.forEach { m ->
-                add(buildJsonObject {
-                    put("id", m.id)
-                    if (m.name != null) put("name", m.name)
-                    if (m.contextWindow != null) put("contextWindow", m.contextWindow)
-                    if (m.maxTokens != null) put("maxTokens", m.maxTokens)
-                    if (m.input != null) put("input", buildJsonArray { m.input.forEach { add(JsonPrimitive(it)) } })
-                })
-            }
-        })
+        put("models", buildJsonArray { models.forEach { add(modelEntry(it)) } })
         if (apiKey != null) put("apiKey", apiKey)
+        if (compat != null) put("compat", compat)
         if (expectedRevision != null) put("expectedRevision", expectedRevision)
     }
 
@@ -251,17 +265,7 @@ object DshParams {
         expectedRevision: Int? = null,
     ): JsonObject = buildJsonObject {
         put("provider", provider)
-        put("models", buildJsonArray {
-            models.forEach { m ->
-                add(buildJsonObject {
-                    put("id", m.id)
-                    if (m.name != null) put("name", m.name)
-                    if (m.contextWindow != null) put("contextWindow", m.contextWindow)
-                    if (m.maxTokens != null) put("maxTokens", m.maxTokens)
-                    if (m.input != null) put("input", buildJsonArray { m.input.forEach { add(JsonPrimitive(it)) } })
-                })
-            }
-        })
+        put("models", buildJsonArray { models.forEach { add(modelEntry(it)) } })
         if (expectedRevision != null) put("expectedRevision", expectedRevision)
     }
 

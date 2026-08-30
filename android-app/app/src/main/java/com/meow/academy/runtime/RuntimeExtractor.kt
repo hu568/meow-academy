@@ -61,6 +61,12 @@ object RuntimeExtractor {
     /** 长期记忆目录（.agents 下） */
     const val AGENTS_MEMORY_DIR = ".agents/memory"
 
+    /** 灵魂文件（.agents/memory 下，人物设定唯一定义处，plan-soul.md） */
+    const val SOUL_FILE = "SOUL.md"
+
+    /** assets 里灵魂文件的播种源（assets 无前导点目录，目标在 .agents/memory/） */
+    private const val SOUL_ASSET = "agents/memory/$SOUL_FILE"
+
     /**
      * 解压 [ASSET_NAME] 到 filesDir/[RUNTIME_DIR]。
      *
@@ -212,7 +218,27 @@ object RuntimeExtractor {
             File(filesDir, AGENTS_MEMORY_DIR),
         )
         dirs.forEach { it.mkdirs() }
+        // 灵魂文件播种：缺则播种、永不覆盖（用户/AI 所有，基座 persona 经 {{soul}} 实时读取）
+        seedSoulIfNeeded(context)
         Log.d(TAG, "ensureAppDirs ok")
+    }
+
+    /**
+     * 灵魂文件播种：assets agents/memory/SOUL.md → filesDir/.agents/memory/SOUL.md。
+     *
+     * 只在目标缺失时复制（永不覆盖——SOUL.md 归用户/AI 所有，是人格的唯一定义处，
+     * 改坏由编辑者自己负责）；assets 未带该文件（老 APK）则静默跳过。
+     * 调用点随 [ensureAppDirs] 三保险，均早于 DSH 进程读取 {{soul}} 变量。
+     */
+    private fun seedSoulIfNeeded(context: Context) {
+        runCatching {
+            val target = File(agentsMemoryDir(context), SOUL_FILE)
+            if (target.exists()) return
+            copyAssetFile(context, SOUL_ASSET, target)
+            Log.i(TAG, "SOUL.md 已播种 -> ${target.absolutePath}")
+        }.onFailure {
+            Log.w(TAG, "SOUL.md 播种失败: ${it.message}")
+        }
     }
 
     /**

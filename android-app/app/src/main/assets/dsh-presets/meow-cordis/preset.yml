@@ -1,0 +1,6 @@
+# meow-cordis 预设元数据（plan-creative-mode，0.2.6）。
+# 仅展示文本：id = 目录名，trust = 发现根（dsh-presets/ → system）。
+# name/description 会直接显示在 App 右侧看板「工作设置 → Agent 预设」的卡片上。
+name: 创造模式
+description: 「标准」预设的全部能力 + 运行时自检与动态插件创作（cordis_inspect/define/run/stop/undefine）：可编写临时插件扩展当前进程，也可创作自定义 Agent 预设并挂载验证。随附两份中文教学技能（动态插件开发 / 组合编辑）。
+order: 2

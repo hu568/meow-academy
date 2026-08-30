@@ -244,6 +244,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val webSearchEnabled: StateFlow<Boolean> = settingsRepository.webSearchEnabled
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
+    /**
+     * 当前模型支持的思考档位（聊天页思考按钮动态渲染的数据源）：
+     * llm/models 的 reasoning 元数据与 setModel 响应的 modelReasoning 都会刷新；
+     * 无能力数据时 DeepSeek 官方回退经典三档，第三方模型回退空列表（按钮禁用）。
+     */
+    private val _supportedEfforts = MutableStateFlow(listOf("off", "high", "max"))
+    val supportedEfforts: StateFlow<List<String>> = _supportedEfforts.asStateFlow()
+
     /** 聊天底图（统一双模式解析：简单模式 DataStore / 动态模式 JSONC，输出可直接渲染的模型） */
     val chatBackground: StateFlow<ChatBackground> = combine(
         settingsRepository.backgroundDynamicEnabled,
@@ -631,6 +639,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun selectModel(model: String) {
         viewModelScope.launch {
             settingsRepository.setLlmModel(model)
+            // 先按模型目录刷新档位能力（setModel 不带 effort 时响应无 modelReasoning）
+            syncSupportedEfforts(_modelCatalog.value[model]?.reasoning?.efforts)
             (runtimeManager.rpcClient ?: client)?.setModel(dshSessionIdOf(_currentSessionId.value), model = model)
                 ?.let { syncEffectiveEffort(it) }
         }
@@ -640,11 +650,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      * setModel 响应里服务端钳制后的思考强度同步回本地全局默认（工具栏与新会话保持一致）。
      * 服务端对不支持思考的模型会「不传强度」（selection 无 reasoningEffort），
      * 本地用 'off' 表达该状态（UI 显示「思考·关」，且 initialize 带的 off 也会被服务端钳掉）。
+     * 响应携带的 modelReasoning（模型支持档位）同步进 [supportedEfforts]。
      */
     private fun syncEffectiveEffort(result: JsonObject?) {
         val sel = result?.get("selection")?.jsonObject ?: return
         val effort = sel["reasoningEffort"]?.jsonPrimitive?.contentOrNull ?: "off"
         viewModelScope.launch { settingsRepository.setReasoningEffort(effort) }
+        result["modelReasoning"]?.jsonObject?.get("efforts")?.jsonArray?.let { arr ->
+            syncSupportedEfforts(arr.mapNotNull { it.jsonPrimitive.contentOrNull })
+        }
+    }
+
+    /** 思考档位同步入口：null = 无能力数据（按 provider 兜底）；空列表 = 明确不支持思考（按钮禁用） */
+    private fun syncSupportedEfforts(efforts: List<String>?) {
+        _supportedEfforts.value = efforts
+            ?: if (currentProvider.value == DEEPSEEK_PROVIDER) listOf("off", "high", "max") else emptyList()
     }
 
     /** 刷新 provider 目录 + 当前 provider 的模型列表（进入聊天页/运行时启动后调用） */
@@ -668,6 +688,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val models = c.llmModels(p) ?: emptyList()
             _availableModels.value = if (models.isEmpty()) DEFAULT_MODELS else models.map { it.id }
             _modelCatalog.value = models.associateBy { it.id }
+            // 当前模型的思考档位能力（第三方模型无声明确认时回退空列表 = 按钮禁用）
+            syncSupportedEfforts(models.firstOrNull { it.id == llmModel.value }?.reasoning?.efforts)
         }
     }
 
@@ -680,6 +702,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             settingsRepository.setLlmProvider(provider)
             settingsRepository.setLlmModel(first)
             _availableModels.value = if (models.isEmpty()) DEFAULT_MODELS else models.map { it.id }
+            syncSupportedEfforts(models.firstOrNull { it.id == first }?.reasoning?.efforts)
             c?.setModel(dshSessionIdOf(_currentSessionId.value), provider = provider, model = first)
                 ?.let { syncEffectiveEffort(it) }
         }

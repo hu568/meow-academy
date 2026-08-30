@@ -15,23 +15,12 @@
 # tool-cordis（创造预设随其后落地）、agent-instructions（喵仓 workspaceContext=false）。
 # 不重复基座已有的工具行（bash/fs/str-replace/todo/web）：基座注册全局可见，预设会话照常可用。
 
-# ── 身份 ────────────────────────────────────────────────────────────────────
-# 预设 persona：遮蔽基座部署 persona（dsh-persona 是 scope-only 行，挂预设即按会话遮蔽）。
-# 相比基座文案的三点差异（plan-standard-mode §4.3）：工作区「首条消息定死」的表述、
-# 外观/渲染诉求路由到 appconfig/*.jsonc、记忆的预留写入位（workspace/memory/，功能后续版本）。
-- id: persona
-  name: '@deepseek-ai/dsh-persona'
-  config:
-    text: |
-      你是一位温柔耐心的学习助教「喵喵老师」。回答要清晰有条理，适当使用 Markdown 格式，引用知识库时标注来源。
-
-      会话工作区：每个会话绑定一个工作目录（首条消息定死，是 App 私有数据目录下 files 的某个工作区文件夹）。读写文件请优先用相对路径（例如 notes/test.txt），也可以用对话中给出的会话内绝对路径；不要读写 /tmp、/sdcard 等系统目录。bash 工具可用于执行命令。
-
-      外观与渲染类诉求（Markdown 样式、代码块/公式/Mermaid 外观、主题颜色、聊天背景等）：请修改 appconfig/ 目录下对应的 *.jsonc 配置文件（例如 markdown-config.jsonc），改完即时生效；不要把 UI 诉求写进 cordis.yml 或代码里。
-
-      记忆：记忆功能由后续版本提供；当前若用户希望你「记住」某件事，可以把要点写入工作区下的 workspace/memory/ 目录备用。
-
-      安全边界：禁止读取 appconfig/dsh-credentials.yaml 与 datastore/ 目录下的文件（包含密钥与内部数据）；config-defaults/ 是只读默认模板目录，可读取、可复制到 appconfig/ 修改，但不可直接修改；dsh-presets/ 目录是系统预设（只读纪律，不可修改）；dsh-settings.json 与 .dsh-sessions/chat.db 可读，但聊天记录含隐私，谨慎引用。
+# ── 身份（已迁出，0.2.7 plan-soul.md）───────────────────────────────────────
+# 预设不再带 persona 行：人物设定（灵魂）唯一定义在 files/.agents/memory/SOUL.md，
+# 由 meow-jsonrpc 注册的 {{soul}} prompt 变量注入基座 persona（每次组装实时读取）；
+# 工作区/外观路由/记忆/安全边界等部署环境说明也上移到基座 persona（全预设共享）。
+# 本组合因此是「纯净模式」：只有工具与模式组合，无人设、无环境文案。
+# 用户自建预设如需覆盖人设，仍可挂 @deepseek-ai/dsh-persona 行（scoped 遮蔽基座）。
 
 # ── 规划模式（附加模式之一，plan-standard-mode §2.6）─────────────────────────
 # planMode 服务按预设作用域隔离（计划状态本就是 per-agent 生命周期）；
