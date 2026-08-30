@@ -1,0 +1,123 @@
+From 1f404ddbcd7d0520a04667efa9c4e16ef888b3ff Mon Sep 17 00:00:00 2001
+From: meow <meow@localhost>
+Date: Mon, 31 Aug 2026 01:37:27 +0800
+Subject: [PATCH] =?UTF-8?q?=E2=9C=A8=20feat(meow):=20minimal-mode=20closur?=
+ =?UTF-8?q?e=20support=20=E2=80=94=20terminal=20family=20+=20android=20pro?=
+ =?UTF-8?q?cess=20inspector?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+极简模式（meow-minimal 预设，plan-minimal-mode）的 fork 侧支撑：
+
+- deploy/meow-runtime/package.json — 闭包清单 +4 包（terminal 家族，全部上游原包）：
+  dsh-terminal（PTY 注册表服务，零依赖）/ dsh-terminal-bash（bash 方言后端，
+  就绪检测 OSC 133;D）/ dsh-tool-bash-persistent（持久 bash 工具行，注册名 bash）/
+  dsh-pwsh-local（terminal-bash 的硬依赖，顶层 import 只取常量，不可省）。
+- pnpm-lock.yaml — meow-runtime importer 块 +4 条 workspace link。
+- packages/subprocess/subprocess-local/src/process-inspector.ts —
+  createProcessInspector 平台门补 android → LinuxProcessInspector：
+  Android 内核即 Linux（bionic），/proc 接口与 arm64 syscall 号与 linux-arm64 相同。
+  真机实测：不修则持久 bash 工具首调即报
+  'subprocess-local: terminal inspection is unsupported on platform android'。
+
+配套（不入本 patch）：基座 cordis.yml 挂 sandbox-policy 行（terminal-bash 硬 inject，
+mode danger-full-access = 无 enforcer 部署的「无沙箱」语义）；预设本体
+app/src/main/assets/dsh-presets/meow-minimal/（persistent-shell 组 + minimal-face
+restrict 插件，plan-minimal-mode §三）。
+---
+ deploy/meow-runtime/package.json                     |  6 +++++-
+ .../subprocess-local/src/process-inspector.ts        |  4 +++-
+ pnpm-lock.yaml                                       | 12 ++++++++++++
+ 3 files changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/deploy/meow-runtime/package.json b/deploy/meow-runtime/package.json
+index 8cee55821b..2be6320cb3 100755
+--- a/deploy/meow-runtime/package.json
++++ b/deploy/meow-runtime/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "meow-academy-dsh-runtime",
+-  "description": "喵仓（meow-academy）安卓 App 内置 DSH jsonrpc 运行时的依赖清单：以官方 python/sdk-runtime 闭包为基，剔除 ACP/subagent 驱动/持久终端(node-pty)/sandbox 原生模块(landlock)/query/lsp/mcp 等；含 SQLite 会话持久化、DeepSeek web 搜索与创造模式自指工具集（tool-cordis + cordis-host-runner，0.2.6）。",
++  "description": "喵仓（meow-academy）安卓 App 内置 DSH jsonrpc 运行时的依赖清单：以官方 python/sdk-runtime 闭包为基，剔除 ACP/subagent 驱动/sandbox 原生模块(landlock)/query/lsp/mcp 等；含 SQLite 会话持久化、DeepSeek web 搜索、创造模式自指工具集（tool-cordis + cordis-host-runner，0.2.6）与极简模式持久终端家族（terminal/terminal-bash/tool-bash-persistent/pwsh-local，0.2.7）。",
+   "version": "0.0.1",
+   "private": true,
+   "type": "module",
+@@ -39,6 +39,7 @@
+     "@deepseek-ai/dsh-goal-round-driver": "workspace:^",
+     "@deepseek-ai/dsh-plan-mode": "workspace:^",
+     "@deepseek-ai/dsh-persona": "workspace:^",
++    "@deepseek-ai/dsh-pwsh-local": "workspace:^",
+     "@deepseek-ai/dsh-invariants": "workspace:^",
+     "@deepseek-ai/dsh-sdk-jsonrpc-server": "workspace:^",
+     "@deepseek-ai/dsh-sdk-jsonrpc-demo": "workspace:^",
+@@ -69,11 +70,14 @@
+     "@deepseek-ai/dsh-subprocess": "workspace:^",
+     "@deepseek-ai/dsh-subprocess-local": "workspace:^",
+     "@deepseek-ai/dsh-system-prompt": "workspace:^",
++    "@deepseek-ai/dsh-terminal": "workspace:^",
++    "@deepseek-ai/dsh-terminal-bash": "workspace:^",
+     "@deepseek-ai/dsh-timeout": "workspace:^",
+     "@deepseek-ai/dsh-tool-call-timeout-policy": "workspace:^",
+     "@deepseek-ai/dsh-token-meter": "workspace:^",
+     "@deepseek-ai/dsh-tool-ask-user": "workspace:^",
+     "@deepseek-ai/dsh-tool-bash": "workspace:^",
++    "@deepseek-ai/dsh-tool-bash-persistent": "workspace:^",
+     "@deepseek-ai/dsh-tool-cordis": "workspace:^",
+     "@deepseek-ai/dsh-tool-fs": "workspace:^",
+     "@deepseek-ai/dsh-tool-goal": "workspace:^",
+diff --git a/packages/subprocess/subprocess-local/src/process-inspector.ts b/packages/subprocess/subprocess-local/src/process-inspector.ts
+index 89effc0082..d994aa176a 100644
+--- a/packages/subprocess/subprocess-local/src/process-inspector.ts
++++ b/packages/subprocess/subprocess-local/src/process-inspector.ts
+@@ -369,7 +369,9 @@ export function createProcessInspector(
+   arch: NodeJS.Architecture = process.arch,
+   internals: ProcessInspectorInternals = DEFAULT_INTERNALS,
+ ): ProcessInspector {
+-  if (platform === 'linux') return new LinuxProcessInspector(arch, internals)
++  // Android（meow-academy 安卓运行时，0.2.7 极简模式持久终端）：内核即 Linux（bionic），
++  // /proc 接口与 arm64 syscall 号与 linux-arm64 相同，复用 Linux 检查器。
++  if (platform === 'linux' || platform === 'android') return new LinuxProcessInspector(arch, internals)
+   if (platform === 'darwin') return new MacProcessInspector(internals)
+   if (platform === 'win32') return createWindowsProcessInspector()
+   throw new Error(`subprocess-local: terminal inspection is unsupported on platform ${platform}`)
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 0927404ff2..e078d49f8c 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -547,6 +547,9 @@ importers:
+       '@deepseek-ai/dsh-plan-mode':
+         specifier: workspace:^
+         version: link:../../packages/plan/plan-mode
++      '@deepseek-ai/dsh-pwsh-local':
++        specifier: workspace:^
++        version: link:../../packages/shell/pwsh-local
+       '@deepseek-ai/dsh-repeat-tool-reminder':
+         specifier: workspace:^
+         version: link:../../packages/guard/repeat-tool-reminder
+@@ -622,6 +625,12 @@ importers:
+       '@deepseek-ai/dsh-system-prompt':
+         specifier: workspace:^
+         version: link:../../packages/core/system-prompt
++      '@deepseek-ai/dsh-terminal':
++        specifier: workspace:^
++        version: link:../../packages/terminal/terminal
++      '@deepseek-ai/dsh-terminal-bash':
++        specifier: workspace:^
++        version: link:../../packages/terminal/terminal-bash
+       '@deepseek-ai/dsh-timeout':
+         specifier: workspace:^
+         version: link:../../packages/util/timeout
+@@ -634,6 +643,9 @@ importers:
+       '@deepseek-ai/dsh-tool-bash':
+         specifier: workspace:^
+         version: link:../../packages/shell/tool-bash
++      '@deepseek-ai/dsh-tool-bash-persistent':
++        specifier: workspace:^
++        version: link:../../packages/shell/tool-bash-persistent
+       '@deepseek-ai/dsh-tool-call-timeout-policy':
+         specifier: workspace:^
+         version: link:../../packages/guard/timeout-policy
+-- 
+2.43.0
+

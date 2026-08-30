@@ -1,0 +1,6 @@
+# meow-minimal 预设元数据（plan-minimal-mode）。
+# 仅展示文本：id = 目录名，trust = 发现根（dsh-presets/ → system）。
+# name/description 会直接显示在 App 右侧看板「工作设置 → Agent 预设」的卡片上。
+name: 极简
+description: 极简预设：仅保留持久终端（bash）与文本编辑器（str_replace_editor）的最小工具集——shell 状态（当前目录 / 环境变量 / 后台进程）跨调用保留，可跑交互式命令；无文件读写列表、待办、联网搜索、规划、目标、技能、后台任务与子代理委派。适合观察最简 Agent 的工作方式。
+order: 3

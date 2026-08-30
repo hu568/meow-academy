@@ -25,6 +25,8 @@ fork 出来的**本地源码副本，整体 gitignore 不入库**。本目录把
 > 见下「0002 内容」）；0003 = sharp-wasm32 版本对齐与三方声明记录
 > （`0003-fix-deploy-img-sharp-wasm32-sharp-0.35.4-pnpm-instal.patch`，见下「0003 内容」）。
 > 2026-08-30 晚扩为四个：0004 = 创造模式闭包支撑（`0004-feat-meow-creative-mode-closure-support-tool-cordis-host-runner-headless-prompt.patch`，见下「0004 内容」，`plan/plan-creative-mode.md`）。
+> 2026-08-31 扩为五个：0005 = 极简模式闭包支撑（`0005-feat-meow-minimal-mode-closure-support-terminal-fami.patch`，
+> 见下「0005 内容」，`plan/plan-minimal-mode.md`）。
 
 ### Android 存活适配
 - **`packages/fs/fs-local/src/fsio.ts`** — guarded-create 发布原语由 `link()` 改为
@@ -135,6 +137,30 @@ fork 出来的**本地源码副本，整体 gitignore 不入库**。本目录把
   `app/src/main/assets/dsh-presets/meow-cordis/`（含两份中文教学技能，上游 skill 按旧 API
   写、需中文化 + 去沙箱审批 + 去 Client 章节的魔改全记录在 plan-creative-mode）。
 
+## 0005 内容（feat-meow-minimal-mode-closure-support-terminal-fami，2026-08-31）
+
+极简模式（`meow-minimal` 预设，`plan/plan-minimal-mode.md`）的 fork 侧支撑：闭包补
+terminal 家族四个上游原包（纯 JS，零新外部依赖）+ subprocess-local 平台门补 android。
+
+- **`deploy/meow-runtime/package.json`** — + `@deepseek-ai/dsh-terminal`（PTY 注册表
+  服务，agent-owned，零依赖）、`@deepseek-ai/dsh-terminal-bash`（bash 方言后端：OSC 133;D
+  就绪检测 / 输出清洗 / PS1+PROMPT_COMMAND 注入；硬依赖 dsh-pwsh-local + schemastery）、
+  `@deepseek-ai/dsh-tool-bash-persistent`（持久 bash 工具行，注册名 `bash`，owner 串行）、
+  `@deepseek-ai/dsh-pwsh-local`（纯 JS 助手，terminal-bash 顶层 import 只取常量，不可省）。
+- **`pnpm-lock.yaml`** — meow-runtime importer 块 +4 条 workspace link。
+- **`packages/subprocess/subprocess-local/src/process-inspector.ts`** —
+  `createProcessInspector` 平台门补 `android` → LinuxProcessInspector：Android 内核即
+  Linux（bionic），`/proc` 接口与 arm64 syscall 号与 linux-arm64 相同。**真机实测**：
+  不修则持久 bash 工具首调即报 `subprocess-local: terminal inspection is unsupported on
+  platform android`（Node 在安卓上 `process.platform === 'android'`；`terminal.ts` /
+  `spawn.ts` 的其余平台分支只挡 win32，POSIX 默认路径不受影响）。
+- 配套（不入本 patch）：基座 `cordis.yml` 挂 `sandbox-policy` 行（`dsh-sandbox-policy`
+  纯 JS 已在清单，`mode: danger-full-access` = 无 enforcer 部署的「无沙箱」语义——
+  terminal-bash 硬 inject `sandboxPolicy`，且该 mode 下 spawnArgv 短路直启不触 enforcer）；
+  预设本体 `app/src/main/assets/dsh-presets/meow-minimal/`（persistent-shell 组 +
+  minimal-face restrict 插件；shellPath=linker64 + lib/bash.bin 的安卓 spawn 配置、
+  减法机制与真机验收记录见 plan-minimal-mode）。
+
 ## 从零复现 runtime.bin
 
 ```bash
@@ -146,6 +172,7 @@ git apply ../android-app/runtime-assets/dsh-fork/0001-feat-meow-Android-runtime-
 git apply ../android-app/runtime-assets/dsh-fork/0002-feat-meow-Agent-presets-str_replace_editor-cwd.patch
 git apply ../android-app/runtime-assets/dsh-fork/0003-fix-deploy-img-sharp-wasm32-sharp-0.35.4-pnpm-instal.patch
 git apply ../android-app/runtime-assets/dsh-fork/0004-feat-meow-creative-mode-closure-support-tool-cordis-host-runner-headless-prompt.patch
+git apply ../android-app/runtime-assets/dsh-fork/0005-feat-meow-minimal-mode-closure-support-terminal-fami.patch
 pnpm install          # lockfile 已随 0002/0003/0004 入库，install 为幂等校验（有出入时以重新生成结果为准）
 
 # 1. PC 构建并打 DSH 闭包（产物 .tmp/dsh-closure.tar.gz）

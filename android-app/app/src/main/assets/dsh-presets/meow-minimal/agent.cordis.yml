@@ -1,0 +1,60 @@
+# meow-minimal —— 喵仓「极简」Agent 预设（会议笔记 §10，plan-minimal-mode）。
+# 上游 minimal（apps/cli/config/agent-presets/minimal）的喵仓魔改：
+#   - 无 persona 行：灵魂分离纪律（plan-soul.md），基座 persona 经 {{soul}} 注入，同 meow-standard；
+#   - pwsh 孪生两行删除（无 PowerShell），win32 disabled 门一并删除（安卓 only）；
+#   - filesystem 组整个不挂：fs-local 服务留基座（带 deny 纪律：凭证/datastore/config-defaults/
+#     dsh-presets 只读），str_replace_editor 直接用基座全局行（同参 maxOutputChars=16000）；
+#   - compaction 组不挂：基座兜底 compaction-basic 继续生效（上游 minimal 无压缩；手机长
+#     会话保留压缩更安全，刻意偏差）。
+# 减法机制（plan-minimal-mode §三）：preset 挂载只会「加」行，基座全局行减不掉——
+#   末尾 minimal-face 本地插件调 tools.restrict({allow}) 按会话裁剪基座全局行；
+#   本组合注册的持久 'bash' 按「作用域注册按名遮蔽全局」语义（tools/src/index.ts:784）
+#   遮住 spine 全局一次性行；restrict 只作用于全局工具、不影响 scoped 注册（:677）。
+
+# ── 持久 shell（terminal 家族，0.2.7 闭包补包）──────────────────────────────
+# PTY 注册表是 agent-owned 服务 → 必须放 isolate: terminals 组（上游同款分工）；
+# terminal-bash 后端消费基座 sandbox-policy（danger-full-access = 无沙箱短路直启）
+# 与 subprocess（node-pty 安卓链路，App 真终端同款原语）。
+- id: persistent-shell
+  name: cordis:group
+  group: true
+  isolate:
+    terminals: true
+  config:
+    - id: pty
+      name: '@deepseek-ai/dsh-terminal'
+
+    # bash 方言后端：安卓无 /bin/bash → linker64 直载 runtime 内真 ELF（App 真终端同款
+    # spawn 链，无 HOME 依赖；MEOW_RUNTIME_DIR 由 DshProcessLauncher 注入）。
+    # 就绪检测（OSC 133;D + dsh> 提示符）真机已验证（会议笔记 §9.3 形态①，33ms）。
+    - id: terminal-bash
+      name: '@deepseek-ai/dsh-terminal-bash'
+      config:
+        shellPath: /system/bin/linker64
+        shellArgs:
+          - !!js (process.env.MEOW_RUNTIME_DIR ?? (process.env.DSH_FILES_DIR ?? process.cwd()) + '/meow-runtime') + '/lib/bash.bin'
+          - --noprofile
+          - --norc
+          - -i
+        timeoutMs: 300000
+
+    # 模型工具行：注册名 'bash'（scoped 遮蔽 spine 全局一次性行，模型只见持久版）。
+    - id: persistent-bash
+      name: '@deepseek-ai/dsh-tool-bash-persistent'
+      config:
+        timeoutMs: 300000
+        description: |-
+          Run commands in a persistent bash shell. State, including the current directory and exported environment variables, persists across calls for this agent.
+          * When invoking this tool, the contents of the "command" parameter does NOT need to be XML-escaped.
+          * You don't have access to the internet via this tool.
+          * State is persistent across command calls and discussions with the user.
+          * To inspect a particular line range of a file, e.g. lines 10-25, try 'sed -n 10,25p /path/to/the/file'.
+          * Please avoid commands that may produce a very large amount of output.
+          * Please run long lived commands in the background, e.g. 'sleep 10 &' or start a server in the background.
+
+# ── 减法（方案 A：预设内自裁，plan-minimal-mode §三）────────────────────────
+# 裁掉基座全局行 tool-fs（read/write/ls/glob）、tool-todo（todo_write）、tool-web
+# （web_search），保留 bash + str_replace_editor（基座全局行，allow 放行）。
+# 顶层行 = 会话作用域（与 meow-standard 工具行同层），restrict 才合法（全局 ctx 会 throw）。
+- id: minimal-face
+  name: ./minimal-face.js

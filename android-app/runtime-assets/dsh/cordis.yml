@@ -69,6 +69,17 @@
     timeoutMs: 60000
     maxOutputBytes: 262144
 
+# 沙箱策略服务（plan-minimal-mode）：极简模式的 terminal-bash 硬 inject sandboxPolicy
+# （terminal 家族，packages/terminal/terminal-bash src/index.ts:26）。本部署无 enforcer
+# （landlock 原生模块不可加载）→ mode 定 danger-full-access = 「无沙箱」语义：spawnArgv
+# 对 full-access 短路直启（terminal-bash src/index.ts:94），不触碰 sandbox enforcer。
+# 对现有栈零影响：tool-bash 读 ctx.shell.sandboxMode（bash-local 从不设置 → undefined）
+# 不触达本服务；fs-local 无 sandbox 引用；纯 JS 包（仅依赖 schemastery），已随闭包。
+- id: sandbox-policy
+  name: '@deepseek-ai/dsh-sandbox-policy'
+  config:
+    mode: danger-full-access
+
 # 喵喵老师学习助教：persona + agent loop + 工具装配
 # 说明：spine 内部无条件挂 jobs 注册表（toolJobs:false 只裁模型面 job 工具）；
 # skills.enabled:false 裁掉 spine 内置的 skill 注册表/工具（改由下方 skill 行 + 预设组合提供，
