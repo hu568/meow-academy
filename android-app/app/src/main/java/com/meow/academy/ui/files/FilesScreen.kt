@@ -4,18 +4,28 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DriveFileMove
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Search
@@ -49,6 +59,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -90,6 +103,8 @@ fun FilesScreen(
     var menuEntry by remember { mutableStateOf<FileEntry?>(null) }
     var showBatchDelete by remember { mutableStateOf(false) }
     var targetMode by remember { mutableStateOf<TargetMode?>(null) }
+    // 长按单文件复制/移动的目标路径；多选批量操作时保持 null（走 selection），喵~
+    var singleOpPath by remember { mutableStateOf<String?>(null) }
     var searchOpen by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var fabMenuExpanded by remember { mutableStateOf(false) }
@@ -362,30 +377,54 @@ fun FilesScreen(
         )
     }
     menuEntry?.let { target ->
+        val favorited = target.path in state.favoritePaths
         androidx.compose.material3.AlertDialog(
             onDismissRequest = { menuEntry = null },
             title = { Text(target.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             text = {
-                androidx.compose.foundation.layout.Column {
-                    TextButton(onClick = {
-                        menuEntry = null
-                        vm.toggleFavorite(target.path)
-                    }, modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            if (target.path in state.favoritePaths) "取消收藏" else "收藏",
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                // 双列宫格菜单：图标在左、名称在右，两列等宽；删除红显警示（喵~）
+                Column {
+                    Row(Modifier.fillMaxWidth()) {
+                        MenuActionCell(
+                            label = if (favorited) "取消收藏" else "收藏",
+                            icon = if (favorited) Icons.Filled.StarBorder else Icons.Filled.Star,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            menuEntry = null
+                            vm.toggleFavorite(target.path)
+                        }
+                        MenuActionCell(label = "复制", icon = Icons.Filled.ContentCopy, modifier = Modifier.weight(1f)) {
+                            menuEntry = null
+                            singleOpPath = target.path
+                            targetMode = TargetMode.COPY
+                        }
                     }
-                    TextButton(onClick = {
-                        menuEntry = null
-                        vm.enterMultiSelect()
-                        vm.toggleSelect(target.path)
-                    }, modifier = Modifier.fillMaxWidth()) { Text("多选", modifier = Modifier.fillMaxWidth()) }
-                    TextButton(onClick = { menuEntry = null; renameTarget = target },
-                        modifier = Modifier.fillMaxWidth()) { Text("重命名", modifier = Modifier.fillMaxWidth()) }
-                    TextButton(onClick = { menuEntry = null; deleteTarget = target },
-                        modifier = Modifier.fillMaxWidth()) {
-                        Text("删除", color = MaterialTheme.colorScheme.error, modifier = Modifier.fillMaxWidth())
+                    Row(Modifier.fillMaxWidth()) {
+                        MenuActionCell(label = "移动", icon = Icons.Filled.DriveFileMove, modifier = Modifier.weight(1f)) {
+                            menuEntry = null
+                            singleOpPath = target.path
+                            targetMode = TargetMode.MOVE
+                        }
+                        MenuActionCell(label = "多选", icon = Icons.Filled.Checklist, modifier = Modifier.weight(1f)) {
+                            menuEntry = null
+                            vm.enterMultiSelect()
+                            vm.toggleSelect(target.path)
+                        }
+                    }
+                    Row(Modifier.fillMaxWidth()) {
+                        MenuActionCell(label = "重命名", icon = Icons.Filled.Edit, modifier = Modifier.weight(1f)) {
+                            menuEntry = null
+                            renameTarget = target
+                        }
+                        MenuActionCell(
+                            label = "删除",
+                            icon = Icons.Filled.Delete,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            menuEntry = null
+                            deleteTarget = target
+                        }
                     }
                 }
             },
@@ -402,17 +441,30 @@ fun FilesScreen(
         )
     }
     targetMode?.let { mode ->
+        // 操作路径：长按单文件传单元素列表，多选批量传当前 selection（喵~）
+        val opPaths = remember(singleOpPath, state.selection) {
+            singleOpPath?.let(::listOf) ?: state.selection.toList()
+        }
+        // 锁定的源目录：其自身与子树不可选为目标（防把文件夹移动/复制进自身）
+        val lockedDirs = remember(opPaths) { opPaths.filter { File(it).isDirectory } }
         TargetDirPicker(
-            root = state.root,
             repository = repository,
+            title = if (mode == TargetMode.COPY) "复制 ${opPaths.size} 项到…" else "移动 ${opPaths.size} 项到…",
+            confirmLabel = if (mode == TargetMode.COPY) "复制到此处" else "移动到此处",
+            lockedDirs = lockedDirs,
+            initialDir = state.currentPath,
             onPick = { targetDir ->
                 when (mode) {
-                    TargetMode.COPY -> vm.copySelection(targetDir)
-                    TargetMode.MOVE -> vm.moveSelection(targetDir)
+                    TargetMode.COPY -> vm.copyPaths(opPaths, targetDir)
+                    TargetMode.MOVE -> vm.movePaths(opPaths, targetDir)
                 }
                 targetMode = null
+                singleOpPath = null
             },
-            onDismiss = { targetMode = null },
+            onDismiss = {
+                targetMode = null
+                singleOpPath = null
+            },
         )
     }
 }
@@ -493,6 +545,31 @@ private fun ViewModeMenuItem(
         trailingIcon = { RadioButton(selected = current == mode, onClick = null) },
         onClick = { onDismiss(); onSelectViewMode(mode) },
     )
+}
+
+/**
+ * 长按菜单宫格单格：图标在左、名称在右（整组居中），圆角点击波纹（喵~）。
+ * [tint] 同时作用于图标与文字（删除项传 error 色红显）。
+ */
+@Composable
+private fun MenuActionCell(
+    label: String,
+    icon: ImageVector,
+    tint: Color = MaterialTheme.colorScheme.onSurface,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 4.dp, vertical = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = tint)
+    }
 }
 
 /** 搜索结果列表：显示相对路径，点击进入所在目录/文件 */

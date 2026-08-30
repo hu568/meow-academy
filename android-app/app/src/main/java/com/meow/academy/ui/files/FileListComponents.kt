@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.DataObject
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
@@ -70,6 +72,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -87,6 +90,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
@@ -96,11 +100,11 @@ import androidx.compose.ui.unit.dp
 import coil.compose.SubcomposeAsyncImage
 import com.meow.academy.data.files.FileEntry
 import com.meow.academy.data.files.FileRepository
-import com.meow.academy.data.files.FileRoot
 import com.meow.academy.data.files.IMAGE_EXTENSIONS
 import com.meow.academy.ui.theme.LocalFileTypeColors
 import com.meow.academy.ui.theme.LocalThemeExtras
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
@@ -776,61 +780,313 @@ fun MultiSelectBar(
 }
 
 /**
- * 复制 / 移动目标目录选择器：列出当前根下的全部目录（含根目录本身），
- * 点击目录即选择为复制/移动目标（喵~）。
+ * 复制 / 移动目标目录选择器（Windows 资源管理器风格，喵~）：
+ * 面包屑展示完整绝对路径，与主界面同款语义——可用根（filesDir / App 外部目录）内的段可点跳级，
+ * 根外系统前缀灰显仅展示；行尾编辑按钮可直接输入路径跳转，工作区上一级的 filesDir 也可选。
+ * 列表只列当前目录的直接子文件夹（点击逐级进入），底部确认按钮把「当前所处目录」作为目标；
+ * 面包屑行尾附新建文件夹（建完自动进入）。起始停在 [initialDir]（文件管理页当前目录）。
+ * [lockedDirs] 为本次操作的源目录集合：其自身与子树不可作目标（防把文件夹移动/复制进自身），
+ * 列表中灰显禁点；对话框内系统返回键先逐级回上级，退到可用根再按才关闭。
  */
 @Composable
 fun TargetDirPicker(
-    root: FileRoot,
     repository: FileRepository,
+    title: String,
+    confirmLabel: String,
+    lockedDirs: List<String>,
+    initialDir: String,
     onPick: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val base = remember(root) { repository.resolveRoot(root) }
-    var dirs by remember(root) { mutableStateOf<List<File>>(emptyList()) }
-    var loading by remember(root) { mutableStateOf(true) }
+    var currentDir by remember { mutableStateOf(File(initialDir)) }
+    var editing by remember { mutableStateOf(false) }
+    // null = 加载中；只列直接子文件夹（隐藏目录跳过，与列表页过滤规则一致，喵~）
+    var children by remember(currentDir) { mutableStateOf<List<File>?>(null) }
+    var showNewFolder by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val breadcrumbScroll = rememberScrollState()
+    val extras = LocalThemeExtras.current
 
-    // 递归收集根下全部目录（跳过隐藏目录）
-    LaunchedEffect(base) {
-        if (base == null) { loading = false; return@LaunchedEffect }
-        val result = mutableListOf<File>()
-        fun walk(dir: File) {
-            result += dir
-            dir.listFiles()?.forEach { child ->
-                if (child.isDirectory && !child.name.startsWith('.')) walk(child)
-            }
+    fun isLocked(dir: File?): Boolean {
+        if (dir == null) return false
+        val dp = dir.absolutePath.trimEnd('/')
+        return lockedDirs.any { locked ->
+            val lp = File(locked).absolutePath.trimEnd('/')
+            dp == lp || dp.startsWith("$lp/")
         }
-        withContext(Dispatchers.IO) { walk(base) }
-        dirs = result
-        loading = false
+    }
+
+    // 进入目录后异步加载直接子文件夹
+    LaunchedEffect(currentDir) {
+        val dir = currentDir
+        val result = withContext(Dispatchers.IO) {
+            dir.listFiles()
+                ?.filter { it.isDirectory && !it.name.startsWith('.') }
+                ?.sortedBy { it.name.lowercase() }
+                .orEmpty()
+        }
+        if (currentDir == dir) children = result
+    }
+
+    // 面包屑自动滚到最右，保证当前目录段可见（与主界面路径面包屑同款处理，喵~）
+    LaunchedEffect(currentDir) {
+        withFrameNanos { }
+        breadcrumbScroll.scrollTo(breadcrumbScroll.maxValue)
+    }
+
+    // 系统返回键：对话框内先逐级回上级（限定可用根内），退到根后不拦（走 AlertDialog 默认关闭）
+    BackHandler(enabled = currentDir != null && !editing) {
+        val parent = currentDir?.parentFile
+        if (parent != null && repository.isWithinRoot(parent.absolutePath)) {
+            currentDir = parent
+        } else {
+            onDismiss()
+        }
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("选择目标目录") },
+        title = { Text(title) },
         text = {
-            if (loading) {
-                Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            } else {
-                LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                    items(dirs, key = { it.absolutePath }) { dir ->
-                        val relative = try {
-                            dir.absolutePath.removePrefix(base?.absolutePath ?: "").trimStart('/')
-                        } catch (e: Exception) {
-                            dir.name
+            Column {
+                if (editing) {
+                    // ── 路径输入态：直接键入目标路径（可用根内任意目录，含工作区上级 filesDir，喵~） ──
+                    PickerPathEditField(
+                        repository = repository,
+                        currentPath = currentDir.absolutePath,
+                        lockedDirs = lockedDirs,
+                        onNavigate = {
+                            editing = false
+                            currentDir = it
+                        },
+                        onCancel = { editing = false },
+                    )
+                } else {
+                    // ── 面包屑（完整绝对路径，与主界面同款语义）+ 路径编辑 + 新建文件夹 ──
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val cur = currentDir
+                        val segments = remember(cur) {
+                            buildBreadcrumbSegments(cur.absolutePath) { p -> repository.isWithinRoot(p) }
                         }
-                        ListItem(
-                            modifier = Modifier.fillMaxWidth().clickable { onPick(dir.absolutePath) },
-                            leadingContent = { Icon(Icons.Filled.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                            headlineContent = { Text(if (relative.isEmpty()) "（根目录）" else relative, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                                .horizontalScroll(breadcrumbScroll)
+                                .padding(horizontal = 10.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            segments.forEachIndexed { index, segment ->
+                                if (index != 0) {
+                                    Text(
+                                        " › ",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                BreadcrumbCrumb(
+                                    label = segment.label,
+                                    isCurrent = index == segments.lastIndex,
+                                    enabled = segment.navigable,
+                                    tint = if (segment.navigable) {
+                                        extras.quickBarColor ?: MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                ) { currentDir = File(segment.path) }
+                            }
+                        }
+                        // 路径编辑：输入完整路径回车跳转（主界面面包屑同款入口，喵~）
+                        IconButton(onClick = { editing = true }, modifier = Modifier.size(36.dp)) {
+                            Icon(
+                                Icons.Outlined.Edit,
+                                contentDescription = "输入路径",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        // 新建文件夹：建完自动进入（Windows 选择对话框同款能力，喵~）
+                        IconButton(onClick = { showNewFolder = true }, modifier = Modifier.size(36.dp)) {
+                            Icon(
+                                Icons.Filled.CreateNewFolder,
+                                contentDescription = "新建文件夹",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                // ── 当前目录的直接子文件夹 ──
+                val list = children
+                when {
+                    list == null -> Box(
+                        Modifier.fillMaxWidth().height(120.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                    }
+                    list.isEmpty() -> Box(
+                        Modifier.fillMaxWidth().height(120.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "空文件夹（可直接选此处）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                    else -> LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp)) {
+                        items(list, key = { it.absolutePath }) { dir ->
+                            val locked = isLocked(dir)
+                            val disabledColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                            ListItem(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .then(if (locked) Modifier else Modifier.clickable { currentDir = dir }),
+                                leadingContent = {
+                                    Icon(
+                                        Icons.Filled.Folder,
+                                        contentDescription = null,
+                                        tint = if (locked) disabledColor else MaterialTheme.colorScheme.primary,
+                                    )
+                                },
+                                headlineContent = {
+                                    Text(
+                                        dir.name,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = if (locked) disabledColor else Color.Unspecified,
+                                    )
+                                },
+                            )
+                        }
                     }
                 }
             }
         },
-        confirmButton = {},
+        confirmButton = {
+            TextButton(
+                onClick = { onPick(currentDir.absolutePath) },
+                enabled = !isLocked(currentDir),
+            ) { Text(confirmLabel) }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+
+    if (showNewFolder) {
+        NewNameDialog(
+            title = "新建文件夹",
+            confirmLabel = "创建",
+            initialValue = "",
+            onConfirm = { name ->
+                showNewFolder = false
+                scope.launch {
+                    val created = withContext(Dispatchers.IO) {
+                        val dir = File(currentDir, name)
+                        dir.isDirectory || dir.mkdir()
+                    }
+                    if (created) currentDir = File(currentDir, name)
+                }
+            },
+            onDismiss = { showNewFolder = false },
+        )
+    }
+}
+
+/**
+ * 面包屑单段：[isCurrent] 当前目录高亮加粗不可点；[enabled] 为 false 灰显禁点（可用根外的前缀段，喵~）。
+ * [tint] 非当前段的颜色（可点段主色/快捷色，禁点段弱化灰）。
+ */
+@Composable
+private fun BreadcrumbCrumb(
+    label: String,
+    isCurrent: Boolean,
+    enabled: Boolean = true,
+    tint: Color = MaterialTheme.colorScheme.primary,
+    onClick: () -> Unit,
+) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.labelMedium,
+        color = if (isCurrent) MaterialTheme.colorScheme.onSurface else tint,
+        fontWeight = if (isCurrent) FontWeight.Bold else null,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .clickable(enabled = !isCurrent && enabled, onClick = onClick)
+            .padding(horizontal = 4.dp, vertical = 2.dp),
+    )
+}
+
+/**
+ * 选择器内嵌路径输入行：起始为当前路径（光标在末尾，自动聚焦拉起键盘），
+ * 回车校验后跳转——必须是存在的目录、在可用根（filesDir / App 外部目录）内、
+ * 且不在 [lockedDirs] 源目录子树中；失败红字提示并留在输入态（喵~）。
+ */
+@Composable
+private fun PickerPathEditField(
+    repository: FileRepository,
+    currentPath: String,
+    lockedDirs: List<String>,
+    onNavigate: (File) -> Unit,
+    onCancel: () -> Unit,
+) {
+    var text by remember { mutableStateOf(TextFieldValue(currentPath, TextRange(currentPath.length))) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    val focusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+        keyboard?.show()
+    }
+
+    fun submit() {
+        val raw = text.text.trim()
+        if (raw.isEmpty()) return
+        scope.launch {
+            val normalized = withContext(Dispatchers.IO) {
+                repository.normalizeNavigationPath(raw)?.takeIf { repository.isWithinRoot(it) }
+            }
+            val locked = normalized?.let { n ->
+                val np = n.trimEnd('/')
+                lockedDirs.any { locked ->
+                    val lp = File(locked).absolutePath.trimEnd('/')
+                    np == lp || np.startsWith("$lp/")
+                }
+            } == true
+            when {
+                normalized == null -> error = "路径不存在或不是文件夹"
+                locked -> error = "不能选本次操作的源目录内部"
+                else -> onNavigate(File(normalized))
+            }
+        }
+    }
+
+    OutlinedTextField(
+        value = text,
+        onValueChange = {
+            text = it
+            error = null
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .focusRequester(focusRequester),
+        singleLine = true,
+        label = { Text("输入路径") },
+        isError = error != null,
+        supportingText = { error?.let { Text(it) } },
+        trailingIcon = {
+            IconButton(onClick = onCancel) {
+                Icon(Icons.Outlined.Close, contentDescription = "取消输入")
+            }
+        },
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+        keyboardActions = KeyboardActions(onGo = { submit() }),
     )
 }

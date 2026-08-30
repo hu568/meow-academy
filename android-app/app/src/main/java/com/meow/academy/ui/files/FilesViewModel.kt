@@ -400,38 +400,36 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ── 批量操作 ──
+    // ── 复制 / 移动（多选批量与长按单文件共用，喵~） ──
 
-    /** 复制选中的文件到目标目录，成功后刷新并退出多选 */
-    fun copySelection(targetDir: String) {
-        val selection = _uiState.value.selection.toList()
-        if (selection.isEmpty()) return
+    /** 复制指定路径列表到目标目录（多选传 selection，单文件传单元素列表），成功后刷新并退出多选 */
+    fun copyPaths(paths: List<String>, targetDir: String) {
+        if (paths.isEmpty()) return
         viewModelScope.launch {
-            val ok = repository.copy(selection, targetDir)
+            val ok = repository.copy(paths, targetDir)
             exitMultiSelect()
             if (ok) {
                 refresh()
-                showSnackbar("已复制 ${selection.size} 项")
+                showSnackbar("已复制 ${paths.size} 项")
             } else {
-                showSnackbar("复制失败")
+                showSnackbar("复制失败（目标目录已有同名项？）")
             }
         }
     }
 
-    /** 移动选中的文件到目标目录，成功后刷新并退出多选；收藏中的旧路径同步改指新位置 */
-    fun moveSelection(targetDir: String) {
-        val selection = _uiState.value.selection.toList()
-        if (selection.isEmpty()) return
+    /** 移动指定路径列表到目标目录，成功后刷新并退出多选；收藏中的旧路径同步改指新位置 */
+    fun movePaths(paths: List<String>, targetDir: String) {
+        if (paths.isEmpty()) return
         viewModelScope.launch {
-            val ok = repository.move(selection, targetDir)
+            val ok = repository.move(paths, targetDir)
             exitMultiSelect()
             if (ok) {
-                val movedTo = selection.associateWith { File(targetDir, File(it).name).absolutePath }
+                val movedTo = paths.associateWith { File(targetDir, File(it).name).absolutePath }
                 updateFavorites { list -> list.map { movedTo[it] ?: it } }
                 refresh()
-                showSnackbar("已移动 ${selection.size} 项")
+                showSnackbar("已移动 ${paths.size} 项")
             } else {
-                showSnackbar("移动失败")
+                showSnackbar("移动失败（目标目录已有同名项？）")
             }
         }
     }
