@@ -194,15 +194,19 @@ async function composeAgent(presetId) {
 
 > 2026-08-30 晚回填：标准模式随 0.2.6 落地（`plan-standard-mode.md`）；创造模式同日晚随 0.2.6 落地
 > （`plan-creative-mode.md`，Web 前端砍掉——host-only 全程无审批，§2.2 的审批通道不再需要）；
-> PTC（§8）/极简（§10）仍为占位待后续。细化计划未按 §5 A-F 拆任务，按喵仓惯例立独立 plan 文档。
+> PTC（§8）仍为占位待后续。细化计划未按 §5 A-F 拆任务，按喵仓惯例立独立 plan 文档。
+> 2026-08-31 回填：**极简模式随 0.2.7 落地**（`plan/plan-minimal-mode.md`）——预设内自裁方案
+> （组合内 restrict 插件裁基座全局行 + 持久 bash 按名遮蔽 spine 全局行），闭包补 terminal
+> 家族 4 包；§10.2「PTY 原语安卓本就可跑」补了一个缺口：process-inspector 平台门不认
+> `platform==='android'`，已修（patch 0005）并真机全链验证通过（含跨调用状态与 env 零泄漏）。
 
 - [x] 立细化计划文档（→ `plan/plan-standard-mode.md` + `plan/plan-creative-mode.md`，未对齐 plan-phase1 格式）
-- [x] manifest 加包 + pnpm-workspace/lockfile importer → 重打闭包 → 实测体积（标准=0002 patch；创造=0004 patch：tool-cordis + cordis-host-runner）
-- [x] ~~四个 preset~~ → `meow-standard`（0.2.6）与 `meow-cordis`（0.2.6 晚，两份 skill 中文化魔改：路径/deny/无沙箱无审批/外观路由 appconfig/工具名对齐 baseline）；`meow-minimal` / `meow-code` 仍占位
+- [x] manifest 加包 + pnpm-workspace/lockfile importer → 重打闭包 → 实测体积（标准=0002 patch；创造=0004 patch：tool-cordis + cordis-host-runner；极简=0005 patch：terminal 家族 + process-inspector android 门）
+- [x] ~~四个 preset~~ → `meow-standard`（0.2.6）与 `meow-cordis`（0.2.6 晚，两份 skill 中文化魔改：路径/deny/无沙箱无审批/外观路由 appconfig/工具名对齐 baseline）；`meow-minimal`（0.2.7，persistent-shell 组 + minimal-face restrict 插件，pwsh 行删除）；`meow-code` 仍占位
 - [x] meow-jsonrpc `composeAgent` 移植 + presets/list / 错误映射（0.2.6 完成；session/setPreset 演进为 prompt 携带 presetId + session/command）
 - [x] 确认 DshProcessLauncher 的 DSH_HOME 注入（0.2.6 起显式注入，另注入 DSH_FILES_DIR）
 - [x] App 侧模式管理 UI + 会话创建参数 + 错误呈现（0.2.6 完成）
-- [ ] 真机验收清单（§5 F）——标准部分已过；创造部分待验收（plan-creative-mode §四）
+- [ ] 真机验收清单（§5 F）——标准部分已过；创造部分待验收（plan-creative-mode §四）；极简 RPC 探针全过（plan-minimal-mode §四），聊天 UI 验收待主人
 
 ## 8. PTC 模式评估（2026-08-30 追加）
 
@@ -341,6 +345,17 @@ PTC = 标准模式 + **一行** `tool-presentation`（`@deepseek-ai/dsh-agent-to
 ### 10.4 接法
 
 依赖创造模式的 preset 集成；`meow-minimal` preset = persona 行 + persistent-shell 组（仅 bash 行，`shellPath=/system/bin/linker64` + `shellArgs=[lib/bash.bin, …]`，见 §9.3）+ filesystem 组。pwsh 两行删除。**meow-jsonrpc 零改动**。
+
+> 2026-08-31 落地回填（`plan/plan-minimal-mode.md`）：随 0.2.7 完成。与原估的差异：
+> ① persona 行**不带**（灵魂分离后预设回归纯净组合，同 meow-standard）；② filesystem 组
+> 整个不挂——fs-local 留基座保 deny 纪律，str_replace_editor 直接用基座全局行；③ 减法
+> 不是纯组合能做的（基座全局行 preset 减不掉）——最终走「预设内自裁」：组合内本地插件
+> `minimal-face.js` 调 `tools.restrict({allow})` 按会话裁基座全局行，持久 bash 靠
+> 「作用域注册按名遮蔽全局」语义（tools/index.ts:784）遮蔽 spine 的一次性 bash；④ 基座
+> 补一行纯 JS `dsh-sandbox-policy`（terminal-bash 硬 inject sandboxPolicy，mode
+> danger-full-access = 无 enforcer 部署的「无沙箱」语义）；⑤ §10.2「PTY 原语安卓本就
+> 可跑」漏了 process-inspector 平台门（`platform==='android'` 不认，持久 bash 首调即报
+> unsupported）——patch 0005 修复后真机全链验证通过（spawn / 跨调用状态 / env 零泄漏）。
 
 ---
 
