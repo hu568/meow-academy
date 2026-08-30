@@ -43,8 +43,12 @@ object DshParams {
             if (reasoningEffort != null) put("reasoningEffort", reasoningEffort)
         }
 
-    /** session/prompt：入队一条用户消息（纯文本版，兼容旧调用） */
-    fun prompt(sessionId: String, text: String): JsonObject = buildJsonObject {
+    /**
+     * session/prompt：入队一条用户消息（纯文本版，兼容旧调用）。
+     * presetId / cwd 随参数顶层携带（plan-standard-mode §3.4）：会话未建时定死归属（Agent 预设 + 工作区），
+     * 会话已存在时服务端忽略（以日志为唯一事实源），多传无害。
+     */
+    fun prompt(sessionId: String, text: String, presetId: String? = null, cwd: String? = null): JsonObject = buildJsonObject {
         put("sessionId", sessionId)
         put("contentBlocks", buildJsonArray {
             add(buildJsonObject {
@@ -52,10 +56,15 @@ object DshParams {
                 put("text", text)
             })
         })
+        if (presetId != null) put("presetId", presetId)
+        if (cwd != null) put("cwd", cwd)
     }
 
-    /** session/prompt：入队一条用户消息（contentBlocks 支持 text + image 混合块） */
-    fun prompt(sessionId: String, blocks: List<ContentBlock>): JsonObject = buildJsonObject {
+    /**
+     * session/prompt：入队一条用户消息（contentBlocks 支持 text + image 混合块）。
+     * presetId / cwd 同纯文本版（§3.4）。
+     */
+    fun prompt(sessionId: String, blocks: List<ContentBlock>, presetId: String? = null, cwd: String? = null): JsonObject = buildJsonObject {
         put("sessionId", sessionId)
         put("contentBlocks", buildJsonArray {
             blocks.forEach { block ->
@@ -66,6 +75,8 @@ object DshParams {
                 })
             }
         })
+        if (presetId != null) put("presetId", presetId)
+        if (cwd != null) put("cwd", cwd)
     }
 
     /** session/attachImages：canonical base64 图片批 → 附件服务规范化入库 → durable refs */
@@ -114,6 +125,68 @@ object DshParams {
 
     /** session/stats：读某会话的调用量统计 */
     fun sessionStats(sessionId: String): JsonObject = buildJsonObject {
+        put("sessionId", sessionId)
+    }
+
+    // ── Agent 预设 / 附加模式 / 问答（普通模式补完，plan-standard-mode §三） ──
+
+    /** presets/list：列 Agent 预设（自动扫描接口，请求为空对象） */
+    fun presetsList(): JsonObject = buildJsonObject { }
+
+    /** presets/read：读某预设的组合文件全文（创造预设用） */
+    fun presetsRead(id: String): JsonObject = buildJsonObject {
+        put("id", id)
+    }
+
+    /** presets/delete：删自定义预设（仅 trust=user 可删；内置预设服务端抛 PRESET_IMMUTABLE） */
+    fun presetsDelete(id: String): JsonObject = buildJsonObject {
+        put("id", id)
+    }
+
+    /**
+     * session/command：程序化执行斜杠命令（/plan、/goal…；附加模式胶囊的执行通道）。
+     * presetId / cwd 与 prompt 同款可选携带——会话未建时先创建并定死归属（§3.5）。
+     */
+    fun sessionCommand(sessionId: String, line: String, presetId: String? = null, cwd: String? = null): JsonObject =
+        buildJsonObject {
+            put("sessionId", sessionId)
+            put("line", line)
+            if (presetId != null) put("presetId", presetId)
+            if (cwd != null) put("cwd", cwd)
+        }
+
+    /** session/answerQuestion 的单条回答（id 对应问题 id；selected 为选中选项 label；custom 为自由文本回答） */
+    @Serializable
+    data class QuestionAnswer(
+        val id: String,
+        val selected: List<String> = emptyList(),
+        val custom: String? = null,
+    )
+
+    /** session/answerQuestion：回答问答（cancelled=true 表示用户取消，此时忽略 answers） */
+    fun answerQuestion(
+        requestId: String,
+        answers: List<QuestionAnswer> = emptyList(),
+        cancelled: Boolean = false,
+    ): JsonObject = buildJsonObject {
+        put("requestId", requestId)
+        if (cancelled) {
+            put("cancelled", true)
+        } else {
+            put("answers", buildJsonArray {
+                answers.forEach { a ->
+                    add(buildJsonObject {
+                        put("id", a.id)
+                        put("selected", buildJsonArray { a.selected.forEach { add(JsonPrimitive(it)) } })
+                        if (a.custom != null) put("custom", a.custom)
+                    })
+                }
+            })
+        }
+    }
+
+    /** session/query：读旧会话状态水合（preset / blank / todos / plan / goal，resume 后胶囊与悬浮栏用） */
+    fun sessionQuery(sessionId: String): JsonObject = buildJsonObject {
         put("sessionId", sessionId)
     }
 

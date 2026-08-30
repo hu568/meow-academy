@@ -5,17 +5,29 @@
  * initialize / session/prompt / shutdown 与 session.event / session.status 通知）
  * 与 JsonRpcLineTransport（stdio 新行分隔 JSON-RPC 2.0 传输），通过子类扩展：
  *
- *   - session/cancel    {sessionId}            → agent.cancel({kind:'user'})（DSH 原生 API）
- *   - session/bash      {requestId,command,workdir?,timeoutMs?} → ctx.shell 后台执行，
- *                         期间以 session.bashOutput 通知流式转发增量，返回 exitCode 等
- *   - session/bashCancel {requestId}           → 中止正在运行的终端命令
- *   - session/stats     {sessionId}            → 会话调用量统计（轮/步/时长/首token/tok/s/用量/最近一步/上下文）
+ *   - session/cancel         {sessionId}            → agent.cancel({kind:'user'})（DSH 原生 API）
+ *   - session/bash           {requestId,command,workdir?,timeoutMs?} → ctx.shell 后台执行，
+ *                               期间以 session.bashOutput 通知流式转发增量，返回 exitCode 等
+ *   - session/bashCancel     {requestId}            → 中止正在运行的终端命令
+ *   - session/stats          {sessionId}            → 会话调用量统计（轮/步/时长/首token/tok/s/用量/最近一步/上下文）
+ *   - session/prompt         +presetId/cwd 可选参数 → 会话创建时消费（Agent 预设 + 工作区归属，plan-standard-mode §三.4）
+ *   - session/command        {sessionId,line,presetId?,cwd?} → commands.execute 程序化执行斜杠命令（§三.5）
+ *   - session/query          {sessionId}            → 读持久化日志折叠 todo/plan/goal/preset（旧会话状态水合，§三.7）
+ *   - session.question       通知（DSH→App）+ session/answerQuestion → 问答通道（§三.6），
+ *                               provider 按连接生命周期注册/释放（UserQuestionService 单槽）
+ *   - presets/list           {}                     → Agent 预设名单（自动扫描接口，§三.1）
+ *   - presets/read           {id}                   → 读预设组合全文（§三.2）
+ *   - presets/delete         {id}                   → 删用户预设（trust=user 才可删，§三.3）
+ *
+ * 错误通道：预设/命令类错误以 MeowRpcError 抛出，经 MeowJsonRpcTransport 序列化为
+ * 带 code（-32001..-32005）与 data 的 JSON-RPC error（官方 transport 只透传 message）。
  *
  * cordis.yml 中本插件取代官方 sdk-jsonrpc-server（两者都独占 stdin/stdout，
  * 不能共存）；其余能力由组合里的官方插件提供。
  */
 
 import { createServer } from 'node:net'
+import { randomUUID } from 'node:crypto'
 import { JsonRpcLineTransport } from '@deepseek-ai/dsh-sdk-protocol'
 import { HarnessSdkJsonRpcServer } from '@deepseek-ai/dsh-sdk-jsonrpc-server'
 import { SessionId } from '@deepseek-ai/dsh-session'
@@ -23,6 +35,8 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { isTokenDelta } from '@deepseek-ai/dsh-llm/message'
 import { admitEncodedImages } from '@deepseek-ai/dsh-attachment'
+import { resolveSessionPreset, UnknownPresetError, PresetMountError } from '@deepseek-ai/dsh-agent-presets'
+import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import z from '@deepseek-ai/schemastery'
 
 export const name = 'meow-jsonrpc'
@@ -223,7 +237,94 @@ function foldSessionStats(events) {
 }
 
 /**
- * 喵仓版 SDK server：官方标准方法全部走 super，仅扩展三个自定义方法。
+ * 结构化 RPC 错误（plan-standard-mode §三.8 错误映射约定）。
+ *
+ * 官方 JsonRpcLineTransport 对 handler 抛错只回 `-32603 + message`；预设/命令类
+ * 错误需要把稳定 code 与结构化 data（可用预设列表、挂载失败逐行原因等）送到 App，
+ * 所以本插件用 MeowJsonRpcTransport（下方子类）识别 MeowRpcError 并序列化
+ * `error.code`（-32001..-32005 服务器自定义区段）与 `error.data`。
+ */
+const RPC_ERROR = {
+  /** 请求的 Agent 预设不存在；data.available = 名单里实际可用的 id 列表 */
+  PRESET_UNKNOWN: -32001,
+  /** 预设存在但组合挂载失败；data.detail = 逐行原因（PresetMountError.reason） */
+  PRESET_MOUNT_FAILED: -32002,
+  /** commands 服务未挂载（斜杠命令通道不可用） */
+  COMMAND_UNAVAILABLE: -32003,
+  /** 命令行解析不到已注册命令（含旧会话未 join 预设、没有 /plan 的场景） */
+  COMMAND_UNKNOWN: -32004,
+  /** 内置（trust=system）预设不可删除 */
+  PRESET_IMMUTABLE: -32005,
+}
+
+/** 构造一个带稳定 code/data 的 RPC 错误；由 MeowJsonRpcTransport 识别并结构化回传 */
+function meowRpcError(code, message, data) {
+  const error = new Error(message)
+  error.meowRpc = true
+  error.rpcCode = code
+  error.rpcData = data
+  return error
+}
+
+/**
+ * 把 agent-presets 域的异常映射为结构化 RPC 错误；非预设异常原样重抛。
+ * UnknownPresetError.message 已含 available 列表，data 里再给结构化一份。
+ * @returns {never} 总是以 throw 结束
+ */
+function throwMappedPresetError(error) {
+  if (error instanceof UnknownPresetError) {
+    throw meowRpcError(RPC_ERROR.PRESET_UNKNOWN, error.message, {
+      code: 'PRESET_UNKNOWN',
+      presetId: error.presetId,
+      available: [...error.available],
+    })
+  }
+  if (error instanceof PresetMountError) {
+    throw meowRpcError(RPC_ERROR.PRESET_MOUNT_FAILED, error.message, {
+      code: 'PRESET_MOUNT_FAILED',
+      presetId: error.presetId,
+      detail: error.reason,
+    })
+  }
+  throw error
+}
+
+/**
+ * 喵仓版行传输：父类的 handler 异常路径只写 `-32603 + message`，这里识别
+ * MeowRpcError（`meowRpc === true` 标记）改写为带稳定 code 与 data 的 error 帧，
+ * 其余行为与父类完全一致。requestHandler/write/writeError 在 TS 里是 private，
+ * 运行时是普通属性/原型方法，JS 子类照常访问。
+ */
+class MeowJsonRpcTransport extends JsonRpcLineTransport {
+  async handleIncomingRequest(id, method, params) {
+    const handler = this.requestHandler
+    if (handler === undefined) {
+      this.writeError(id, -32601, `method not found: ${method}`)
+      return
+    }
+    try {
+      const result = await handler(method, params)
+      this.write({ jsonrpc: '2.0', id, result })
+    } catch (error) {
+      if (error !== null && typeof error === 'object' && error.meowRpc === true) {
+        this.write({
+          jsonrpc: '2.0',
+          id,
+          error: {
+            code: error.rpcCode,
+            message: error.message,
+            ...(error.rpcData !== undefined ? { data: error.rpcData } : {}),
+          },
+        })
+      } else {
+        this.writeError(id, -32603, error instanceof Error ? error.message : String(error))
+      }
+    }
+  }
+}
+
+/**
+ * 喵仓版 SDK server：官方标准方法全部走 super，仅扩展自定义方法。
  */
 class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
   /** @param ctx 启动后的 Cordis 上下文（提供 agents / shell 服务） */
@@ -240,6 +341,83 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     this.selections = new Map()
     /** initialize 时设置的思考强度（off/high/max），作为新会话默认 */
     this.reasoningEffort = undefined
+    /** sessionId → {presetId?, cwd?}：session/prompt、session/command 透传的会话创建提示（§三.4） */
+    this.pendingHints = new Map()
+    /** requestId → {resolve,reject,cleanup}：等待 App 回答的 userQuestions 请求（§三.6） */
+    this.pendingQuestions = new Map()
+    /** 本连接注册的问答 provider 释放器（UserQuestionService 全局单槽，连接结束必须释放） */
+    this.questionProviderDisposer = undefined
+  }
+
+  /**
+   * agent-presets 名单服务（键名驼峰 `agentPresets`）。
+   *
+   * 惰性取而非构造时缓存：插件 apply 时机早于 agent-presets 自己的 fiber 启动
+   * （cordis 无严格启动顺序），构造时 get 可能拿到 undefined；RPC 调用都发生在
+   * 启动完成之后，调用时取是稳定值。未挂载返回 undefined —— 所有预设相关方法
+   * 按计划降级为旧行为（§4.4①）。
+   */
+  presetsService() {
+    return this.ctx.get('agentPresets')
+  }
+
+  /**
+   * 把 session/prompt、session/command 参数里的 presetId/cwd 写进 pendingHints。
+   * 只在至少一个字段非空时写入；getOrCreateSession 消费后兜底删除（§4.4②）。
+   */
+  stashHints(sessionId, params) {
+    const presetId = params?.presetId
+    const cwd = params?.cwd
+    const hasPreset = presetId !== undefined && presetId !== null && presetId !== ''
+    const hasCwd = cwd !== undefined && cwd !== null && cwd !== ''
+    if (!hasPreset && !hasCwd) return
+    this.pendingHints.set(String(sessionId), {
+      ...(hasPreset ? { presetId: String(presetId) } : {}),
+      ...(hasCwd ? { cwd: String(cwd) } : {}),
+    })
+  }
+
+  /**
+   * 会话已存在而请求仍带 presetId/cwd 时的 warn 对照（§三.4③：以日志为唯一事实源，
+   * 参数忽略只记 warn 不报错）。纯内部诊断，不向调用方暴露。
+   */
+  warnHintsIgnored(sessionId, hints) {
+    if (hints === undefined) return
+    try {
+      const agent = this.sessions.get(sessionId)?.handle?.agent
+      if (agent === undefined) return
+      const recordedPreset = this.presetsService()?.composedPreset?.(agent.ctx)
+      if (hints.presetId !== undefined && recordedPreset !== undefined && recordedPreset !== hints.presetId) {
+        this.ctx.logger?.warn?.(
+          `meow-jsonrpc: session ${sessionId} runs preset "${recordedPreset}", ignoring requested "${hints.presetId}"`,
+        )
+      }
+      const recordedCwd = agent.session?.header?.cwd
+      if (hints.cwd !== undefined && recordedCwd !== undefined && recordedCwd !== hints.cwd) {
+        this.ctx.logger?.warn?.(
+          `meow-jsonrpc: session ${sessionId} runs cwd "${recordedCwd}", ignoring requested "${hints.cwd}"`,
+        )
+      }
+    } catch {
+      // 对照诊断本身不允许影响会话获取
+    }
+  }
+
+  /**
+   * 从持久化日志解析会话所属预设 id（resolveSessionPreset 语义：header 是创建时值，
+   * 空白期切换过预设的会话以最后一条 agent-preset/selected 事件为准）。
+   * @returns {string | undefined} 无名单/无持久化/读日志失败时返回 undefined
+   */
+  async loggedPresetId(sessionId) {
+    if (this.presetsService() === undefined) return undefined
+    const persistence = this.ctx.get('sessionPersistence')
+    if (persistence === undefined) return undefined
+    try {
+      const inspection = await persistence.load(SessionId(sessionId))
+      return resolveSessionPreset({ header: inspection.meta, events: inspection.events })
+    } catch {
+      return undefined
+    }
   }
 
   /** 覆盖 initialize：额外接收 reasoningEffort（off/high/max）作为新会话默认 */
@@ -269,79 +447,147 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
 
   /**
    * 覆盖官方（TS private）会话获取：统一 create/resume，并在 setup 里安装
-   * installModelSelection（运行时切换 provider/model/reasoningEffort），
+   * installModelSelection（运行时切换 provider/model/reasoningEffort）与
+   * Agent 预设挂载（plan-standard-mode §4.4①，照官方 api-proxy composeAgent 配方），
    * 同 sessionId 复用 live agent + selection。磁盘已有持久化日志时走 resume。
-   * TS 的 private 只是编译期约束，运行时属性照常存在；本插件锁定 DSH rc.5。
+   * TS 的 private 只是编译期约束，运行时属性照常存在；本插件锁定 DSH rc.2。
+   *
+   * 预设/工作区语义（§三.4，App 把归属缓冲在 Room 行、随首条消息携带）：
+   *   - create 路径：消费 pendingHints —— resolve（未知 → PRESET_UNKNOWN；不传 → 默认预设）
+   *     在 create 之前完成，因为会话边界在异步 setup 开始前快照 meta；挂载在 setup 里做，
+   *     失败整体回滚创建（官方配方同款时序）；cwd 未传回落全局 DSH_CWD。
+   *   - resume 路径：hints 忽略（日志为唯一事实源），但必须按日志重挂预设 —— standing
+   *     mount 随进程消失，冷 resume 只恢复日志不恢复进程内挂载（官方原话 "Cold resume
+   *     composes the preset the session recorded"）；日志无预设记录（升级前旧会话）→
+   *     不挂载，行为同旧。
+   *   - 兜底：无论走哪条路径，末尾删除 pendingHints —— 会话已存在时 hints 不被消费，
+   *     不清理会残留（§4.4②）。
    */
   async getOrCreateSession(sessionId) {
     if (this.shuttingDown) throw new Error('SDK server is shutting down')
-    if (this.sessions.has(sessionId)) return this.sessions.get(sessionId)
-    const pending = this.resumeCreations.get(sessionId)
-    if (pending) return pending
-    const persistence = this.ctx.get('sessionPersistence')
-    const creation = (async () => {
-      // 会话初始选择：当前默认 (provider/model/reasoningEffort)，
-      // 思考强度按目标模型能力钳制（见 clampReasoningEffort，避免全局 high 带崩不支持思考的模型）
-      const current = this.currentSelection()
-      const clamped = await clampReasoningEffort(this.ctx.get('llm'), current.provider, current.model, current.reasoningEffort)
-      const selection = {
-        current: {
-          provider: current.provider,
-          model: current.model,
-          ...(clamped.effort === undefined ? {} : { reasoningEffort: clamped.effort }),
-        },
-        assembled: undefined,
+    const hints = this.pendingHints.get(sessionId)
+    try {
+      if (this.sessions.has(sessionId)) {
+        this.warnHintsIgnored(sessionId, hints)
+        return this.sessions.get(sessionId)
       }
-      const setup = (agentCtx) => {
-        installModelSelection(agentCtx, selection)
-        this.selections.set(sessionId, selection)
-      }
-      let handle
-      if (persistence !== undefined) {
-        try {
-          handle = await this.ctx.agents.resume({
-            resumeSessionId: SessionId(sessionId),
-            agentOptions: this.agentOptionsFor(),
-            setup,
-          })
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          if (!message.includes('not found')) {
-            // 并发竞态：别的调用方刚把该会话 resume 成 live → 复用 live agent
-            const live = this.ctx.agents.get(SessionId(sessionId))
-            if (live !== undefined) {
-              const rec = { handle: { agent: live, dispose: async () => {} } }
-              this.sessions.set(sessionId, rec)
-              return rec
+      const pending = this.resumeCreations.get(sessionId)
+      if (pending) return pending
+      const presets = this.presetsService()
+      const persistence = this.ctx.get('sessionPersistence')
+      const creation = (async () => {
+        // 会话初始选择：当前默认 (provider/model/reasoningEffort)，
+        // 思考强度按目标模型能力钳制（见 clampReasoningEffort，避免全局 high 带崩不支持思考的模型）
+        const current = this.currentSelection()
+        const clamped = await clampReasoningEffort(this.ctx.get('llm'), current.provider, current.model, current.reasoningEffort)
+        const selection = {
+          current: {
+            provider: current.provider,
+            model: current.model,
+            ...(clamped.effort === undefined ? {} : { reasoningEffort: clamped.effort }),
+          },
+          assembled: undefined,
+        }
+        /** setup 工厂：两种路径共用模型选择安装，预设 id 不同（resume=日志值，create=hints 值） */
+        const makeSetup = (presetId) => async (agentCtx) => {
+          installModelSelection(agentCtx, selection)
+          this.selections.set(sessionId, selection)
+          if (presets !== undefined && presetId !== undefined) {
+            try {
+              await presets.mount(agentCtx, presetId)
+            } catch (error) {
+              throwMappedPresetError(error)
             }
-            throw error
           }
-          // 磁盘无此会话 → 全新创建
+        }
+        let handle
+        if (persistence !== undefined) {
+          try {
+            // 冷 resume：按日志重挂预设（漏了这句重启后所有预设会话裸奔）
+            const loggedPresetId = await this.loggedPresetId(sessionId)
+            handle = await this.ctx.agents.resume({
+              resumeSessionId: SessionId(sessionId),
+              agentOptions: this.agentOptionsFor(),
+              setup: makeSetup(loggedPresetId),
+            })
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            if (!message.includes('not found')) {
+              // 并发竞态：别的调用方刚把该会话 resume 成 live → 复用 live agent
+              const live = this.ctx.agents.get(SessionId(sessionId))
+              if (live !== undefined) {
+                const rec = { handle: { agent: live, dispose: async () => {} } }
+                this.sessions.set(sessionId, rec)
+                return rec
+              }
+              throw error
+            }
+            // 磁盘无此会话 → 全新创建。预设解析在 create 之前（meta 快照时序），失败
+            // 时会话未创建、错误原样抛给 prompt → PRESET_UNKNOWN / PRESET_MOUNT_FAILED
+            let resolvedPreset
+            if (presets !== undefined) {
+              try {
+                resolvedPreset = await presets.resolve(hints?.presetId)
+              } catch (error) {
+                throwMappedPresetError(error)
+              }
+            }
+            handle = await this.ctx.agents.create({
+              sessionId: SessionId(sessionId),
+              meta: {
+                cwd: hints?.cwd !== undefined ? hints.cwd : this.cwd,
+                ...(resolvedPreset !== undefined ? { agentPreset: resolvedPreset.id } : {}),
+              },
+              agentOptions: this.agentOptionsFor(),
+              setup: makeSetup(resolvedPreset?.id),
+            })
+          }
+        } else {
+          let resolvedPreset
+          if (presets !== undefined) {
+            try {
+              resolvedPreset = await presets.resolve(hints?.presetId)
+            } catch (error) {
+              throwMappedPresetError(error)
+            }
+          }
           handle = await this.ctx.agents.create({
             sessionId: SessionId(sessionId),
-            meta: { cwd: this.cwd },
+            meta: {
+              cwd: hints?.cwd !== undefined ? hints.cwd : this.cwd,
+              ...(resolvedPreset !== undefined ? { agentPreset: resolvedPreset.id } : {}),
+            },
             agentOptions: this.agentOptionsFor(),
-            setup,
+            setup: makeSetup(resolvedPreset?.id),
           })
         }
-      } else {
-        handle = await this.ctx.agents.create({
-          sessionId: SessionId(sessionId),
-          meta: { cwd: this.cwd },
-          agentOptions: this.agentOptionsFor(),
-          setup,
-        })
-      }
-      const rec = { handle }
-      this.sessions.set(sessionId, rec)
-      return rec
-    })()
-    this.resumeCreations.set(sessionId, creation)
-    void creation.then(
-      () => { this.resumeCreations.delete(sessionId) },
-      () => { this.resumeCreations.delete(sessionId) },
-    )
-    return creation
+        const rec = { handle }
+        this.sessions.set(sessionId, rec)
+        return rec
+      })()
+      this.resumeCreations.set(sessionId, creation)
+      void creation.then(
+        () => { this.resumeCreations.delete(sessionId) },
+        () => { this.resumeCreations.delete(sessionId) },
+      )
+      return creation
+    } finally {
+      this.pendingHints.delete(sessionId)
+    }
+  }
+
+  /**
+   * 覆盖官方 prompt：把参数里的 presetId/cwd 写进 pendingHints（§三.4）后走官方流程
+   * （super.prompt → this.getOrCreateSession 虚分发到上方覆盖版，创建时消费）。
+   * 预设域异常映射为结构化 RPC 错误（§三.8）。
+   */
+  async prompt(params) {
+    this.stashHints(String(params?.sessionId ?? ''), params)
+    try {
+      return await super.prompt(params)
+    } catch (error) {
+      throwMappedPresetError(error)
+    }
   }
 
   /** 运行时切换某会话的模型/思考强度（影响该会话下一次请求；未建 live agent 或空 sessionId 时更新全局默认） */
@@ -539,6 +785,12 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
       case 'settings/removeProvider': return this.removeProvider(params ?? {})
       case 'session/attachImages': return this.attachImages(params ?? {})
       case 'session/imageLimits': return this.imageLimits()
+      case 'session/command': return this.sessionCommand(params ?? {})
+      case 'session/query': return this.sessionQuery(params ?? {})
+      case 'session/answerQuestion': return this.answerQuestion(params ?? {})
+      case 'presets/list': return this.presetsList()
+      case 'presets/read': return this.presetsRead(params ?? {})
+      case 'presets/delete': return this.presetsDelete(params ?? {})
       default: return super.handleRequest(method, params)
     }
   }
@@ -666,6 +918,306 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     return { stats: foldSessionStats(inspection.events) }
   }
 
+  /**
+   * 程序化执行一条斜杠命令（plan-standard-mode §三.5，附加模式胶囊的执行通道）。
+   *
+   * 与 prompt 的差异：命令不进模型回合（CommandRuntime 只追加 command/run、command/done
+   * 日志事件并执行 handler）；/plan、/goal、/compact 等 handler 直接改会话状态。禁止把
+   * 斜杠文本当普通消息发送 —— 命令拦截不在 SDK 层，原文会进模型。
+   *
+   * 参数带 presetId/cwd 时先写 pendingHints → 会话未建则创建（归属即正确，§二.1 推论）。
+   * 超时保护：5s 只放弃等待、不 abort 传给 execute 的 signal —— plan 在 busy 会话是
+   * queued 立即返回、可能已生效，abort 会把 handler settle 成 error，UI 误报失败
+   * （§三.5）。execute 对未知语法/命令返回 undefined → COMMAND_UNKNOWN；commands
+   * 服务未挂载 → COMMAND_UNAVAILABLE；handler 抛错 → kind:'error' 带原文。
+   */
+  async sessionCommand(params) {
+    const sessionId = String(params.sessionId ?? '')
+    if (sessionId === '') throw new Error('session/command: sessionId is required')
+    const line = String(params.line ?? '')
+    if (line === '') throw new Error('session/command: line is required')
+    this.stashHints(sessionId, params)
+    let rec
+    try {
+      rec = await this.getOrCreateSession(sessionId)
+    } catch (error) {
+      throwMappedPresetError(error)
+    }
+    const agent = rec.handle.agent
+    if (this.ctx.agents.get(agent.id) !== agent) {
+      throw new Error(`session/command: session agent was disposed outside the server: ${sessionId}`)
+    }
+    const commands = this.ctx.get('commands')
+    if (commands === undefined) {
+      throw meowRpcError(RPC_ERROR.COMMAND_UNAVAILABLE, 'session/command: commands service is not mounted', {
+        code: 'COMMAND_UNAVAILABLE',
+      })
+    }
+    // 自己的 signal 传给 execute（本次永不 abort，仅占位）；5s 超时只放弃等待。
+    const controller = new AbortController()
+    const execution = Promise.resolve()
+      .then(() => commands.execute(agent, line, [], controller.signal))
+    // 超时放弃等待后，迟到的 rejection 不允许变成 unhandledRejection 打崩进程
+    execution.catch(() => {})
+    const settled = await Promise.race([
+      execution.then(
+        (value) => ({ done: true, value }),
+        (error) => ({ done: true, error }),
+      ),
+      new Promise((resolve) => { setTimeout(() => resolve({ done: false }), 5000) }),
+    ])
+    if (!settled.done) {
+      return {
+        sessionId,
+        kind: 'success',
+        text: '命令已受理（5s 内未返回执行结果；是否生效以会话事件为准）',
+      }
+    }
+    if (settled.error !== undefined) {
+      // handler 抛错：command/done(error) 已落日志；这里把原因带回 UI
+      return {
+        sessionId,
+        kind: 'error',
+        text: settled.error instanceof Error ? settled.error.message : String(settled.error),
+      }
+    }
+    if (settled.value === undefined) {
+      throw meowRpcError(
+        RPC_ERROR.COMMAND_UNKNOWN,
+        `session/command: "${line}" did not resolve to a registered command`,
+        { code: 'COMMAND_UNKNOWN', line },
+      )
+    }
+    const result = settled.value.result ?? {}
+    return {
+      sessionId,
+      kind: result.kind === 'error' ? 'error' : 'success',
+      ...(result.text !== undefined ? { text: String(result.text) } : {}),
+    }
+  }
+
+  /**
+   * 旧会话状态水合（plan-standard-mode §三.7）：读持久化日志做 last-wins 折叠。
+   * resume 不重放种子事件，App 打开旧会话时用本方法恢复 todo / 附加模式（plan/goal）/
+   * 所属预设；blank = 无 user/message 与 turn 事件。
+   */
+  async sessionQuery(params) {
+    const sessionId = params?.sessionId === undefined || params.sessionId === null
+      ? '' : String(params.sessionId)
+    if (sessionId === '') {
+      return { sessionId: '', preset: null, blank: true, todos: null, plan: null, goal: null }
+    }
+    const empty = { sessionId, preset: null, blank: true, todos: null, plan: null, goal: null }
+    const persistence = this.ctx.get('sessionPersistence')
+    if (persistence === undefined) return empty
+    let inspection
+    try {
+      inspection = await persistence.load(SessionId(sessionId))
+    } catch {
+      return empty
+    }
+    const events = inspection.events
+    let todos = null
+    let plan = null
+    let goal = null
+    for (const event of events) {
+      if (event.type === 'todo/write') {
+        todos = Array.isArray(event.data?.todos) ? event.data.todos : todos
+      } else if (event.type === 'plan/mode') {
+        plan = { active: event.data?.active === true }
+      } else if (event.type === 'goal/change') {
+        // goal/change 携带变更后全量状态（clear 为墓碑）；last-wins
+        goal = event.data?.operation === 'clear' ? null : event.data
+      }
+    }
+    const blank = !events.some((event) => event.type === 'user/message' || event.type === 'turn/start')
+    // preset 与 resume 重挂同源：header（创建时值）+ agent-preset/selected 事件（空白期切换）
+    let preset = null
+    try {
+      preset = resolveSessionPreset({ header: inspection.meta, events }) ?? null
+    } catch {
+      preset = null
+    }
+    return { sessionId, preset, blank, todos, plan, goal }
+  }
+
+  /**
+   * Agent 预设名单（§三.1，自动扫描接口）：roster.list() 每次重读 roots，无缓存 ——
+   * 用户/AI 新建的预设自动出现在返回值，App 不硬编码列表。isDefault 对照默认预设 id
+   * （默认缺失/解析失败时不标注任何一行，避免整个方法失败）。
+   */
+  async presetsList() {
+    const presets = this.presetsService()
+    if (presets === undefined) return { presets: [] }
+    const roster = await presets.list()
+    let defaultId
+    try {
+      defaultId = (await presets.resolve()).id
+    } catch {
+      defaultId = undefined
+    }
+    return {
+      presets: roster.map((preset) => ({
+        id: preset.id,
+        ...(preset.name !== undefined ? { name: preset.name } : { name: preset.id }),
+        ...(preset.description !== undefined ? { description: preset.description } : {}),
+        trust: preset.trust,
+        broken: preset.broken ?? null,
+        isDefault: preset.id === defaultId,
+      })),
+    }
+  }
+
+  /** 读预设组合全文（§三.2，创造预设用）；未知 id → PRESET_UNKNOWN */
+  async presetsRead(params) {
+    const presets = this.presetsService()
+    const id = String(params?.id ?? '')
+    if (presets === undefined) {
+      throw meowRpcError(RPC_ERROR.PRESET_UNKNOWN, 'presets/read: agent-presets service is not mounted', {
+        code: 'PRESET_UNKNOWN', presetId: id, available: [],
+      })
+    }
+    let composition
+    try {
+      composition = await presets.read(id)
+    } catch (error) {
+      throwMappedPresetError(error)
+    }
+    return { id, composition }
+  }
+
+  /** 删用户预设（§三.3）：trust=user 才可删（内置预设 PRESET_IMMUTABLE） */
+  async presetsDelete(params) {
+    const presets = this.presetsService()
+    const id = String(params?.id ?? '')
+    if (presets === undefined) {
+      throw meowRpcError(RPC_ERROR.PRESET_UNKNOWN, 'presets/delete: agent-presets service is not mounted', {
+        code: 'PRESET_UNKNOWN', presetId: id, available: [],
+      })
+    }
+    let preset
+    try {
+      preset = await presets.resolve(id)
+    } catch (error) {
+      throwMappedPresetError(error)
+    }
+    if (preset.trust !== 'user') {
+      throw meowRpcError(RPC_ERROR.PRESET_IMMUTABLE, `preset "${id}" is built into the app and cannot be deleted`, {
+        code: 'PRESET_IMMUTABLE', presetId: id, trust: preset.trust,
+      })
+    }
+    await presets.remove(id)
+    return { deleted: true }
+  }
+
+  /**
+   * App 回答回来（§三.6）：按 requestId 取 pending 条目并 settle。cancelled=true 以
+   * ASK_CANCELLED 拒绝（上游 plan-mode 对该 code 有专门文案：「用户想直接说话」）。
+   */
+  async answerQuestion(params) {
+    const requestId = String(params?.requestId ?? '')
+    const entry = this.pendingQuestions.get(requestId)
+    if (entry === undefined) {
+      throw new Error('session/answerQuestion: unknown or already-settled requestId')
+    }
+    this.pendingQuestions.delete(requestId)
+    entry.cleanup?.()
+    if (params?.cancelled === true) {
+      entry.reject(new UserQuestionError('the user dismissed the question', 'ASK_CANCELLED'))
+      return { delivered: true }
+    }
+    const raw = Array.isArray(params?.answers) ? params.answers : []
+    const answers = raw.map((item) => ({
+      id: String(item?.id ?? ''),
+      selected: Array.isArray(item?.selected) ? item.selected.map((value) => String(value)) : [],
+      ...(item?.custom !== undefined && item.custom !== null ? { custom: String(item.custom) } : {}),
+    }))
+    entry.resolve({ answers })
+    return { delivered: true }
+  }
+
+  /**
+   * 注册问答 provider（连接建立时调用，§4.4④）。
+   *
+   * 生命周期要点：serve() 每条 socket 连接 new 一个 server 实例，而
+   * UserQuestionService 全局单 provider（重复注册抛 DUPLICATE_PROVIDER）——
+   * provider 必须挂连接生命周期：连接建立 registerProvider，socket close 的
+   * cleanup 里 dispose 并 reject 本实例全部 pending（重连才不会撞单槽限制）。
+   * 重连竞态（旧连接尚未清理、新连接先到）注册失败 → 本连接问答通道不可用，
+   * 工具调用会收到 NO_PROVIDER，App 重连后恢复；不写任何 stdout 日志（会污染
+   * JSON-RPC 帧）。
+   */
+  installQuestionProvider() {
+    const userQuestions = this.ctx.get('userQuestions')
+    if (userQuestions === undefined) return
+    try {
+      this.questionProviderDisposer = userQuestions.registerProvider({
+        ask: (request) => this.askUser(request),
+      })
+    } catch {
+      this.questionProviderDisposer = undefined
+    }
+  }
+
+  /** 释放问答 provider 并 reject 本连接全部 pending（socket close cleanup 调用） */
+  disposeQuestionProvider() {
+    const disposer = this.questionProviderDisposer
+    this.questionProviderDisposer = undefined
+    if (disposer !== undefined) {
+      try {
+        disposer()
+      } catch {
+        // 单槽已被并发重连的下一个实例占用等场景：释放失败不阻塞连接清理
+      }
+    }
+    const error = new UserQuestionError('the chat UI disconnected before answering', 'ASK_ABORTED')
+    for (const entry of this.pendingQuestions.values()) {
+      try {
+        entry.cleanup?.()
+      } catch {
+        // 清理失败同样不阻塞
+      }
+      entry.reject(error)
+    }
+    this.pendingQuestions.clear()
+  }
+
+  /**
+   * 问答 provider 本体：生成 requestId、登记 pending、以 session.question 通知送达
+   * App，返回等待回答的 Promise。abort signal（用户停止生成 / 回合中止）→ reject
+   * ASK_ABORTED；sessionId 取 request.agent?.session.id（ask/plan 两条路径都带 agent）。
+   */
+  askUser(request) {
+    const requestId = randomUUID()
+    const agent = request?.agent
+    const sessionId = agent !== undefined && agent?.session !== undefined ? String(agent.session.id) : undefined
+    return new Promise((resolve, reject) => {
+      const entry = { resolve, reject, cleanup: undefined }
+      const signal = request?.signal
+      if (signal !== undefined) {
+        const onAbort = () => {
+          if (this.pendingQuestions.get(requestId) === entry) this.pendingQuestions.delete(requestId)
+          reject(new UserQuestionError('ask_user_question was aborted before the user answered', 'ASK_ABORTED'))
+        }
+        signal.addEventListener('abort', onAbort, { once: true })
+        entry.cleanup = () => signal.removeEventListener('abort', onAbort)
+      }
+      this.pendingQuestions.set(requestId, entry)
+      if (signal !== undefined && signal.aborted) {
+        // 已中止：登记后立即按 ASK_ABORTED 出栈（复用 abort 监听器的语义）
+        this.pendingQuestions.delete(requestId)
+        entry.cleanup()
+        reject(new UserQuestionError('ask_user_question was aborted before the user answered', 'ASK_ABORTED'))
+        return
+      }
+      this.transport.notify('session.question', {
+        ...(sessionId !== undefined ? { sessionId } : {}),
+        requestId,
+        questions: request?.questions ?? [],
+      })
+    })
+  }
+
   /** 中止一条正在运行的终端命令（幂等） */
   async cancelBash(params) {
     const requestId = String(params.requestId ?? '')
@@ -710,12 +1262,15 @@ export function apply(ctx, config) {
     return exitTask
   }
 
-  /** 为一条连接挂载传输；返回清理函数（dispose server + 关传输） */
+  /** 为一条连接挂载传输；返回清理函数（释放问答 provider + dispose server + 关传输） */
   const serve = (transport) => {
     const server = new MeowJsonRpcServer(ctx, transport, {
       maxTokensAsSuccess: resolved.maxTokensAsSuccess,
       streamIntervalMs: resolved.bashStreamIntervalMs,
     })
+    // 问答 provider 挂连接生命周期：UserQuestionService 全局单 provider 槽位，
+    // socket close 的 cleanup 里释放并 reject 本连接全部 pending（§4.4④）
+    server.installQuestionProvider()
     transport.onRequest(async (method, params) => {
       const result = await server.handleRequest(method, params ?? {})
       if (method === 'shutdown') {
@@ -725,6 +1280,7 @@ export function apply(ctx, config) {
     })
     transport.start()
     return async () => {
+      server.disposeQuestionProvider()
       await server.shutdown()
       transport.close()
     }
@@ -733,9 +1289,11 @@ export function apply(ctx, config) {
   const socketPath = process.env.DSH_JSONRPC_SOCKET
 
   if (socketPath) {
-    // socket 模式：监听本地 unix socket（路径由 App 经环境变量注入，位于 filesDir）
+    // socket 模式：监听本地 unix socket（路径由 App 经环境变量注入，位于 filesDir）；
+    // 用喵仓版行传输（支持结构化 RPC 错误 code/data）。每个连接复用一个
+    // MeowJsonRpcServer（会话经 ctx.agents + 持久化 resume 共享，重连自动恢复）。
     const server = createServer((socket) => {
-      const cleanup = serve(new JsonRpcLineTransport(socket, socket))
+      const cleanup = serve(new MeowJsonRpcTransport(socket, socket))
       socket.on('close', () => { void cleanup() })
       socket.on('error', () => {})
     })
@@ -746,7 +1304,7 @@ export function apply(ctx, config) {
     }, 'meow-jsonrpc.serve')
   } else {
     // stdio 模式（fallback，PC 调试 / 无真终端时）
-    const cleanup = serve(new JsonRpcLineTransport(process.stdin, process.stdout))
+    const cleanup = serve(new MeowJsonRpcTransport(process.stdin, process.stdout))
     ctx.effect(() => {
       return cleanup
     }, 'meow-jsonrpc.serve')

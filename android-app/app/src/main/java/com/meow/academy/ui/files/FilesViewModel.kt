@@ -61,8 +61,17 @@ data class FilesUiState(
  * 职责：根切换、目录栈、多模式排序、视图切换（列表/宫格/瀑布流）、多选、搜索（防抖 300ms）、
  * 收藏（快捷方式抽屉）、增删改查操作调度。
  * 所有文件 IO 均走 [FileRepository]（内部已切 Dispatchers.IO），本类不再自行碰主线程阻塞。
+ *
+ * @param initialRootOverride 初始浏览根覆盖（plan-standard-mode §5.7 末段）：
+ *   快捷文件面板跟随**当前会话工作区**时由工厂注入；文件管理页实例不传（null）→
+ *   行为与旧版完全一致（INTERNAL 根 = 全局工作区）。
  */
-class FilesViewModel(app: Application) : AndroidViewModel(app) {
+// @JvmOverloads：反射工厂（viewModel() 默认 factory）按 (Application) 单参构造器查找，
+// 默认参数不会生成单参重载，不加会 NoSuchMethodException 崩溃（真机 0.2.6 首装实测）
+class FilesViewModel @JvmOverloads constructor(
+    app: Application,
+    private val initialRootOverride: String? = null,
+) : AndroidViewModel(app) {
 
     private val repository = FileRepository(app)
     private val favoritesRepository = FileFavoritesRepository(app)
@@ -88,6 +97,19 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         refresh()
+
+        // 浏览根覆盖（快捷文件面板跟随会话工作区）：覆盖目录存在时把 INTERNAL 栈底改为它。
+        // 放协程里探测（isDirectory 是磁盘 IO），不传覆盖时零额外开销、行为不变（喵~）
+        initialRootOverride?.let { overridePath ->
+            viewModelScope.launch {
+                val ok = withContext(Dispatchers.IO) { File(overridePath).isDirectory }
+                if (ok) {
+                    stacks[FileRoot.INTERNAL] = ArrayDeque<String>().apply { add(overridePath) }
+                    _uiState.update { it.copy(currentPath = overridePath) }
+                    refresh()
+                }
+            }
+        }
 
         // 收藏 / 最近数据流：存储变化 → 解析为展示条目（文件已删的剔除）并同步进 UI 状态
         viewModelScope.launch {
@@ -152,6 +174,33 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 面包屑输入为空时回工作区 */
     fun navigateToInternalRoot() = switchRoot(FileRoot.INTERNAL)
+
+    /**
+     * 重设浏览基准（INTERNAL 栈底），快捷文件面板「跟随当前会话工作区」用（plan-standard-mode §5.7）。
+     * 基准与目标一致时不动（保留用户当前浏览位置）；变化时重置目录栈并清多选/搜索态，喵~。
+     */
+    fun setBrowseRoot(path: String) {
+        if (path.isBlank()) return
+        viewModelScope.launch {
+            val normalized = withContext(Dispatchers.IO) {
+                repository.normalizeNavigationPath(path)
+            } ?: return@launch
+            val base = stacks[FileRoot.INTERNAL]?.firstOrNull()
+            if (base == normalized) return@launch
+            stacks[FileRoot.INTERNAL] = ArrayDeque<String>().apply { add(normalized) }
+            _uiState.update {
+                it.copy(
+                    currentPath = normalized,
+                    isMultiSelect = false,
+                    selection = emptySet(),
+                    isSearching = false,
+                    searchQuery = "",
+                    searchResults = emptyList(),
+                )
+            }
+            refresh()
+        }
+    }
 
     // ── 列表加载与排序 ──
 

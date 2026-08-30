@@ -15,8 +15,10 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -118,6 +120,15 @@ private fun ChatDetailView(
     val currentProvider by vm.currentProvider.collectAsState()
     val pendingCount by vm.pendingCount.collectAsState()
     val chatBackground by vm.chatBackground.collectAsState()
+    // ── 附加模式 / 悬浮栏 / 问答 / 工作设置（plan-standard-mode） ──
+    val attachedMode by vm.attachedMode.collectAsState()
+    val todoState by vm.todoState.collectAsState()
+    val subagentRuns by vm.subagentRuns.collectAsState()
+    val pendingQuestion by vm.pendingQuestion.collectAsState()
+    val currentSession by vm.currentSession.collectAsState()
+    val defaultPreset by vm.defaultPreset.collectAsState()
+    val defaultWorkspacePath by vm.defaultWorkspacePath.collectAsState()
+    val presetCatalog by vm.presetCatalog.collectAsState()
     var input by remember { mutableStateOf("") }
     var attachments by remember { mutableStateOf<List<PendingAttachment>>(emptyList()) }
     val attachedPaths = attachments.map { it.path }.toSet()
@@ -199,6 +210,52 @@ private fun ChatDetailView(
     // 打开会话：默认回到底部（跟随）
     LaunchedEffect(currentId) {
         listState.scrollToItem(0)
+    }
+
+    // ── 自动打开最近会话（plan-standard-mode §1.1.9）──
+    // 进入聊天页 currentId 为空且已有会话 → 打开 updatedAt 最新一条（列表已按 updatedAt 倒序）；
+    // 删除当前会话后 currentId 归空，同样落位到最近剩余会话——一个机制覆盖两个场景，喵~
+    LaunchedEffect(sessions, currentId) {
+        if (currentId == null && sessions.isNotEmpty()) {
+            sessions.firstOrNull()?.let { vm.openSession(it.id) }
+        }
+    }
+
+    // ── 问答卡交互绑定（§5.6）──
+    // 当前会话最新一个「未回答」的问答卡 call.id（消息流 + 流式一起找最后一个；result 非空 = 已答）；
+    // pendingQuestion 属于当前会话时才启用交互。
+    val latestQuestionCallId = remember(messages, streaming, currentId) {
+        sequence {
+            messages.forEach { m ->
+                parseSegments(m.segmentsJson)?.forEach { seg ->
+                    if (seg is Segment.Tool && seg.call.name in QuestionToolNames && seg.call.result.isBlank()) {
+                        yield(seg.call.id)
+                    }
+                }
+            }
+            streaming?.segments?.forEach { seg ->
+                if (seg is Segment.Tool && seg.call.name in QuestionToolNames && seg.call.result.isBlank()) {
+                    yield(seg.call.id)
+                }
+            }
+        }.lastOrNull()
+    }
+    val pendingQuestionForSession = pendingQuestion?.takeIf { pq ->
+        pq.sessionId == null || pq.sessionId == vm.dshSessionIdOf(currentId)
+    }
+
+    // 顶栏小字：工作区短名 · Agent 预设显示名（§5.10；数据源 = 当前会话，未打开回退全局默认）
+    val contextLine = remember(currentSession, defaultWorkspacePath, defaultPreset, presetCatalog) {
+        buildString {
+            append(
+                topbarWorkspaceShortName(
+                    currentSession?.workspacePath ?: defaultWorkspacePath,
+                    context.filesDir.absolutePath,
+                )
+            )
+            append(" · ")
+            append(presetDisplayName(currentSession?.presetId ?: defaultPreset.takeIf { it.isNotBlank() }, presetCatalog))
+        }
     }
 
     // 打开右侧看板 / 切换会话时刷新调用量（流结束与 DSH Running 已在 ViewModel 内刷新）
@@ -288,20 +345,32 @@ private fun ChatDetailView(
                     snackbarHost = { SnackbarHost(snackbarHostState) },
                     topBar = {
                         TopAppBar(
+                            // 两行标题（§5.10）：上方小字 = 工作区短名 · Agent 预设名（不可点击），
+                            // 下方大字 = 会话标题（重命名点击绑在大字上不动）；高度 68dp 容纳两行
+                            modifier = Modifier.height(68.dp),
                             title = {
-                                Text(
-                                    text = currentTitle,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = if (currentId != null) {
-                                        Modifier.clickable {
-                                            renameText = currentTitle
-                                            showRenameDialog = true
-                                        }
-                                    } else {
-                                        Modifier
-                                    },
-                                )
+                                Column {
+                                    Text(
+                                        text = contextLine,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    Text(
+                                        text = currentTitle,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = if (currentId != null) {
+                                            Modifier.clickable {
+                                                renameText = currentTitle
+                                                showRenameDialog = true
+                                            }
+                                        } else {
+                                            Modifier
+                                        },
+                                    )
+                                }
                             },
                             navigationIcon = {
                                 IconButton(onClick = { scope.launch { drawerState.open() } }) {
@@ -335,27 +404,33 @@ private fun ChatDetailView(
                             },
                             isGenerating = isGenerating,
                             pendingCount = pendingCount,
-                            llmModel = llmModel,
                             reasoningEffort = reasoningEffort,
                             webSearchEnabled = webSearchEnabled,
-                            providers = providers,
-                            availableModels = availableModels,
-                            currentProvider = currentProvider,
+                            attachedMode = attachedMode,
+                            hasSession = currentId != null,
                             onSend = {
                                 vm.sendMessage(input, attachments)
                                 input = ""
                                 attachments = emptyList()
                             },
                             onStop = vm::stopGenerating,
-                            onSelectModel = vm::selectModel,
-                            onSelectProvider = vm::selectProvider,
                             onSelectReasoningEffort = vm::selectReasoningEffort,
                             onToggleWebSearch = vm::toggleWebSearch,
                             onPickFile = { filePicker.launch("*/*") },
+                            onAttachPlan = vm::attachPlan,
+                            onAttachGoal = vm::attachGoal,
+                            onDetachAttachedMode = {
+                                // 单槽位：按当前模式走对应的关闭命令
+                                when (attachedMode) {
+                                    is AttachedMode.Plan -> vm.detachPlan()
+                                    is AttachedMode.Goal -> vm.detachGoal()
+                                    null -> Unit
+                                }
+                            },
                         )
                     },
                 ) { padding ->
-                    Box(
+                    Column(
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(padding)
@@ -379,6 +454,9 @@ private fun ChatDetailView(
                                 }
                             },
                     ) {
+                        // 上方悬浮栏（§5.5）：todo / subagent 两态；两态都无数据 → 整条不渲染
+                        ChatStatusBar(todos = todoState, subagentRuns = subagentRuns)
+                        Box(modifier = Modifier.weight(1f)) {
                         if (messages.isEmpty() && streaming == null) {
                             Box(
                                 modifier = Modifier.fillMaxSize(),
@@ -407,11 +485,21 @@ private fun ChatDetailView(
                                         AssistantBody(
                                             segments = displayedStreamingSegments ?: s.segments,
                                             status = MessageStatus.STREAMING,
+                                            pendingQuestion = pendingQuestionForSession,
+                                            interactiveQuestionCallId = latestQuestionCallId,
+                                            onAnswerQuestion = vm::answerQuestion,
+                                            onCancelQuestion = vm::cancelQuestion,
                                         )
                                     }
                                 }
                                 items(visible.asReversed(), key = { it.id }) { msg ->
-                                    MessageRow(msg)
+                                    MessageRow(
+                                        msg = msg,
+                                        pendingQuestion = pendingQuestionForSession,
+                                        interactiveQuestionCallId = latestQuestionCallId,
+                                        onAnswerQuestion = vm::answerQuestion,
+                                        onCancelQuestion = vm::cancelQuestion,
+                                    )
                                 }
                             }
                         }
@@ -430,6 +518,7 @@ private fun ChatDetailView(
                                     tint = MaterialTheme.colorScheme.onSurface,
                                 )
                             }
+                        }
                         }
                     }
                 }
@@ -474,6 +563,7 @@ private fun ChatDetailView(
                         onRefresh = vm::refreshUsageStats,
                     )
                 },
+                workspaceSettingsPanel = { WorkspaceSettingsPanel(vm) },
             )
         }
 
@@ -507,4 +597,26 @@ private fun ChatDetailView(
 /** 非快照状态的持有者：组合期间同步记录「贴底时的最新流式分段」，避免写 State 引发额外重组 */
 private class StreamingSegmentsSnapshot {
     var segments: List<Segment>? = null
+}
+
+/** Agent 预设显示名（PresetCatalog 缓存查 name，查不到显示 id，null → 「默认」；§5.10） */
+internal fun presetDisplayName(presetId: String?, catalog: List<com.meow.academy.data.model.PresetEntry>): String {
+    if (presetId.isNullOrBlank()) return "默认"
+    return catalog.firstOrNull { it.id == presetId }?.name ?: presetId
+}
+
+/**
+ * 顶栏小字用的工作区短名（§5.10，规则同 §5.7①）：
+ * `<filesDir>/workspace` → 「workspace」、`<filesDir>` 本身 → 「files」、其余取最后一段文件夹名；
+ * null（旧数据未写工作区）→ 按历史唯一工作区回退「workspace」。本文件私有实现，不与看板共用避免耦合。
+ */
+private fun topbarWorkspaceShortName(path: String?, filesDirPath: String): String {
+    val normalized = (path ?: "").trimEnd('/')
+    val root = filesDirPath.trimEnd('/')
+    return when {
+        normalized.isEmpty() -> "workspace"
+        normalized == root -> "files"
+        normalized == "$root/workspace" -> "workspace"
+        else -> normalized.substringAfterLast('/')
+    }
 }

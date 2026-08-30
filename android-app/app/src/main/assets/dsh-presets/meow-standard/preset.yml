@@ -1,0 +1,6 @@
+# meow-standard 预设元数据（plan-standard-mode §4.3）。
+# 仅展示文本：id = 目录名，trust = 发现根（dsh-presets/ → system）。
+# name/description 会直接显示在 App 右侧看板「工作设置 → Agent 预设」的卡片上。
+name: 标准
+description: 默认的「标准」预设（全家桶）：喵喵老师角色 + 全部学习工具 —— 文件读写与编辑、终端命令、联网搜索、待办清单、技能（skills）、目标（goal）、后台任务、规划模式、子代理委派与问答卡。新会话默认使用本预设。
+order: 1

@@ -42,6 +42,8 @@ object DshProcessLauncher {
     ): Process {
         // 兜底：runtime 已解压（跳过 extract）时也确保业务目录存在（三保险之三）
         RuntimeExtractor.ensureAppDirs(context)
+        // 系统预设播种（assets dsh-presets/ → filesDir/dsh-presets/）：必须赶在 DSH 读 roots 之前
+        RuntimeExtractor.syncDshPresetsIfNeeded(context)
 
         val runtimeDir = RuntimeExtractor.runtimeDir(context)
         val node = File(runtimeDir, "lib/node.bin")
@@ -52,7 +54,12 @@ object DshProcessLauncher {
             )
         }
 
-        val workspaceDir = RuntimeExtractor.workspaceDir(context).absolutePath
+        // 工作区按设置取值（DataStore workspacePath，默认 filesDir/workspace 兼容存量）：
+        // 启动时取一次值，进程生命周期内固定——切换工作区只写 DataStore、不重启 DSH，
+        // 只影响新会话（归属由首条消息定死），生成中的会话不受影响（plan-standard-mode §4.6）
+        val workspaceDirFile = RuntimeExtractor.workspaceDir(context)
+        val workspaceDir = workspaceDirFile.absolutePath
+        val uploadsDir = RuntimeExtractor.workspaceUploadsDir(context).absolutePath
         val command = listOf(
             "/system/bin/linker64",
             node.absolutePath,
@@ -61,7 +68,7 @@ object DshProcessLauncher {
         Log.i(TAG, "launch: " + command.joinToString(" "))
 
         val pb = ProcessBuilder(command)
-        pb.directory(RuntimeExtractor.workspaceDir(context))
+        pb.directory(workspaceDirFile)
         pb.environment().apply {
             // PATH：runtime/bin 里有 node/bash；/system/bin 提供 sh 等系统命令
             put("PATH", runtimeDir.absolutePath + "/bin:/system/bin:/system/xbin")
@@ -101,8 +108,11 @@ object DshProcessLauncher {
             // phase4：settings 迁至 appconfig/ 且 JSON 化（DSH settings-file 原生支持 .json）
             put("DSH_SETTINGS_PATH", RuntimeExtractor.appConfigDir(context).absolutePath + "/dsh-settings.json")
             put("DSH_CREDENTIALS_PATH", RuntimeExtractor.appConfigDir(context).absolutePath + "/dsh-credentials.yaml")
-            put("DSH_UPLOAD_DIR", RuntimeExtractor.workspaceUploadsDir(context).absolutePath)
+            put("DSH_UPLOAD_DIR", uploadsDir)
             put("DSH_CWD", workspaceDir)
+            // DSH_HOME：用户预设根（${DSH_HOME}/.agent-presets/，全在私有目录天然可写）与 skills 发现根的基准
+            // （此前未注入，回落到 workspace/.dsh；本计划显式固定到 filesDir/.dsh，plan-standard-mode §4.6）
+            put("DSH_HOME", context.filesDir.absolutePath + "/.dsh")
             // filesDir 绝对路径（cordis.yml 的 fs-local deny 用绝对路径构造敏感文件规则）
             put("DSH_FILES_DIR", context.filesDir.absolutePath)
             // 网络搜索开关（'1' 启用；cordis.yml 里 tool-web.search 据此决定是否注册 web_search）

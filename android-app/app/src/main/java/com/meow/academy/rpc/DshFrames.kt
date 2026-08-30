@@ -35,7 +35,7 @@ data class DshResponse(
 }
 
 @Serializable
-data class DshError(val code: Int, val message: String)
+data class DshError(val code: Int, val message: String, val data: JsonObject? = null)
 
 /** 通知帧（服务端推送） */
 @Serializable
@@ -50,6 +50,9 @@ object DshNotifMethods {
     const val SESSION_EVENT = "session.event"
     const val SESSION_STATUS = "session.status"
     const val BASH_OUTPUT = "session.bashOutput"
+
+    /** 问答通道（DSH → App 通知，配 session/answerQuestion 回答，plan-standard-mode §3.6） */
+    const val SESSION_QUESTION = "session.question"
 }
 
 /** session.event 里的事件类型（event.type） */
@@ -63,6 +66,17 @@ object DshEventTypes {
     const val ASSISTANT_MESSAGE = "assistant/message"
     const val TOOL_CALL = "tool/call"
     const val TOOL_RESULT = "tool/result"
+
+    // ── 能力工具事件（session.event 火线，悬浮栏 / 胶囊消费，plan-standard-mode §2.3） ──
+
+    /** todo 工具写入（{todos: TodoItem[]} 全量快照，last-wins 折叠） */
+    const val TODO_WRITE = "todo/write"
+
+    /** plan-mode 开关状态（{active}） */
+    const val PLAN_MODE = "plan/mode"
+
+    /** goal 变更（GoalProjection 投影，last-wins） */
+    const val GOAL_CHANGE = "goal/change"
 }
 
 /** assistant/chunk 的 chunk.type 子类型 */

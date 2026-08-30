@@ -29,11 +29,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.meow.academy.data.files.FileEntry
-import com.meow.academy.runtime.RuntimeExtractor
 import com.meow.academy.ui.components.EmptyStateCompact
 import com.meow.academy.ui.files.FileListRow
 import com.meow.academy.ui.files.FilesUiState
@@ -80,6 +79,11 @@ private fun shortcutSubtitle(path: String, workspace: String): String {
  * - 最近使用：最近打开/附加过的文件（记录点 = 文件页打开、本面板附加）；
  * - 收藏：文件管理页长按收藏的文件/文件夹。
  * 不在面板内打开全屏编辑器（要编辑去文件管理页喵）。
+ *
+ * 工作区模式根目录跟随**当前打开会话的工作区**（plan-standard-mode §5.7 末段）：
+ * 根 = 当前会话 `workspacePath`（未打开/旧会话为 null → 回退全局默认工作区）；
+ * 调用方（ChatScreen）也可显式传 [workspaceRoot] 覆盖内部解析（接线可自算，喵~）。
+ * 浏览基准经 [FilesViewModel.setBrowseRoot] 注入 quickVm；文件管理页实例不传覆盖参数、不受影响。
  */
 @Composable
 fun QuickFilesPanel(
@@ -87,13 +91,26 @@ fun QuickFilesPanel(
     panelOpen: Boolean,
     attachedPaths: Set<String>,
     onToggleAttach: (FileEntry) -> Unit,
+    workspaceRoot: String? = null,
 ) {
+    // 工作区模式根目录：显式参数优先，否则跟随当前会话工作区（同一 ViewModelStore 内解析 ChatViewModel）
+    val workspace = if (workspaceRoot != null) {
+        workspaceRoot
+    } else {
+        val chatVm: ChatViewModel = viewModel()
+        val currentSession by chatVm.currentSession.collectAsState()
+        val defaultWorkspace by chatVm.defaultWorkspacePath.collectAsState()
+        currentSession?.workspacePath ?: defaultWorkspace
+    }
     val state by vm.uiState.collectAsState()
-    LaunchedEffect(panelOpen) { if (panelOpen) vm.refresh() }
+    LaunchedEffect(panelOpen, workspace) {
+        if (panelOpen) {
+            vm.setBrowseRoot(workspace) // 基准一致时 no-op，保留浏览位置（喵~）
+            vm.refresh()
+        }
+    }
 
     var mode by rememberSaveable { mutableStateOf(QuickFilesMode.BROWSE) }
-    val context = LocalContext.current
-    val workspace = RuntimeExtractor.workspaceDir(context).absolutePath
 
     // 切模式：从最近/收藏回到浏览时刷新一次（面板停在快捷模式期间文件可能被文件页改过）
     val switchMode: (QuickFilesMode) -> Unit = { target ->

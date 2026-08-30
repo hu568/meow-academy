@@ -26,6 +26,12 @@ class DshEvent private constructor(
     /** session.bashOutput 的增量输出 */
     val delta: String? get() = params.str("delta")
 
+    /** subagent.started / subagent.finished 的父会话 id（params 顶层字段，无 sessionId，须全局收集） */
+    val parentSessionId: String? get() = params.str("parentSessionId")
+
+    /** subagent.started / subagent.finished 的子会话 id（params 顶层字段，与父会话 id 组成去重键） */
+    val childSessionId: String? get() = params.str("childSessionId")
+
     /** session.event 的 event 对象 */
     val event: JsonObject? get() = params["event"] as? JsonObject
 

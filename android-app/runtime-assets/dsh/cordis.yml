@@ -2,8 +2,16 @@
 # stdout 专用于 JSON-RPC 帧：不要加载 console logger 或终端 UI。
 # 相比官方 examples/jsonrpc-agent/cordis.yml：
 #   - sdk-jsonrpc-server → meow-jsonrpc（自定义插件：包装官方 server 并新增 session/cancel、session/bash）
-#   - 去掉 subagent 全家桶、sandbox（landlock 原生模块在 Android 不可加载；App 沙箱兜底）
+#   - 去掉 sandbox（landlock 原生模块在 Android 不可加载；App 沙箱兜底）
 #   - 保留：llm-deepseek / bash / agent-spine / jsonl 持久化 / 文件工具 / todo / token-meter / compaction
+# plan-standard-mode（2026-08-30）：接入 agent-presets 体系 —— 基座挂「注册表/服务」行
+#   （presets/commands/goals/skill/user-questions/subagents），模型面工具行随 meow-standard
+#   预设组合按会话挂载（preset 系统只对 join 预设的会话生效）。
+#
+# 布局纪律（照官方 base.cordis.patch.yml + standard preset 的分工）：
+#   - 服务/注册表 = 基座（host 平面）：注入在任何会话存在之前就要解析，preset 子树里的
+#     isolate realm 实例对外不可见，挂预设里会让基座消费者永远 pending；
+#   - 模型面工具行 = 预设组合：注册进基座注册表的作用域层，随会话销毁，决定「这个会话有什么能力」。
 
 - id: meow-jsonrpc
   name: ./meow-extensions/meow-jsonrpc.js
@@ -62,6 +70,9 @@
     maxOutputBytes: 262144
 
 # 喵喵老师学习助教：persona + agent loop + 工具装配
+# 说明：spine 内部无条件挂 jobs 注册表（toolJobs:false 只裁模型面 job 工具）；
+# skills.enabled:false 裁掉 spine 内置的 skill 注册表/工具（改由下方 skill 行 + 预设组合提供，
+# 以便 skill 工具只随预设会话出现）；goals 不经 spine 开（同样改基座行 + 预设工具行）。
 - id: agent-spine
   name: '@deepseek-ai/dsh-agent-spine-demo'
   config:
@@ -74,6 +85,57 @@
     toolBash:
       enableRunInBackground: false
     toolJobs: false
+
+# ── Agent 预设体系（plan-standard-mode §4.2①）──────────────────────────────
+# 注册表/名单服务：list() 每次重扫 roots（自动扫描接口），resolve 失败 fail loud。
+# roots = filesDir/dsh-presets（assets 播种，trust: system 只读纪律）；
+# includeUserRoot 追加 ${DSH_HOME}/.agent-presets/（用户/AI 自建预设，trust: user）。
+# 坑：!!js 在 ESM 作用域无 require，路径只能字符串拼接。
+- id: agent-presets
+  name: '@deepseek-ai/dsh-agent-presets'
+  config:
+    default: meow-standard
+    roots:
+      - path: !!js (process.env.DSH_FILES_DIR ?? process.cwd()) + '/dsh-presets'
+        trust: system
+    includeUserRoot: true
+
+# 斜杠命令注册表（CommandRuntime）：/plan、/goal、/compact 的前置，命令注册方都 inject 它。
+# 官方部署挂 host 平面（注入在会话存在之前解析），preset 内的命令经作用域层遮蔽全局。
+- id: commands
+  name: '@deepseek-ai/dsh-commands'
+
+# 目标域（goal）：注册表按会话键控，单例服务所有会话；/goal 命令（command-goal）
+# inject ['commands','goals']，两者都在基座 → 立即 active。模型面 tool-goal 在预设组合里。
+# goal-round-driver：同会话目标轮次驱动（官方 base 同款基座行）。
+- id: goals
+  name: '@deepseek-ai/dsh-goal'
+
+- id: goal-round-driver
+  name: '@deepseek-ai/dsh-goal-round-driver'
+
+- id: command-goal
+  name: '@deepseek-ai/dsh-command-goal'
+
+# Skill 注册表：基座单例 + 按作用域分层；预设组合里的 skill-filesystem / tool-skill
+# 注册进预设自己的层（官方 standard preset 同款分工）。
+- id: skill
+  name: '@deepseek-ai/dsh-skill'
+
+# 问答接缝（userQuestions）：单 provider 槽位由 meow-jsonrpc 按连接生命周期注册/释放。
+# tool-ask-user（预设组合）与 plan-mode 的计划审阅都经它落到 App 问答卡。
+- id: user-questions
+  name: '@deepseek-ai/dsh-user-questions'
+
+# 子代理注册表 + 进程内 spawn 驱动（host 平面单例，官方 base 同款）；
+# 委派工具行（tool-subagent / tool-subagent-control）在预设组合里解析这个注册表。
+- id: subagent
+  name: '@deepseek-ai/dsh-subagent'
+
+- id: subagent-spawn-in-process
+  name: '@deepseek-ai/dsh-subagent-spawn-in-process'
+  config:
+    providerName: spawn
 
 # 会话持久化：SQLite backend（node:sqlite，无原生依赖）。规避 jsonl 的 link() 在 Android
 # SELinux 下 EACCES 的问题；session-checkpoints 提供模型请求/工具调用边界的语义 checkpoint。
@@ -107,7 +169,7 @@
     search: !!js process.env.DSH_WEB_SEARCH === '1'
     fetch: false
 
-# 文件能力（M3 文件管理铺路）
+# 文件能力（M4 文件管理铺路）
 # phase4：deny 规则禁止 agent 读取敏感文件（凭证 / DataStore 内部明文 key）。
 # 用 DSH_FILES_DIR 构造绝对路径，避免 cwd=workspace 时相对基准错误；文件级精确 + 目录级前缀。
 - id: fs-local
@@ -121,6 +183,9 @@
       - path: !!js (process.env.DSH_FILES_DIR ?? process.cwd()) + '/datastore/meow_settings.preferences_pb.journal'
       # 默认配置模板目录只读（docs/design-dynamic-config.md）：AI 可读可复制，不可修改
       - path: !!js (process.env.DSH_FILES_DIR ?? process.cwd()) + '/config-defaults'
+      # 系统预设目录只读（plan-standard-mode §4.2④）：预设由 APK assets 播种，AI 改坏会
+      # 毒化所有新会话；改预设走 roster.copy() 到用户根（host 平面 RPC，不受 deny 影响）
+      - path: !!js (process.env.DSH_FILES_DIR ?? process.cwd()) + '/dsh-presets'
 
 - id: fs-observation-policy
   name: '@deepseek-ai/dsh-fs-observation-policy'
@@ -136,6 +201,9 @@
 - id: token-meter
   name: '@deepseek-ai/dsh-token-meter'
 
+# 基座 compaction：为「未 join 任何预设的裸会话」（升级前旧会话）保留的兜底策略。
+# join meow-standard 的会话由预设组合里的 compaction 组（basic + pruner + command-compact，
+# 同参数）按作用域遮蔽此处。
 - id: compaction-basic
   name: '@deepseek-ai/dsh-compaction-basic'
   config:

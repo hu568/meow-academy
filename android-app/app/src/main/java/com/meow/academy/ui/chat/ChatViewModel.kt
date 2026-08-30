@@ -2,11 +2,14 @@ package com.meow.academy.ui.chat
 
 import android.app.Application
 import android.util.Log
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.meow.academy.MeowAcademyApp
 import com.meow.academy.data.chat.ChatDatabase
 import com.meow.academy.data.model.DEEPSEEK_PROVIDER
+import com.meow.academy.data.model.PresetCatalogRepository
+import com.meow.academy.data.model.PresetEntry
 import com.meow.academy.data.model.ProviderProfile
 import com.meow.academy.data.model.buildProviderDirectory
 import com.meow.academy.data.model.parseCatalogProfiles
@@ -20,6 +23,8 @@ import com.meow.academy.data.chat.SessionEntity
 import com.meow.academy.data.chat.SessionUsageStats
 import com.meow.academy.rpc.DshChunkTypes
 import com.meow.academy.rpc.DshConnectionState
+import com.meow.academy.rpc.DshError
+import com.meow.academy.rpc.DshEvent
 import com.meow.academy.rpc.DshEventTypes
 import com.meow.academy.rpc.DshParams
 import com.meow.academy.rpc.DshNotifMethods
@@ -27,8 +32,10 @@ import com.meow.academy.rpc.DshRpcClient
 import com.meow.academy.rpc.DshTurnEndKinds
 import com.meow.academy.rpc.LlmModelInfo
 import com.meow.academy.rpc.LlmProviderInfo
+import com.meow.academy.rpc.bool
 import com.meow.academy.rpc.str
 import com.meow.academy.runtime.RuntimeState
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -55,6 +62,76 @@ import kotlinx.serialization.json.jsonPrimitive
 
 /** 新会话默认占位标题；用户在会话里发出第一条消息后自动替换为真实标题 */
 private const val DEFAULT_SESSION_TITLE = "新会话"
+
+/** jsonrpc error.code：预设不存在（data.available 有可用列表；message 本身也含，plan-standard-mode §三.8） */
+private const val ERR_PRESET_UNKNOWN = -32001
+
+/** jsonrpc error.code：预设存在但组合挂载失败（data.detail = 逐行原因） */
+private const val ERR_PRESET_MOUNT_FAILED = -32002
+
+/**
+ * 附加模式（会话级能力开关：plan-mode / goal，plan-standard-mode §5.3）。
+ *
+ * 三态机：[pending] = true 表示附加命令已发出、状态事件（plan/mode、goal/change）未回——
+ * 胶囊显示「生效中」转圈；事件到达后 pending 置 false 转确认态。UI 以 `is AttachedMode.Plan` /
+ * `is AttachedMode.Goal` 判型，以 [pending] 区分「生效中 vs 已确认」。
+ */
+sealed interface AttachedMode {
+    /** true = 命令已发出、事件未确认（胶囊「生效中」）；false = 事件已确认 */
+    val pending: Boolean
+
+    /** 规划模式（/plan 开启） */
+    data class Plan(override val pending: Boolean = false) : AttachedMode
+
+    /**
+     * 目标模式（/goal <objective> 设定）。
+     * @param objective 目标全文（胶囊只显示前 8 字摘要）
+     * @param phase 生命周期 phase（active/paused/blocked/complete，GoalSnapshot.phase；水合/事件回填）
+     */
+    data class Goal(
+        val objective: String,
+        val phase: String? = null,
+        override val pending: Boolean = false,
+    ) : AttachedMode
+}
+
+/** 悬浮栏 todo 条目视图（todo/write 事件 / session/query 水合的 {content, status}） */
+data class TodoItemView(val content: String, val status: String)
+
+/** 悬浮栏子代理运行条目（subagent.started / subagent.finished 通知折叠） */
+data class SubagentRun(
+    val parentSessionId: String,
+    val childSessionId: String,
+    val provider: String? = null,
+    val status: String? = null,
+    val stopReason: String? = null,
+    /** 收尾摘要（lastAssistantMessage，仅进程内子代理有） */
+    val lastMessage: String? = null,
+)
+
+/** 待回答的问答（session.question 通知 → 问答卡交互通道，plan-standard-mode §三.6） */
+data class PendingQuestion(
+    val requestId: String,
+    val sessionId: String?,
+    val questions: List<QuestionItem>,
+)
+
+/** 单个问题（AskUserQuestionItem 的解析视图；detail = plan 审阅时的计划 Markdown 全文） */
+data class QuestionItem(
+    val id: String,
+    val question: String,
+    val detail: String? = null,
+    val header: String? = null,
+    val options: List<OptionItem> = emptyList(),
+    val multiSelect: Boolean = false,
+    /** intent.kind（'plan-review' 时问答卡走计划审阅样式） */
+    val intentKind: String? = null,
+    /** intent.approve（plan 审阅批准选项的原文 label，回答按它回传） */
+    val intentApprove: String? = null,
+)
+
+/** 单个选项（AskUserQuestionOption：label 必填 + 可选一句话说明） */
+data class OptionItem(val label: String, val description: String? = null)
 
 /** 从用户消息提取会话标题：取第一行的第一个完整句子（。！？!?；; 结束），没有标点就截断第一行。 */
 private fun generateSessionTitle(text: String): String {
@@ -87,6 +164,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val runtimeManager = (app as MeowAcademyApp).runtimeManager
     private val settingsRepository = (app as MeowAcademyApp).settingsRepository
     private val modelCatalog = (app as MeowAcademyApp).modelCatalogRepository
+
+    /**
+     * Agent 预设目录缓存（非单例，按文件名共享同一个 DataStore，与看板「工作设置」读到同一份）。
+     */
+    private val presetCatalogRepo = PresetCatalogRepository(app)
     private val json = Json { ignoreUnknownKeys = true }
 
     // ── 会话列表 ──
@@ -100,6 +182,51 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val messages: StateFlow<List<MessageEntity>> = _currentSessionId.flatMapLatest { id ->
         if (id == null) flowOf(emptyList()) else dao.observeMessages(id)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** 当前打开会话的实体（快捷文件/抽屉等跟随会话工作区与预设用；未打开为 null） */
+    val currentSession: StateFlow<SessionEntity?> = _currentSessionId.flatMapLatest { id ->
+        if (id == null) flowOf(null) else dao.observeSession(id)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    // ── 工作设置（plan-standard-mode §5.3：工作区 / Agent 预设 / 会话过滤） ──
+
+    /** 会话抽屉显示过滤（"all" 全部 / "workspace" 当前工作区；转发 DataStore） */
+    val sessionFilter: StateFlow<String> = settingsRepository.sessionFilter
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "all")
+
+    /** 新会话默认 Agent 预设 id（默认 meow-standard；只对新会话生效） */
+    val defaultPreset: StateFlow<String> = settingsRepository.defaultPreset
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "meow-standard")
+
+    /** 新会话默认工作区绝对路径（默认 filesDir/workspace；切换只写 DataStore，不重启 DSH） */
+    val defaultWorkspacePath: StateFlow<String> = settingsRepository.workspacePath
+        .stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            java.io.File(app.filesDir, RuntimeExtractor.WORKSPACE_DIR).absolutePath,
+        )
+
+    /** Agent 预设目录（presets/list 缓存；DSH 未就绪时先渲染缓存，refreshPresets 覆盖） */
+    val presetCatalog: StateFlow<List<PresetEntry>> = presetCatalogRepo.presets
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    // ── 附加模式 / 悬浮栏 / 问答（plan-standard-mode §5.3） ──
+
+    /** 附加模式当前状态（null = 无附加；Plan/Goal + pending 区分生效中与已确认） */
+    private val _attachedMode = MutableStateFlow<AttachedMode?>(null)
+    val attachedMode: StateFlow<AttachedMode?> = _attachedMode.asStateFlow()
+
+    /** 悬浮栏 todo 清单（todo/write 全量快照 / session/query 水合；null = 无数据不显示） */
+    private val _todoState = MutableStateFlow<List<TodoItemView>?>(null)
+    val todoState: StateFlow<List<TodoItemView>?> = _todoState.asStateFlow()
+
+    /** 悬浮栏子代理运行清单（subagent.started/finished 实时通知；不做持久化水合） */
+    private val _subagentRuns = MutableStateFlow<List<SubagentRun>>(emptyList())
+    val subagentRuns: StateFlow<List<SubagentRun>> = _subagentRuns.asStateFlow()
+
+    /** 待回答问答（session.question 通知；非空时问答卡交互启用，set-if-absent 防重连双投递） */
+    private val _pendingQuestion = MutableStateFlow<PendingQuestion?>(null)
+    val pendingQuestion: StateFlow<PendingQuestion?> = _pendingQuestion.asStateFlow()
 
     // ── 流式增量（不落库的实时部分） ──
     private val _streaming = MutableStateFlow<StreamingState?>(null)
@@ -145,6 +272,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.Eagerly, "deepseek-official")
 
     private var client = runtimeManager.rpcClient
+
+    // ── 全局事件收集器（subagent.*/session.question/todo/plan/goal 不按流式回合开关） ──
+    // 生命周期跟随 rpcClient 实例：重连后 events 是新 SharedFlow，必须重新订阅（client = rpc 模式同款）
+    private var globalEventsJob: Job? = null
+    private var globalClient: DshRpcClient? = null
+
+    /** 已成功水合（session/query）的 Room 会话 id；null/不同 = 待水合，DSH 转 Running 时重试 */
+    private var hydratedRoomId: Long? = null
 
     /** 待发送消息：DSH 未就绪/正在生成时入队，就绪后自动补发（sessionId 已落库，补发只走 DSH 侧） */
     private data class PendingMessage(
@@ -193,6 +328,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 if (s is RuntimeState.Running) {
                     refreshModelCatalog()
                     refreshUsageStats()
+                    refreshPresets() // 预设目录同步（触发点②：DSH 转 Running，§5.3）
+                    hydrateCurrentSession() // 未就绪时水合失败 → 转 Running 对当前会话自动重试一次
+                    subscribeGlobalEvents() // 新 rpcClient 实例 → 重挂全局事件收集器
                     launch { flushPending() }
                 }
             }
@@ -265,12 +403,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _currentSessionId.value = id
         // 切换会话先清旧统计，避免新会话还没有 stats 时面板显示上一会话数字
         _sessionUsageStats.value = null
+        // 会话切换：todo / 附加模式 / 子代理列表清零，等 session/query 水合回填（subagent 不水合，§3.7）
+        _todoState.value = null
+        _attachedMode.value = null
+        _subagentRuns.value = emptyList()
+        hydratedRoomId = null
+        hydrateCurrentSession()
     }
 
     /** 返回会话列表 */
     fun closeSession() {
         _currentSessionId.value = null
         _sessionUsageStats.value = null
+        _todoState.value = null
+        _attachedMode.value = null
+        _subagentRuns.value = emptyList()
     }
 
     /**
@@ -289,12 +436,31 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 新建会话：preset/workplace 归属缓冲进 Room 行（plan-standard-mode §3.4），
+     * 随首条消息/首条命令携带给定死归属。
+     */
     fun newSession() {
         viewModelScope.launch {
-            val id = dao.insertSession(SessionEntity(title = DEFAULT_SESSION_TITLE))
+            val id = dao.insertSession(
+                SessionEntity(
+                    title = DEFAULT_SESSION_TITLE,
+                    presetId = settingsRepository.defaultPreset.first(),
+                    workspacePath = settingsRepository.workspacePath.first(),
+                )
+            )
             _currentSessionId.value = id
             _sessionUsageStats.value = null
+            resetSessionViewState()
         }
+    }
+
+    /** 新开/新建会话后的视图状态复位（todo / 附加模式 / 子代理清单） */
+    private fun resetSessionViewState() {
+        _todoState.value = null
+        _attachedMode.value = null
+        _subagentRuns.value = emptyList()
+        hydratedRoomId = null
     }
 
     /**
@@ -329,7 +495,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             dao.deleteMessages(session.id)
             dao.deleteSession(session)
-            if (_currentSessionId.value == session.id) _currentSessionId.value = null
+            if (_currentSessionId.value == session.id) {
+                _currentSessionId.value = null
+                // UI 侧「自动打开最近会话」会落位到最近剩余会话并触发重新水合
+                resetSessionViewState()
+            }
         }
     }
 
@@ -348,12 +518,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             if (_currentSessionId.value != null && _currentSessionId.value in ids) {
                 _currentSessionId.value = null
                 _sessionUsageStats.value = null
+                resetSessionViewState()
             }
         }
     }
 
     /** Room 长 id → DSH sessionId；null（未打开会话）→ 空串：setModel 只更新服务端全局默认 */
-    private fun dshSessionIdOf(roomId: Long?): String = if (roomId == null) "" else "room-$roomId"
+    internal fun dshSessionIdOf(roomId: Long?): String = if (roomId == null) "" else "room-$roomId"
 
     /**
      * 发送消息：落库用户消息 → 建 assistant 流式消息 → 订阅事件流 → session/prompt → 收集事件流。
@@ -377,8 +548,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (displayText.isBlank()) return
 
         viewModelScope.launch {
-            val sessionId = _currentSessionId.value
-                ?: dao.insertSession(SessionEntity(title = DEFAULT_SESSION_TITLE)).also { _currentSessionId.value = it }
+            // 无会话自动建：preset/workplace 归属同样缓冲进 Room 行（§3.4，首条消息定死归属）
+            val sessionId = _currentSessionId.value ?: dao.insertSession(
+                SessionEntity(
+                    title = DEFAULT_SESSION_TITLE,
+                    presetId = settingsRepository.defaultPreset.first(),
+                    workspacePath = settingsRepository.workspacePath.first(),
+                )
+            ).also {
+                _currentSessionId.value = it
+                resetSessionViewState()
+            }
             autoTitleSession(sessionId, displayText)
             dao.touchSession(sessionId)
 
@@ -527,6 +707,316 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { settingsRepository.setDashboardFeature(feature.name) }
     }
 
+    // ── 工作设置（plan-standard-mode §5.3：预设目录 / 默认预设 / 工作区 / 会话过滤） ──
+
+    /**
+     * 拉取 presets/list 并覆盖本地缓存（自动扫描接口，App 不硬编码列表）。
+     * 触发时机：进工作设置页（看板调用）+ DSH 转 Running；DSH 未就绪 / 失败 → 静默保留缓存。
+     */
+    fun refreshPresets() {
+        viewModelScope.launch { presetCatalogRepo.refresh(runtimeManager.rpcClient ?: client) }
+    }
+
+    /** 设为默认 Agent 预设（只对新会话生效；DataStore） */
+    fun selectDefaultPreset(id: String) {
+        viewModelScope.launch { settingsRepository.setDefaultPreset(id) }
+    }
+
+    /**
+     * 删除自定义预设（presets/delete，仅 trust=user 服务端放行）。
+     * 若删除的是当前默认预设 → 自动回退 meow-standard，避免新会话无预设可用。
+     */
+    fun deletePreset(id: String) {
+        viewModelScope.launch {
+            val rpc = runtimeManager.rpcClient ?: client
+            val ok = rpc?.presetsDelete(id) == true
+            if (!ok) {
+                toast("预设「$id」删除失败喵（内置预设不可删除）")
+                return@launch
+            }
+            refreshPresets()
+            if (settingsRepository.defaultPreset.first() == id) {
+                settingsRepository.setDefaultPreset("meow-standard")
+                toast("已删除预设「$id」，默认回退 meow-standard 喵~")
+            } else {
+                toast("已删除预设「$id」喵~")
+            }
+        }
+    }
+
+    /** 切换新会话默认工作区：只写 DataStore，绝不重启 DSH（生成中的会话 cwd 已定死，不受影响） */
+    fun switchWorkspace(path: String) {
+        viewModelScope.launch { settingsRepository.setWorkspacePath(path) }
+    }
+
+    /** 切换会话抽屉显示过滤（"all" / "workspace"，DataStore） */
+    fun setSessionFilter(mode: String) {
+        viewModelScope.launch { settingsRepository.setSessionFilter(mode) }
+    }
+
+    // ── 附加模式（/plan、/goal 斜杠命令经 session/command，plan-standard-mode §5.3） ──
+
+    /** 附加规划模式（/plan） */
+    fun attachPlan() = runModeCommand("/plan", optimistic = AttachedMode.Plan(pending = true))
+
+    /** 关闭规划模式（/plan off） */
+    fun detachPlan() = runModeCommand("/plan off", optimistic = AttachedMode.Plan(pending = true))
+
+    /** 附加目标模式（/goal <objective>；目标必填，会立即驱动一个模型回合） */
+    fun attachGoal(objective: String) {
+        val text = objective.trim()
+        if (text.isEmpty()) {
+            toast("目标不能为空喵~")
+            return
+        }
+        runModeCommand("/goal $text", optimistic = AttachedMode.Goal(objective = text, pending = true))
+    }
+
+    /** 清除目标（/goal clear） */
+    fun detachGoal() {
+        val objective = (_attachedMode.value as? AttachedMode.Goal)?.objective.orEmpty()
+        runModeCommand("/goal clear", optimistic = AttachedMode.Goal(objective = objective, pending = true))
+    }
+
+    /**
+     * 执行附加模式斜杠命令（session/command，携带 Room 行的 presetId/cwd——会话未建时创建即归属正确）。
+     *
+     * 三态机：发出即入「生效中」（optimistic pending 态）→
+     * - kind=success：保持生效中，状态确认以 plan/mode、goal/change 事件为准（命令成功 ≠ 已生效）；
+     * - kind=error：回退原状态 + toast 原文；
+     * - jsonrpc reject（null）：回退 + toast；COMMAND_UNKNOWN 按会话区分——
+     *   Room 行 presetId == null（升级前旧会话）→「该会话不支持附加模式」，否则「命令不存在」。
+     */
+    private fun runModeCommand(line: String, optimistic: AttachedMode) {
+        val roomId = _currentSessionId.value ?: run {
+            toast("先新建一个会话再附加模式喵~")
+            return
+        }
+        val rpc = runtimeManager.rpcClient ?: client ?: run {
+            toast("DSH 未就绪，稍后再试喵~")
+            return
+        }
+        val previous = _attachedMode.value
+        _attachedMode.value = optimistic
+        viewModelScope.launch {
+            val session = dao.getSession(roomId)
+            val result = rpc.sessionCommand(
+                dshSessionIdOf(roomId),
+                line,
+                presetId = session?.presetId,
+                cwd = session?.workspacePath,
+            )
+            if (_currentSessionId.value != roomId) return@launch // 会话已切走，别动新会话状态
+            when {
+                result == null -> {
+                    _attachedMode.value = previous
+                    toast(
+                        if (session?.presetId == null) "该会话不支持附加模式喵（升级前的旧会话）"
+                        else "附加命令不存在喵（$line）"
+                    )
+                }
+                result.str("kind") == "error" -> {
+                    _attachedMode.value = previous
+                    toast(result.str("text")?.takeIf { it.isNotBlank() } ?: "附加命令执行失败喵（$line）")
+                }
+                // kind=success 仅受理：等事件确认（pending 保持）
+            }
+        }
+    }
+
+    /** plan/mode 事件 → 附加模式状态（事件为准；active=true 确认 Plan，false 撤销） */
+    private fun applyPlanModeEvent(data: JsonObject?) {
+        val current = _attachedMode.value
+        if (data?.bool("active") == true) {
+            if (current !is AttachedMode.Plan || current.pending) {
+                _attachedMode.value = AttachedMode.Plan(pending = false)
+            }
+        } else if (current is AttachedMode.Plan) {
+            _attachedMode.value = null
+        }
+    }
+
+    /**
+     * goal/change 事件 → 附加模式状态。
+     * 事件 data = GoalChangeMeta：{kind, version, operation, goal: GoalSnapshot, …}；
+     * operation=clear 为墓碑（清除），快照变更从 goal.goal 取 objective/phase。
+     */
+    private fun applyGoalChangeEvent(data: JsonObject?) {
+        if (data?.str("operation") == "clear") {
+            if (_attachedMode.value is AttachedMode.Goal) _attachedMode.value = null
+            return
+        }
+        val snapshot = data?.get("goal") as? JsonObject ?: return
+        val objective = snapshot.str("objective") ?: return
+        // 单槽位：goal 生效即覆盖 Plan（plan/goal 在 DSH 可共存，UI 先单槽）
+        _attachedMode.value = AttachedMode.Goal(
+            objective = objective,
+            phase = snapshot.str("phase"),
+            pending = false,
+        )
+    }
+
+    // ── 会话状态水合（session/query，resume 后胶囊/悬浮栏恢复，§3.7） ──
+
+    /**
+     * 对当前会话做一次 session/query 水合（attachedMode / todoState；subagent 不水合）。
+     * 失败（DSH 未就绪 / 超时）不置 hydratedRoomId → 转 Running 时自动重试一次。
+     */
+    private fun hydrateCurrentSession() {
+        val roomId = _currentSessionId.value ?: return
+        if (hydratedRoomId == roomId) return
+        val rpc = runtimeManager.rpcClient ?: client ?: return
+        viewModelScope.launch {
+            val result = rpc.sessionQuery(dshSessionIdOf(roomId)) ?: return@launch
+            if (_currentSessionId.value != roomId) return@launch // 已切走，丢弃
+            hydratedRoomId = roomId
+            _todoState.value = parseTodoItems(result["todos"] as? JsonArray)
+            val plan = result["plan"] as? JsonObject
+            val goal = result["goal"] as? JsonObject
+            _attachedMode.value = when {
+                plan?.bool("active") == true -> AttachedMode.Plan(pending = false)
+                goal != null -> {
+                    val snapshot = goal["goal"] as? JsonObject
+                    AttachedMode.Goal(
+                        objective = snapshot?.str("objective").orEmpty(),
+                        phase = snapshot?.str("phase"),
+                        pending = false,
+                    )
+                }
+                else -> null
+            }
+        }
+    }
+
+    /** 解析 todo 数组（[{content, status}]）→ 悬浮栏视图模型；null/缺字段 → null（不显示） */
+    private fun parseTodoItems(arr: JsonArray?): List<TodoItemView>? {
+        if (arr == null) return null
+        return arr.mapNotNull { el ->
+            (el as? JsonObject)?.let { obj ->
+                val content = obj.str("content") ?: return@mapNotNull null
+                TodoItemView(content = content, status = obj.str("status") ?: "pending")
+            }
+        }.takeIf { it.isNotEmpty() }
+    }
+
+    // ── 全局事件收集器（不按 sessionId 过滤 + 当前会话能力事件，重连重挂） ──
+
+    /**
+     * 重挂全局事件收集器：rpcClient 实例更换（重连/重启）后 events 是新 SharedFlow。
+     * 用实例同一性判重，Running 状态反复触发也不会重复订阅。
+     */
+    private fun subscribeGlobalEvents() {
+        val rpc = runtimeManager.rpcClient ?: return
+        if (rpc === globalClient) return
+        globalEventsJob?.cancel()
+        globalClient = rpc
+        globalEventsJob = viewModelScope.launch {
+            rpc.events.collect { ev -> runCatching { handleGlobalEvent(ev) } }
+        }
+    }
+
+    /**
+     * 全局事件处理：
+     * - session.question → 待回答问答（set-if-absent：同一 requestId 的重连双投递忽略）；
+     * - subagent.started/finished → 悬浮栏子代理清单（按 parent+child 去重）；
+     * - todo/write、plan/mode、goal/change（限当前会话）：与 runStream 内 per-session 收集器
+     *   同款处理——空闲会话的 /plan、/goal 事件在流式收集器之外到达，只有这里能接住。
+     */
+    private fun handleGlobalEvent(ev: DshEvent) {
+        when (ev.type) {
+            DshNotifMethods.SESSION_QUESTION -> {
+                val requestId = ev.params.str("requestId") ?: return
+                if (_pendingQuestion.value?.requestId == requestId) return // 重连双投递
+                val questions = (ev.params["questions"] as? JsonArray ?: JsonArray(emptyList()))
+                    .mapNotNull { el -> (el as? JsonObject)?.let(::parseQuestionItem) }
+                _pendingQuestion.value = PendingQuestion(
+                    requestId = requestId,
+                    sessionId = ev.params.str("sessionId"),
+                    questions = questions,
+                )
+            }
+            "subagent.started" -> {
+                val parent = ev.parentSessionId ?: return
+                val child = ev.childSessionId ?: return
+                if (_subagentRuns.value.any { it.parentSessionId == parent && it.childSessionId == child }) return
+                _subagentRuns.value = _subagentRuns.value + SubagentRun(parentSessionId = parent, childSessionId = child)
+            }
+            "subagent.finished" -> {
+                val parent = ev.parentSessionId ?: return
+                val child = ev.childSessionId ?: return
+                _subagentRuns.value = _subagentRuns.value.map { run ->
+                    if (run.parentSessionId == parent && run.childSessionId == child) {
+                        run.copy(
+                            provider = ev.params.str("provider") ?: run.provider,
+                            status = ev.params.str("status") ?: run.status,
+                            stopReason = ev.params.str("stopReason") ?: run.stopReason,
+                            lastMessage = ev.params.str("lastAssistantMessage") ?: run.lastMessage,
+                        )
+                    } else {
+                        run
+                    }
+                }
+            }
+            DshEventTypes.TODO_WRITE -> {
+                if (ev.sessionId == dshSessionIdOf(_currentSessionId.value)) {
+                    _todoState.value = parseTodoItems(ev.data?.get("todos") as? JsonArray)
+                }
+            }
+            DshEventTypes.PLAN_MODE -> {
+                if (ev.sessionId == dshSessionIdOf(_currentSessionId.value)) applyPlanModeEvent(ev.data)
+            }
+            DshEventTypes.GOAL_CHANGE -> {
+                if (ev.sessionId == dshSessionIdOf(_currentSessionId.value)) applyGoalChangeEvent(ev.data)
+            }
+        }
+    }
+
+    /** session.question 的单条问题解析（AskUserQuestionItem 视图） */
+    private fun parseQuestionItem(obj: JsonObject): QuestionItem? {
+        val id = obj.str("id") ?: return null
+        val intent = obj["intent"] as? JsonObject
+        val options = (obj["options"] as? JsonArray)?.mapNotNull { o ->
+            (o as? JsonObject)?.let { OptionItem(label = it.str("label") ?: "", description = it.str("description")) }
+        }.orEmpty()
+        return QuestionItem(
+            id = id,
+            question = obj.str("question") ?: "",
+            detail = obj.str("detail"),
+            header = obj.str("header"),
+            options = options,
+            multiSelect = obj.bool("multiSelect") == true,
+            intentKind = intent?.str("kind"),
+            intentApprove = intent?.str("approve"),
+        )
+    }
+
+    // ── 问答动作（session/answerQuestion，§三.6） ──
+
+    /** 提交回答：成功后清除待回答状态（问答卡转已答折叠态由 tool/result 驱动） */
+    fun answerQuestion(requestId: String, answers: List<DshParams.QuestionAnswer>) {
+        viewModelScope.launch {
+            val rpc = runtimeManager.rpcClient ?: client ?: return@launch
+            val ok = rpc.answerQuestion(requestId, answers)
+            if (ok && _pendingQuestion.value?.requestId == requestId) {
+                _pendingQuestion.value = null
+            } else if (!ok) {
+                toast("回答送达失败喵，请重试")
+            }
+        }
+    }
+
+    /** 先不打扰：取消当前问答（模型收到取消语义，plan 审阅转「用户想直接说话」） */
+    fun cancelQuestion(requestId: String) {
+        viewModelScope.launch {
+            val rpc = runtimeManager.rpcClient ?: client ?: return@launch
+            val ok = rpc.answerQuestion(requestId, cancelled = true)
+            if (_pendingQuestion.value?.requestId == requestId) {
+                _pendingQuestion.value = null
+            }
+            if (!ok) toast("取消失败喵，请重试")
+        }
+    }
+
     /** 重命名会话（抽屉） */
     fun renameSession(sessionId: Long, title: String) {
         val t = title.trim()
@@ -616,6 +1106,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                                         })
                                         _streaming.value = state
                                     }
+                                    DshEventTypes.TODO_WRITE -> {
+                                        // 悬浮栏 todo 态：全量快照、last-wins（{todos: [{content, status}]}）
+                                        _todoState.value = parseTodoItems(ev.data?.get("todos") as? JsonArray)
+                                    }
+                                    DshEventTypes.PLAN_MODE -> applyPlanModeEvent(ev.data)
+                                    DshEventTypes.GOAL_CHANGE -> applyGoalChangeEvent(ev.data)
                                 }
                             }.onFailure { e ->
                                 Log.w("ChatViewModel", "event handling failed: " + ev.type, e)
@@ -634,14 +1130,31 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
                 // ③ 主路径：构造 contentBlocks（图片走 attachImages + image 块），发 session/prompt 等待受理确认
                 val blocks = buildContentBlocks(promptText, attachments, rpc)
-                val accepted = if (blocks != null) {
-                    rpc.prompt(dshSessionId, blocks, timeoutMs = 15_000)
+                // 会话归属随行（Room 行缓冲，plan-standard-mode §3.4）：每条 prompt 都携带
+                // presetId/cwd，服务端对非空白会话忽略，多传无害；首条消息定死归属。
+                val sessionRow = dao.getSession(roomSessionId)
+                val rowPresetId = sessionRow?.presetId
+                val rowCwd = sessionRow?.workspacePath
+                val response = if (blocks != null) {
+                    rpc.prompt(dshSessionId, blocks, presetId = rowPresetId, cwd = rowCwd, timeoutMs = 15_000)
                 } else {
                     // 图片上传/attach 失败 → 回退 Markdown 文本方式（模型看不到图但不丢消息）
-                    rpc.prompt(dshSessionId, buildMessageWithAttachments(promptText, attachments), timeoutMs = 15_000)
+                    rpc.prompt(
+                        dshSessionId,
+                        buildMessageWithAttachments(promptText, attachments),
+                        presetId = rowPresetId,
+                        cwd = rowCwd,
+                        timeoutMs = 15_000,
+                    )
                 }
-                if (!accepted) {
-                    errorMsg = "prompt 被拒绝（运行时异常或断连）"
+                // 受理失败 → 透传 error 载荷（§5.9：替换固定文案，错误原文进气泡）
+                val promptError = response?.error
+                errorMsg = when {
+                    response == null -> "prompt 无响应（运行时未就绪或断连）喵…"
+                    promptError != null -> describePromptError(promptError)
+                    else -> null
+                }
+                if (errorMsg != null) {
                     collector.cancel() // 受理失败时显式取消收集，否则 coroutineScope 会永久等待
                 } else {
                     // 等收集子协程自然结束（turn/end 或 idle 触发 takeWhile 终止）或被连接断开取消
@@ -735,6 +1248,38 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             blocks += DshParams.ContentBlock(type = "image", attachment = ref)
         }
         return blocks
+    }
+
+    /**
+     * prompt 受理失败的错误透传文本（plan-standard-mode §5.9）。
+     * PRESET_UNKNOWN 的 data.available = 可用预设列表；PRESET_MOUNT_FAILED 的 data.detail = 逐行原因
+     * （meow-jsonrpc 的 MeowRpcError 结构化载荷），都拼进气泡让错误可读。
+     */
+    private fun describePromptError(error: DshError): String = buildString {
+        append(error.message.ifBlank { "prompt 被拒绝喵（未知错误）" })
+        val data = error.data
+        if (error.code == ERR_PRESET_UNKNOWN) {
+            val available = data?.get("available") as? JsonArray
+            if (available != null && available.isNotEmpty()) {
+                append("\n可用预设：")
+                available.forEachIndexed { i, item ->
+                    if (i > 0) append("、")
+                    append(item.jsonPrimitive.contentOrNull ?: item.toString())
+                }
+            }
+        }
+        if (error.code == ERR_PRESET_MOUNT_FAILED) {
+            val detail = data?.get("detail")?.jsonPrimitive?.contentOrNull
+            if (!detail.isNullOrBlank()) append("\n挂载详情：\n").append(detail)
+        }
+        if (error.code == ERR_PRESET_UNKNOWN || error.code == ERR_PRESET_MOUNT_FAILED) {
+            append("\n\n到右侧看板 → 工作设置 → Agent 预设 检查或切换默认喵~")
+        }
+    }
+
+    /** ViewModel 层轻提示（命令失败/问答失败等；application context Toast） */
+    private fun toast(message: String) {
+        Toast.makeText(getApplication(), message, Toast.LENGTH_SHORT).show()
     }
 
 }

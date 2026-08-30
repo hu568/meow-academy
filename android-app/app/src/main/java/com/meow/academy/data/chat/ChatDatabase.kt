@@ -8,6 +8,7 @@ import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.meow.academy.runtime.RuntimeExtractor
 
 /** 枚举 ↔ 字符串 转换器 */
 class Converters {
@@ -27,7 +28,7 @@ class Converters {
 /** 聊天数据库（M2.4：会话 + 消息两表，先做到存得下读得出） */
 @Database(
     entities = [SessionEntity::class, MessageEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -42,6 +43,20 @@ abstract class ChatDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v2 → v3：sessions 新增 presetId / workspacePath 两列（会话归属：Agent 预设 + 工作区，
+         * plan-standard-mode §5.2）。两列都在新会话 insert 时写定、此后不更新，无需 UPDATE DAO。
+         * 回填：v3 前所有会话都在唯一工作区 filesDir/workspace → workspacePath 补绝对路径，
+         * presetId 留空（视为默认预设）。
+         */
+        private fun migration2_3(defaultWorkspacePath: String): Migration = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sessions ADD COLUMN presetId TEXT")
+                db.execSQL("ALTER TABLE sessions ADD COLUMN workspacePath TEXT")
+                db.execSQL("UPDATE sessions SET workspacePath = ?", arrayOf(defaultWorkspacePath))
+            }
+        }
+
         @Volatile
         private var instance: ChatDatabase? = null
 
@@ -51,7 +66,18 @@ abstract class ChatDatabase : RoomDatabase() {
                     context.applicationContext,
                     ChatDatabase::class.java,
                     "meow_chat.db",
-                ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+                )
+                    .addMigrations(
+                        MIGRATION_1_2,
+                        // 回填路径在此取 Application context（迁移回调拿不到 context，构建期先算好）
+                        migration2_3(
+                            java.io.File(
+                                context.applicationContext.filesDir,
+                                RuntimeExtractor.WORKSPACE_DIR,
+                            ).absolutePath,
+                        ),
+                    )
+                    .build().also { instance = it }
             }
     }
 }

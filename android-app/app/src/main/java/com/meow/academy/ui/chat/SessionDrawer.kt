@@ -4,6 +4,13 @@ package com.meow.academy.ui.chat
  * 会话抽屉组件（聊天页左侧）。
  * 会话列表 + 新建 + 多选（右滑触发 / 工具栏按钮）+ 长按菜单（重命名/删除）+ 对话框；从 ChatScreen.kt 原子拆出。
  *
+ * 工作区过滤 + 三行会话行（plan-standard-mode §5.8）：
+ * - 标题行「过滤」图标 → DropdownMenu 单选「全部会话 / 当前工作区会话」（持久化 vm.sessionFilter）；
+ *   workspace 档客户端过滤 workspacePath == 新会话默认工作区；空态引导去工作设置页；
+ * - 会话行三行布局：标题 / 预设名 · 工作区短名（仅「全部会话」且非默认工作区时带工作区段）/ 紧凑时间；
+ * - ChatViewModel 经 viewModel() 从同一 ViewModelStore 解析（与 ChatScreen 同实例），
+ *   对外签名零变化（喵~）。
+ *
  * 多选交互（仿 MT 管理器）：
  * - 工具栏「☑ 清单」按钮：进入多选模式
  * - 列表项「右滑」过阈值：自动进入多选并勾选该项
@@ -40,9 +47,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.outlined.FilterList
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.ChecklistRtl
 import androidx.compose.material3.AlertDialog
@@ -57,6 +66,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -71,16 +81,39 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.meow.academy.data.chat.SessionEntity
 import com.meow.academy.ui.components.EmptyStateCompact
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /** 右滑触发多选的阈值（px 在 density 中换算） */
 private val SWIPE_TRIGGER_DP = 64.dp
+
+/**
+ * epoch millis → 紧凑时间（plan-standard-mode §5.8，去秒，喵~）：
+ * 今天 `HH:mm`、今年 `M月d日 HH:mm`、跨年 `yyyy年M月d日`。
+ */
+internal fun formatSessionTimestamp(millis: Long): String {
+    val cal = Calendar.getInstance().apply { timeInMillis = millis }
+    val now = Calendar.getInstance()
+    val sameYear = cal.get(Calendar.YEAR) == now.get(Calendar.YEAR)
+    val sameDay = sameYear && cal.get(Calendar.DAY_OF_YEAR) == now.get(Calendar.DAY_OF_YEAR)
+    return when {
+        sameDay -> SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(millis))
+        sameYear -> SimpleDateFormat("M月d日 HH:mm", Locale.getDefault()).format(Date(millis))
+        else -> SimpleDateFormat("yyyy年M月d日", Locale.getDefault()).format(Date(millis))
+    }
+}
 
 /** 会话抽屉：列表 + 新建 + 多选 + 重命名/删除对话框 */
 @Composable
@@ -97,6 +130,25 @@ fun SessionDrawer(
     var renaming by remember { mutableStateOf<SessionEntity?>(null) }
     var deleting by remember { mutableStateOf<SessionEntity?>(null) }
     var batchDeleting by remember { mutableStateOf(false) }
+
+    // ── 工作区过滤 + 元信息行数据源（plan-standard-mode §5.8） ──
+    // 同一 ViewModelStore 内解析 ChatViewModel（与 ChatScreen 的 vm 同实例，喵~）
+    val chatVm: ChatViewModel = viewModel()
+    val sessionFilter by chatVm.sessionFilter.collectAsState()
+    val defaultWorkspacePath by chatVm.defaultWorkspacePath.collectAsState()
+    val presetCatalog by chatVm.presetCatalog.collectAsState()
+    val filesDirPath = LocalContext.current.filesDir.absolutePath
+
+    // 会话显示过滤（客户端过滤，会话量级小）：workspace 档只显示默认工作区的会话
+    val filteredSessions = remember(sessions, sessionFilter, defaultWorkspacePath) {
+        if (sessionFilter == "workspace") {
+            sessions.filter { it.workspacePath == defaultWorkspacePath }
+        } else {
+            sessions
+        }
+    }
+
+    var filterMenuOpen by remember { mutableStateOf(false) }
 
     // 多选状态：选中的会话 id 集合；空集合 + selectionMode=false → 普通模式
     var selectionMode by remember { mutableStateOf(false) }
@@ -180,7 +232,7 @@ fun SessionDrawer(
                         )
                     }
                 } else {
-                    // 普通模式工具栏：标题 + 多选（紧贴新建左边） + 新建
+                    // 普通模式工具栏：标题 + 过滤 + 多选（紧贴新建左边） + 新建
                     Text(
                         text = "会话",
                         style = MaterialTheme.typography.titleLarge,
@@ -188,6 +240,46 @@ fun SessionDrawer(
                             .weight(1f)
                             .padding(start = 8.dp),
                     )
+                    // 显示过滤入口：全部会话 / 当前工作区会话（DropdownMenu 单选，持久化到 DataStore）
+                    Box {
+                        IconButton(onClick = { filterMenuOpen = true }) {
+                            Icon(
+                                Icons.Outlined.FilterList,
+                                contentDescription = "会话显示过滤",
+                                tint = if (sessionFilter == "workspace") MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = filterMenuOpen,
+                            onDismissRequest = { filterMenuOpen = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("全部会话") },
+                                leadingIcon = {
+                                    if (sessionFilter != "workspace") {
+                                        Icon(Icons.Filled.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                    }
+                                },
+                                onClick = {
+                                    chatVm.setSessionFilter("all")
+                                    filterMenuOpen = false
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("当前工作区会话") },
+                                leadingIcon = {
+                                    if (sessionFilter == "workspace") {
+                                        Icon(Icons.Filled.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                    }
+                                },
+                                onClick = {
+                                    chatVm.setSessionFilter("workspace")
+                                    filterMenuOpen = false
+                                },
+                            )
+                        }
+                    }
                     IconButton(onClick = {
                         selectionMode = true
                         selectedIds = emptySet()
@@ -204,36 +296,69 @@ fun SessionDrawer(
                 }
             }
 
-            if (sessions.isEmpty()) {
-                EmptyStateCompact(
-                    icon = Icons.Outlined.Forum,
-                    title = "暂无会话",
-                )
-            } else {
-                LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    items(sessions, key = { it.id }) { session ->
-                        val isSelected = session.id in selectedIds
-                        SwipeableSessionRow(
-                            session = session,
-                            isCurrent = session.id == currentId,
-                            selectionMode = selectionMode,
-                            isSelected = isSelected,
-                            onTap = {
-                                if (selectionMode) toggleSelected(session.id)
-                                else onOpen(session.id)
-                            },
-                            onSwipeRightTrigger = {
-                                // 右滑触发：进入多选 + 勾选该项
-                                if (!selectionMode) {
-                                    selectionMode = true
-                                    selectedIds = setOf(session.id)
-                                } else {
-                                    toggleSelected(session.id)
-                                }
-                            },
-                            onEdit = { renaming = session },
-                            onDelete = { deleting = session },
+            when {
+                sessions.isEmpty() -> {
+                    EmptyStateCompact(
+                        icon = Icons.Outlined.Forum,
+                        title = "暂无会话",
+                    )
+                }
+                // workspace 档空态：引导去工作设置页添加/切换工作区（喵~）
+                filteredSessions.isEmpty() -> {
+                    Column(Modifier.fillMaxWidth()) {
+                        EmptyStateCompact(
+                            icon = Icons.Outlined.Forum,
+                            title = "当前工作区还没有会话",
                         )
+                        Text(
+                            text = "到右侧看板 → 工作设置 可添加或切换工作区喵~",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp),
+                        )
+                    }
+                }
+                else -> {
+                    LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        items(filteredSessions, key = { it.id }) { session ->
+                            val isSelected = session.id in selectedIds
+                            // 元信息行：预设显示名（常显）+「 · 」+ 工作区短名
+                            // （仅「全部会话」模式且会话不属于当前默认工作区时显示，喵~）
+                            val presetLabel = when (val pid = session.presetId) {
+                                null -> "默认"
+                                else -> presetCatalog.firstOrNull { it.id == pid }?.let { it.name ?: it.id } ?: pid
+                            }
+                            val showWorkspace = sessionFilter == "all" && session.workspacePath != defaultWorkspacePath
+                            val metaLine = if (showWorkspace) {
+                                "$presetLabel · " + workspaceShortName(session.workspacePath, filesDirPath)
+                            } else {
+                                presetLabel
+                            }
+                            SwipeableSessionRow(
+                                session = session,
+                                isCurrent = session.id == currentId,
+                                selectionMode = selectionMode,
+                                isSelected = isSelected,
+                                metaLine = metaLine,
+                                onTap = {
+                                    if (selectionMode) toggleSelected(session.id)
+                                    else onOpen(session.id)
+                                },
+                                onSwipeRightTrigger = {
+                                    // 右滑触发：进入多选 + 勾选该项
+                                    if (!selectionMode) {
+                                        selectionMode = true
+                                        selectedIds = setOf(session.id)
+                                    } else {
+                                        toggleSelected(session.id)
+                                    }
+                                },
+                                onEdit = { renaming = session },
+                                onDelete = { deleting = session },
+                            )
+                        }
                     }
                 }
             }
@@ -295,7 +420,10 @@ fun SessionDrawer(
 }
 
 /**
- * 单个会话行：
+ * 单个会话行（三行布局，plan-standard-mode §5.8，喵~）：
+ *   会话标题      ← titleMedium，maxLines=1 + ellipsis
+ *   预设 · 工作区 ← 元信息行（bodySmall，单行 ellipsis，预设名在前）
+ *   紧凑时间      ← labelSmall（今天 HH:mm / 今年 M月d日 HH:mm / 跨年带年）
  * - 多选模式 → 右侧复选框；点击行切换勾选；长按不弹菜单（多选工具栏的删除按钮统一处理）
  * - 普通模式 → 点击行打开会话；长按弹出菜单（重命名/删除）
  * - 右滑：行向右偏移累计，超阈值回调 onSwipeRightTrigger 一次；手指松开回弹归零
@@ -319,6 +447,7 @@ private fun SwipeableSessionRow(
     isCurrent: Boolean,
     selectionMode: Boolean,
     isSelected: Boolean,
+    metaLine: String,
     onTap: () -> Unit,
     onSwipeRightTrigger: () -> Unit,
     onEdit: () -> Unit,
@@ -389,16 +518,26 @@ private fun SwipeableSessionRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
+                // 三行布局：标题 / 预设名 · 工作区短名 / 紧凑时间（行高约 +16dp，真机目检列表密度）
                 Text(
                     text = session.title,
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = java.text.DateFormat.getDateTimeInstance()
-                        .format(java.util.Date(session.updatedAt)),
+                    text = metaLine,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = formatSessionTimestamp(session.updatedAt),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
 

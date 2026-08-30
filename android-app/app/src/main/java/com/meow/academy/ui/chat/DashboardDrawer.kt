@@ -35,9 +35,11 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.ModelTraining
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.ModelTraining
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -73,7 +75,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
-/** 功能看板三个功能页（图标：选中填充 / 未选中描边，风格同底部导航） */
+/** 功能看板四个功能页（图标：选中填充 / 未选中描边，风格同底部导航） */
 enum class DashboardFeature(
     val label: String,
     val iconSelected: ImageVector,
@@ -82,6 +84,7 @@ enum class DashboardFeature(
     MODELS("模型管理", Icons.Filled.ModelTraining, Icons.Outlined.ModelTraining),
     FILES("快捷文件", Icons.Filled.AttachFile, Icons.Outlined.AttachFile),
     STATS("调用量", Icons.Filled.Insights, Icons.Outlined.Insights),
+    WORKSPACE_SETTINGS("工作设置", Icons.Filled.Tune, Icons.Outlined.Tune),
 }
 
 /** 右侧看板锚定拖拽位置：Open = 面板完全展开（translationX 0），Closed = 面板滑出屏幕右侧 */
@@ -202,6 +205,9 @@ fun DashboardDrawer(
     modelPanel: @Composable () -> Unit,
     filesPanel: @Composable () -> Unit,
     statsPanel: @Composable () -> Unit,
+    // 「工作设置」面板（plan-standard-mode §5.7）：默认空实现保持既有调用点可编译，
+    // ChatScreen 接线时传 WorkspaceSettingsPanel(vm)（喵~）
+    workspaceSettingsPanel: @Composable () -> Unit = {},
 ) {
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
@@ -427,6 +433,7 @@ fun DashboardDrawer(
                                     DashboardFeature.MODELS -> modelPanel()
                                     DashboardFeature.FILES -> filesPanel()
                                     DashboardFeature.STATS -> statsPanel()
+                                    DashboardFeature.WORKSPACE_SETTINGS -> workspaceSettingsPanel()
                                 }
                             }
                         }

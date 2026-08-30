@@ -148,13 +148,28 @@ class DshRpcClient(
         timeoutMs: Long = 20_000,
     ): Boolean = requestOk("initialize", DshParams.initialize(cwd, provider, model, reasoningEffort = reasoningEffort), timeoutMs)
 
-    /** session/prompt：入队一条消息（响应是受理确认，事件走 session.event） */
-    suspend fun prompt(sessionId: String, text: String, timeoutMs: Long = 15_000): Boolean =
-        requestOk("session/prompt", DshParams.prompt(sessionId, text), timeoutMs)
+    /**
+     * session/prompt：入队一条消息（响应是受理确认，事件走 session.event）。
+     * 返回原始响应帧（原 Boolean 版丢弃了 error 载荷）：null = 超时/断管；
+     * error 非空 = 受理失败，载荷（PRESET_UNKNOWN / PRESET_MOUNT_FAILED 等）可透传给气泡。
+     * presetId / cwd 随首条消息定死会话归属（§3.4），会话已存在时服务端忽略。
+     */
+    suspend fun prompt(
+        sessionId: String,
+        text: String,
+        presetId: String? = null,
+        cwd: String? = null,
+        timeoutMs: Long = 15_000,
+    ): DshResponse? = request("session/prompt", DshParams.prompt(sessionId, text, presetId, cwd), timeoutMs)
 
     /** session/prompt：入队一条带 contentBlocks 的消息（text + image 混合，图片块用 attachImages 返回的 durable ref） */
-    suspend fun prompt(sessionId: String, blocks: List<DshParams.ContentBlock>, timeoutMs: Long = 15_000): Boolean =
-        requestOk("session/prompt", DshParams.prompt(sessionId, blocks), timeoutMs)
+    suspend fun prompt(
+        sessionId: String,
+        blocks: List<DshParams.ContentBlock>,
+        presetId: String? = null,
+        cwd: String? = null,
+        timeoutMs: Long = 15_000,
+    ): DshResponse? = request("session/prompt", DshParams.prompt(sessionId, blocks, presetId, cwd), timeoutMs)
 
     /**
      * session/attachImages：canonical base64 图片批 → durable refs。
@@ -251,6 +266,45 @@ class DshRpcClient(
     /** session/stats：读某会话的调用量统计（无会话/未持久化时 result.stats=null） */
     suspend fun sessionStats(sessionId: String, timeoutMs: Long = 15_000): JsonObject? =
         request("session/stats", DshParams.sessionStats(sessionId), timeoutMs)?.result
+
+    // ── Agent 预设 / 附加模式 / 问答（普通模式补完，plan-standard-mode §三） ──
+
+    /** presets/list：列 Agent 预设（自动扫描接口；result.presets 数组，App 不硬编码列表） */
+    suspend fun presetsList(timeoutMs: Long = 15_000): JsonObject? =
+        request("presets/list", DshParams.presetsList(), timeoutMs)?.result
+
+    /** presets/read：读某预设的组合文件全文（result: {id, composition}） */
+    suspend fun presetsRead(id: String, timeoutMs: Long = 15_000): JsonObject? =
+        request("presets/read", DshParams.presetsRead(id), timeoutMs)?.result
+
+    /** presets/delete：删自定义预设（仅 trust=user；内置预设 error=PRESET_IMMUTABLE） */
+    suspend fun presetsDelete(id: String, timeoutMs: Long = 15_000): Boolean =
+        requestOk("presets/delete", DshParams.presetsDelete(id), timeoutMs)
+
+    /**
+     * session/command：程序化执行斜杠命令（附加模式胶囊的执行通道，禁止把 /plan 当消息发）。
+     * @return result: {sessionId, kind: "success"|"error", text}；jsonrpc reject
+     *   （COMMAND_UNAVAILABLE / COMMAND_UNKNOWN）时为 null，调用方按需 toast
+     */
+    suspend fun sessionCommand(
+        sessionId: String,
+        line: String,
+        presetId: String? = null,
+        cwd: String? = null,
+        timeoutMs: Long = 10_000,
+    ): JsonObject? = request("session/command", DshParams.sessionCommand(sessionId, line, presetId, cwd), timeoutMs)?.result
+
+    /** session/answerQuestion：回答问答（cancelled=true 取消；响应 {delivered:true}） */
+    suspend fun answerQuestion(
+        requestId: String,
+        answers: List<DshParams.QuestionAnswer> = emptyList(),
+        cancelled: Boolean = false,
+        timeoutMs: Long = 10_000,
+    ): Boolean = requestOk("session/answerQuestion", DshParams.answerQuestion(requestId, answers, cancelled), timeoutMs)
+
+    /** session/query：读旧会话状态水合（result: {sessionId, preset, blank, todos, plan, goal}） */
+    suspend fun sessionQuery(sessionId: String, timeoutMs: Long = 15_000): JsonObject? =
+        request("session/query", DshParams.sessionQuery(sessionId), timeoutMs)?.result
 
     /** settings/setProvider：写 provider profile + credential */
     suspend fun settingsSetProvider(

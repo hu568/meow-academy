@@ -2,7 +2,10 @@ package com.meow.academy.runtime
 
 import android.content.Context
 import android.util.Log
+import com.meow.academy.data.settings.SettingsRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import java.io.BufferedInputStream
@@ -43,6 +46,9 @@ object RuntimeExtractor {
     /** 默认配置模板目录名（filesDir 下，docs/design-dynamic-config.md） */
     const val CONFIG_DEFAULTS_DIR = "config-defaults"
 
+    /** 系统预设播种目录名（filesDir 下，agent-presets 的 system root；assets 同名目录整目录同步） */
+    const val DSH_PRESETS_DIR = "dsh-presets"
+
     /** agent 配置目录名（filesDir 下，skills / 记忆 / 插件，MCP 未来） */
     const val AGENTS_DIR = ".agents"
 
@@ -63,6 +69,8 @@ object RuntimeExtractor {
     suspend fun extract(context: Context, onProgress: (Float) -> Unit): File = withContext(Dispatchers.IO) {
         // 目录重构（phase4）：解压即把 workspace/appconfig/.agents 建好（三保险之一）
         ensureAppDirs(context)
+        // 系统预设播种：assets dsh-presets/ → filesDir/dsh-presets/（赶在 DSH 读 roots 之前）
+        syncDshPresetsIfNeeded(context)
 
         val filesDir = context.filesDir
         val targetDir = File(filesDir, RUNTIME_DIR)
@@ -207,10 +215,17 @@ object RuntimeExtractor {
         Log.d(TAG, "ensureAppDirs ok")
     }
 
-    /** workspace 目录（DSH_CWD） */
-    fun workspaceDir(context: Context): File = File(context.filesDir, WORKSPACE_DIR)
+    /**
+     * workspace 目录（DSH_CWD）：按设置返回（DataStore workspacePath，默认 filesDir/workspace 兼容存量）。
+     * 切换工作区 = 只写 DataStore、不重启 DSH；DSH_CWD / DSH_UPLOAD_DIR 在进程启动时取一次值（§4.6）。
+     */
+    fun workspaceDir(context: Context): File = File(currentWorkspacePath(context))
 
-    /** workspace 内的上传目录（DSH_UPLOAD_DIR） */
+    /** 当前工作区绝对路径：同步读设置 workspacePath（DataStore 进程内有内存缓存，读开销极小） */
+    fun currentWorkspacePath(context: Context): String =
+        runBlocking { SettingsRepository(context.applicationContext).workspacePath.first() }
+
+    /** workspace 内的上传目录（DSH_UPLOAD_DIR），跟随当前工作区 */
     fun workspaceUploadsDir(context: Context): File = File(workspaceDir(context), UPLOADS_DIR)
 
     /** appconfig 目录（settings / credentials） */
@@ -218,6 +233,65 @@ object RuntimeExtractor {
 
     /** config-defaults 目录（默认配置模板，随 APK 升级同步） */
     fun configDefaultsDir(context: Context): File = File(context.filesDir, CONFIG_DEFAULTS_DIR)
+
+    /** dsh-presets 目录（agent-presets 的 system root，cordis.yml roots 指向） */
+    fun dshPresetsDir(context: Context): File = File(context.filesDir, DSH_PRESETS_DIR)
+
+    /**
+     * 系统预设播种：assets `dsh-presets/` 整目录同步到 `filesDir/dsh-presets/`
+     * （照 config-defaults 的 sync-token 模式：versionCode + lastUpdateTime 变化才整体复制）。
+     *
+     * - 通用目录同步，不写死预设名（assets 下有什么预设目录就播什么）；
+     * - assets 无 `dsh-presets/`（老 APK 或资产未带）→ 不播种也不写 token，资产到位后下次触发再播；
+     * - 触发点：[extract]（解压时）与 [DshProcessLauncher.launch]（进程拉起前），都要赶在 DSH 读 roots 之前。
+     */
+    fun syncDshPresetsIfNeeded(context: Context) {
+        runCatching {
+            val children = context.assets.list(DSH_PRESETS_ASSET)
+            if (children == null || children.isEmpty()) return
+            val token = buildSyncToken(context)
+            val targetDir = dshPresetsDir(context)
+            val tokenFile = File(targetDir, SYNC_TOKEN_FILE)
+            if (tokenFile.exists() && tokenFile.readText().trim() == token) return
+            copyAssetTree(context, DSH_PRESETS_ASSET, targetDir)
+            tokenFile.parentFile?.mkdirs()
+            tokenFile.writeText(token)
+            Log.i(TAG, "dsh-presets 已同步 (token=$token)")
+        }.onFailure {
+            Log.w(TAG, "dsh-presets 同步失败: ${it.message}")
+        }
+    }
+
+    /** 同步 token（versionCode + lastUpdateTime，与 config-defaults 同款） */
+    private fun buildSyncToken(context: Context): String {
+        val info = context.packageManager.getPackageInfo(context.packageName, 0)
+        return "${info.versionCode}:${info.lastUpdateTime}"
+    }
+
+    /** 递归复制 assets 目录到 target（保留目录结构） */
+    private fun copyAssetTree(context: Context, assetPath: String, target: File) {
+        val children = context.assets.list(assetPath)
+        if (children != null && children.isNotEmpty()) {
+            // 目录
+            if (target.exists() && !target.isDirectory) target.deleteRecursively()
+            target.mkdirs()
+            for (child in children) {
+                copyAssetTree(context, "$assetPath/$child", File(target, child))
+            }
+        } else {
+            // 文件（AssetManager.list() 对文件路径返回空数组而非 null，必须把空数组也当文件）
+            copyAssetFile(context, assetPath, target)
+        }
+    }
+
+    /** 把单个 asset 文件复制到 target；target 若是误建的目录则先删除 */
+    private fun copyAssetFile(context: Context, assetPath: String, target: File) {
+        if (target.exists() && target.isDirectory) target.deleteRecursively()
+        target.parentFile?.mkdirs()
+        context.assets.open(assetPath).use { input ->
+            target.outputStream().use { output -> input.copyTo(output) }
+        }
+    }
 
     /** .agents 根目录 */
     fun agentsDir(context: Context): File = File(context.filesDir, AGENTS_DIR)
@@ -230,4 +304,9 @@ object RuntimeExtractor {
 
     /** .agents/memory（长期记忆） */
     fun agentsMemoryDir(context: Context): File = File(context.filesDir, AGENTS_MEMORY_DIR)
+
+    private const val DSH_PRESETS_ASSET = "dsh-presets"
+
+    /** dsh-presets 的同步 token 文件（放在播种目录内，与 config-defaults 同款约定） */
+    private const val SYNC_TOKEN_FILE = ".sync-token"
 }

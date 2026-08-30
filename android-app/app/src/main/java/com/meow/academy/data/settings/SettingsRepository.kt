@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.meow.academy.runtime.RuntimeExtractor
 import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -51,6 +52,12 @@ class SettingsRepository(private val context: Context) {
         val PROVIDER_ORDER = stringPreferencesKey("provider_order")
         // 右侧功能看板当前功能页（默认 MODELS；退出 App 后仍记住上次切换的模式）
         val DASHBOARD_FEATURE = stringPreferencesKey("dashboard_feature")
+        // 新会话默认 Agent 预设 id（默认 meow-standard，只对新会话生效）
+        val DEFAULT_PRESET = stringPreferencesKey("default_preset")
+        // 新会话默认工作区绝对路径（默认 filesDir/workspace，兼容存量；切换不重启 DSH）
+        val WORKSPACE_PATH = stringPreferencesKey("workspace_path")
+        // 会话抽屉显示过滤（"all" 全部会话 / "workspace" 当前工作区会话，默认 all）
+        val SESSION_FILTER = stringPreferencesKey("session_filter")
     }
 
     val themeMode: Flow<ThemeMode> = context.settingsDataStore.data.map { prefs ->
@@ -229,5 +236,38 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setDashboardFeature(feature: String) {
         context.settingsDataStore.edit { it[Keys.DASHBOARD_FEATURE] = feature }
+    }
+
+    // ── Agent 预设 + 工作区 + 会话过滤（普通模式补完，plan-standard-mode §5.2） ──
+
+    /** 新会话默认 Agent 预设 id（默认 "meow-standard"；只对新会话生效，归属随首条消息定死） */
+    val defaultPreset: Flow<String> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.DEFAULT_PRESET] ?: "meow-standard"
+    }
+
+    /** 新会话默认工作区绝对路径（默认 filesDir/workspace，兼容存量） */
+    val workspacePath: Flow<String> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.WORKSPACE_PATH]
+            ?: File(context.filesDir, RuntimeExtractor.WORKSPACE_DIR).absolutePath
+    }
+
+    /** 会话抽屉显示过滤（"all" 全部会话 / "workspace" 当前工作区会话；默认 all） */
+    val sessionFilter: Flow<String> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.SESSION_FILTER] ?: "all"
+    }
+
+    /** 设置新会话默认 Agent 预设 id */
+    suspend fun setDefaultPreset(id: String) {
+        context.settingsDataStore.edit { it[Keys.DEFAULT_PRESET] = id }
+    }
+
+    /** 设置新会话默认工作区绝对路径（只写设置，不重启 DSH；生成中的会话不受影响） */
+    suspend fun setWorkspacePath(path: String) {
+        context.settingsDataStore.edit { it[Keys.WORKSPACE_PATH] = path }
+    }
+
+    /** 设置会话抽屉显示过滤（"all" / "workspace"） */
+    suspend fun setSessionFilter(mode: String) {
+        context.settingsDataStore.edit { it[Keys.SESSION_FILTER] = mode }
     }
 }

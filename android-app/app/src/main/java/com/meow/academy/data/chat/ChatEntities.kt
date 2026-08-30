@@ -10,6 +10,16 @@ data class SessionEntity(
     val title: String,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
+    /**
+     * 会话归属的 Agent 预设 id（新会话创建时写定，此后不更新；随首条消息携带给 DSH 定死归属，
+     * plan-standard-mode §3.4）。null = v3 前旧数据（视为默认预设）。
+     */
+    val presetId: String? = null,
+    /**
+     * 会话归属的工作区绝对路径（新会话创建时写定，此后不更新；null = v3 前旧数据，
+     * 迁移时回填为 filesDir/workspace——v3 前所有会话都在唯一工作区）。
+     */
+    val workspacePath: String? = null,
 )
 
 /** 消息角色 */

@@ -17,7 +17,13 @@ fork 出来的**本地源码副本，整体 gitignore 不入库**。本目录把
 > fsync 与 `link()` 的 SELinux 规避，见下）与 `sharp-wasm32` 兜底依赖。SQLite SCHEMA_VERSION 仍为
 > 17，**不删库、不迁移**。计划与过程见 `plan/plan-dsh-upgrade-rc2.md`。
 
-## patch 内容（0001-meow-fork-on-deepseek-harness-dsh-v0.1.1-rc.2.patch）
+## patch 内容（0001 = Android 存活适配基座）
+
+> 2026-08-30 起 patch 系列扩为三个：0001 = 上基线时的全部 Android 存活适配（基线仍是
+> `dsh-v0.1.1-rc.2`，未动；文件名即提交主题 `0001-feat-meow-Android-runtime-adaptations-tavily-web-sea.patch`）；
+> 0002 = 标准 Agent 预设体系的 fork 侧改动（`0002-feat-meow-Agent-presets-str_replace_editor-cwd.patch`，
+> 见下「0002 内容」）；0003 = sharp-wasm32 版本对齐与三方声明记录
+> （`0003-fix-deploy-img-sharp-wasm32-sharp-0.35.4-pnpm-instal.patch`，见下「0003 内容」）。
 
 ### Android 存活适配
 - **`packages/fs/fs-local/src/fsio.ts`** — guarded-create 发布原语由 `link()` 改为
@@ -71,6 +77,43 @@ fork 出来的**本地源码副本，整体 gitignore 不入库**。本目录把
   `session/imageLimits` 属于 `runtime-assets/dsh/`（不入 patch）；sharp 在 Termux 靠
   `@img/sharp-wasm32` 自动 WASM 兜底（PC 闭包内 linux-x64 原生包在 arm64 上加载失败后 fallback）。
 
+## 0002 内容（feat-meow-Agent-presets-str_replace_editor-cwd，2026-08-30）
+
+标准 Agent 预设体系（plan-standard-mode 一期）的 fork 侧改动，基线不变：
+
+- **`deploy/meow-runtime/package.json`** — 闭包清单补 11 个 workspace 包：
+  `dsh-agent-presets` / `dsh-persona` / `dsh-plan-mode` / `dsh-commands` /
+  `dsh-command-goal` / `dsh-user-questions` / `dsh-tool-ask-user` / `dsh-tool-subagent` /
+  `dsh-tool-subagent-control` / `dsh-subagent-spawn-in-process` / `dsh-command-compact`。
+  新增外部依赖仅 js-yaml 与 zod@4（store 已有）。
+- **`pnpm-lock.yaml`** — 固化 `deploy/meow-runtime` importer 块与新包解析记录
+  （0001 不含 lockfile——原复现流程由 `pnpm install` 重新生成；0002 起把清单对应的
+  lockfile 状态一并入库，`git apply` 后 `pnpm install` 幂等校验，不影响原流程）。
+- **`packages/fs/tool-str-replace-editor/src/index.ts`** — `resolveTarget` 接入会话 cwd
+  （`exec.agent.session.header.cwd`，内联 `sessionCwdOf`——`sessionCwd` 未从 tool-fs
+  包根导出、src/ 不在 publish 白名单，不能跨包 import），view/create/str_replace/insert
+  四个调用点同步传 `exec`；`cwd: undefined` 时行为同旧（exactOptionalPropertyTypes 下
+  条件展开）。跨工作区会话的编辑工具不再按后端全局 cwd 解析。
+
+## 0003 内容（fix-deploy-img-sharp-wasm32-sharp-0.35.4-pnpm-instal，2026-08-30）
+
+真机首装 0.2.6 实测踩坑的修复：D 组 `pnpm install` 把 sharp 顶到 **0.35.4**，与 manifest
+钉死的 `@img/sharp-wasm32@0.35.3` 在 hoisted 布局下同名不同版本冲突，`pnpm deploy` 产物
+**整个丢包**（两个版本都不落 `@img/`）；Android 无 arm64 原生 sharp → attachments 插件树
+加载即崩 → **DSH 子进程启动即退**（App 撞上「socket 已监听但插件树还在加载」的窗口能
+拿到 initialize 响应，随后进程退出连接全被 RST——极难排查的假活）。
+
+- **`deploy/meow-runtime/package.json`** — `@img/sharp-wasm32` 对齐 `0.35.4`（与 sharp
+  0.35.4 自身的 optional 依赖同版本，hoisted 合并保留单副本）。
+- **`pnpm-lock.yaml`** — importer 块随版本对齐。
+- **`scripts/gen-third-party-notices.ts` + `THIRD_PARTY_NOTICES.md`** —
+  `@img/sharp-wasm32`（libvips wasm 含 LGPL-3.0 组件）计入 `isOwnerAuthorizedRuntime`
+  owner 记录（兜底决定 2026-08-23 拍板）并随 runtime 表公示；不记会被 lefthook 的
+  third-party-notices 守卫挡提交。
+- **教训**：给 deploy 清单升外部依赖版本时，必须与依赖它的包自身的 optional 依赖版本
+  保持一致（hoisted 布局下同名不同版本 = 静默丢包）；重打 runtime.bin 后必须真机确认
+  DSH 子进程真正起来（`jobs -l` / `/proc` 扫 packaged-bin），不能只看 RPC 握手。
+
 ## 从零复现 runtime.bin
 
 ```bash
@@ -78,8 +121,10 @@ fork 出来的**本地源码副本，整体 gitignore 不入库**。本目录把
 git clone https://github.com/deepseek-ai/deepseek-harness dsh
 cd dsh
 git checkout dsh-v0.1.1-rc.2
-git apply ../android-app/runtime-assets/dsh-fork/0001-meow-fork-on-deepseek-harness-dsh-v0.1.1-rc.2.patch
-pnpm install          # lockfile 由 install 重新生成（patch 不含 pnpm-lock.yaml）
+git apply ../android-app/runtime-assets/dsh-fork/0001-feat-meow-Android-runtime-adaptations-tavily-web-sea.patch
+git apply ../android-app/runtime-assets/dsh-fork/0002-feat-meow-Agent-presets-str_replace_editor-cwd.patch
+git apply ../android-app/runtime-assets/dsh-fork/0003-fix-deploy-img-sharp-wasm32-sharp-0.35.4-pnpm-instal.patch
+pnpm install          # lockfile 已随 0002/0003 入库，install 为幂等校验（有出入时以重新生成结果为准）
 
 # 1. PC 构建并打 DSH 闭包（产物 .tmp/dsh-closure.tar.gz）
 npm run build:lib     # workspace 包 files 字段只发布 lib/，必须先构建

@@ -55,10 +55,17 @@ import androidx.compose.ui.unit.dp
 import com.meow.academy.data.chat.MessageEntity
 import com.meow.academy.data.chat.MessageRole
 import com.meow.academy.data.chat.MessageStatus
+import com.meow.academy.rpc.DshParams
 
-/** 单条消息行：按角色分发到用户气泡 / 助手分段主体 */
+/** 单条消息行：按角色分发到用户气泡 / 助手分段主体（问答卡交互参数透传，plan-standard-mode §5.6） */
 @Composable
-fun MessageRow(msg: MessageEntity) {
+fun MessageRow(
+    msg: MessageEntity,
+    pendingQuestion: PendingQuestion? = null,
+    interactiveQuestionCallId: String? = null,
+    onAnswerQuestion: (String, List<DshParams.QuestionAnswer>) -> Unit = { _, _ -> },
+    onCancelQuestion: (String) -> Unit = {},
+) {
     when (msg.role) {
         MessageRole.USER -> UserBubble(msg.content)
         MessageRole.ASSISTANT -> {
@@ -69,6 +76,10 @@ fun MessageRow(msg: MessageEntity) {
                     AssistantBody(
                         segments = segments,
                         status = msg.status,
+                        pendingQuestion = pendingQuestion,
+                        interactiveQuestionCallId = interactiveQuestionCallId,
+                        onAnswerQuestion = onAnswerQuestion,
+                        onCancelQuestion = onCancelQuestion,
                     )
                 } else {
                     // 旧消息兼容：segmentsJson 为空时回退 thinking + toolCallsJson
@@ -176,11 +187,16 @@ private fun toolIcon(name: String): ImageVector = when {
 /**
  * 助手消息主体：组外思考/文本按到达顺序展示（思考是独立折叠卡、文本是气泡，均不并入工具组）；
  * 工具调用序列折叠成一组，组内若存在「运行中」的工具则自动展开（运行输出完自动收起）。
+ * 问答工具（ask_user_question / exit_plan_mode）组内分流到 [QuestionCard]（§5.6）。
  */
 @Composable
 fun AssistantBody(
     segments: List<Segment>,
     status: MessageStatus,
+    pendingQuestion: PendingQuestion? = null,
+    interactiveQuestionCallId: String? = null,
+    onAnswerQuestion: (String, List<DshParams.QuestionAnswer>) -> Unit = { _, _ -> },
+    onCancelQuestion: (String) -> Unit = {},
 ) {
     val toolIndices = segments.indices.filter { segments[it] is Segment.Tool }
 
@@ -206,7 +222,14 @@ fun AssistantBody(
                 }
             }
             // 工具调用序列折叠成一组
-            ToolGroup(segments.subList(firstTool, lastTool + 1), status)
+            ToolGroup(
+                segments = segments.subList(firstTool, lastTool + 1),
+                status = status,
+                pendingQuestion = pendingQuestion,
+                interactiveQuestionCallId = interactiveQuestionCallId,
+                onAnswerQuestion = onAnswerQuestion,
+                onCancelQuestion = onCancelQuestion,
+            )
             // 工具组后（干活完成后的思考 / 最终回复）
             for (i in lastTool + 1 until segments.size) {
                 when (val seg = segments[i]) {
@@ -287,9 +310,17 @@ fun ThinkingBlock(thinking: String) {
     }
 }
 
-/** 工具调用折叠组：收起时显示「工具箱图标 + 工具调用 xN」；有运行中的工具时自动展开，运行完自动收起 */
+/** 工具调用折叠组：收起时显示「工具箱图标 + 工具调用 xN」；有运行中的工具时自动展开，运行完自动收起。
+ * 问答工具分流到 QuestionCard（默认展开、配色区分，§5.6），其余走通用 ToolCard。 */
 @Composable
-fun ToolGroup(segments: List<Segment>, status: MessageStatus) {
+fun ToolGroup(
+    segments: List<Segment>,
+    status: MessageStatus,
+    pendingQuestion: PendingQuestion? = null,
+    interactiveQuestionCallId: String? = null,
+    onAnswerQuestion: (String, List<DshParams.QuestionAnswer>) -> Unit = { _, _ -> },
+    onCancelQuestion: (String) -> Unit = {},
+) {
     val toolCount = segments.count { it is Segment.Tool }
     val hasRunning = segments.any {
         it is Segment.Tool && it.call.result.isBlank() && !it.call.isError
@@ -334,7 +365,19 @@ fun ToolGroup(segments: List<Segment>, status: MessageStatus) {
                 when (seg) {
                     is Segment.Reasoning -> ThinkingBlock(seg.text)
                     is Segment.Text -> TextBubble(seg.text, status)
-                    is Segment.Tool -> ToolCard(seg.call)
+                    is Segment.Tool ->
+                        if (seg.call.name in QuestionToolNames) {
+                            // 问答卡：需要用户操作的提问/计划审阅（§5.6）
+                            QuestionCard(
+                                call = seg.call,
+                                pendingQuestion = pendingQuestion,
+                                interactive = interactiveQuestionCallId == seg.call.id,
+                                onAnswer = onAnswerQuestion,
+                                onCancel = onCancelQuestion,
+                            )
+                        } else {
+                            ToolCard(seg.call)
+                        }
                 }
             }
         }

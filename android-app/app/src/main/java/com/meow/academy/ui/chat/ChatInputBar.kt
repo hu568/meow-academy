@@ -2,17 +2,19 @@ package com.meow.academy.ui.chat
 
 /**
  * 聊天输入栏 + 工具栏组件。
- * 输入框/发送/停止 + provider/模型/思考强度下拉 + 联网开关 + 上传文件；
- * 从 ChatScreen.kt 原子拆出。
+ * 输入框/发送/停止 + 附加模式胶囊 + 思考强度下拉 + 联网开关 + 上传文件。
+ * （provider/model 圆钮已移除：切换全权归右侧看板「模型管理」面板，plan-standard-mode §5.4）
  */
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -30,6 +32,8 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -39,6 +43,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -47,20 +52,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.meow.academy.rpc.LlmProviderInfo
-import com.meow.academy.ui.settings.ModelAvatar
-import com.meow.academy.ui.settings.ProviderAvatar
 import java.io.File
 
 /**
@@ -86,19 +89,20 @@ fun ChatInputArea(
     onRemoveAttachment: (PendingAttachment) -> Unit = {},
     isGenerating: Boolean,
     pendingCount: Int,
-    llmModel: String,
     reasoningEffort: String,
     webSearchEnabled: Boolean,
-    providers: List<LlmProviderInfo>,
-    availableModels: List<String>,
-    currentProvider: String,
+    /** 附加模式当前状态（null = 无附加；胶囊三态由此驱动） */
+    attachedMode: AttachedMode?,
+    /** 是否有可用会话（一条会话都没有时胶囊禁用置灰） */
+    hasSession: Boolean,
     onSend: () -> Unit,
     onStop: () -> Unit,
-    onSelectModel: (String) -> Unit,
-    onSelectProvider: (String) -> Unit,
     onSelectReasoningEffort: (String) -> Unit,
     onToggleWebSearch: (Boolean) -> Unit,
     onPickFile: () -> Unit,
+    onAttachPlan: () -> Unit,
+    onAttachGoal: (String) -> Unit,
+    onDetachAttachedMode: () -> Unit,
 ) {
     // 外层只负责 imePadding（键盘顶起），内层才是半透明输入栏（避免背景盖到键盘区）
     Column(
@@ -208,39 +212,35 @@ fun ChatInputArea(
                 }
             }
             ChatToolbar(
-                llmModel = llmModel,
                 reasoningEffort = reasoningEffort,
                 webSearchEnabled = webSearchEnabled,
-                providers = providers,
-                availableModels = availableModels,
-                currentProvider = currentProvider,
-                onSelectModel = onSelectModel,
-                onSelectProvider = onSelectProvider,
+                attachedMode = attachedMode,
+                hasSession = hasSession,
                 onSelectReasoningEffort = onSelectReasoningEffort,
                 onToggleWebSearch = onToggleWebSearch,
                 onPickFile = onPickFile,
+                onAttachPlan = onAttachPlan,
+                onAttachGoal = onAttachGoal,
+                onDetachAttachedMode = onDetachAttachedMode,
             )
         }
     }
 }
 
-/** 工具栏：provider / 模型 / 思考强度下拉 + 联网开关 + 上传文件 */
+/** 工具栏：附加模式胶囊 + 思考强度下拉 + 联网开关 + 上传文件 */
 @Composable
 fun ChatToolbar(
-    llmModel: String,
     reasoningEffort: String,
     webSearchEnabled: Boolean,
-    providers: List<LlmProviderInfo>,
-    availableModels: List<String>,
-    currentProvider: String,
-    onSelectModel: (String) -> Unit,
-    onSelectProvider: (String) -> Unit,
+    attachedMode: AttachedMode?,
+    hasSession: Boolean,
     onSelectReasoningEffort: (String) -> Unit,
     onToggleWebSearch: (Boolean) -> Unit,
     onPickFile: () -> Unit,
+    onAttachPlan: () -> Unit,
+    onAttachGoal: (String) -> Unit,
+    onDetachAttachedMode: () -> Unit,
 ) {
-    var modelMenu by remember { mutableStateOf(false) }
-    var providerMenu by remember { mutableStateOf(false) }
     var effortMenu by remember { mutableStateOf(false) }
 
     Row(
@@ -248,68 +248,14 @@ fun ChatToolbar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        // 服务商：圆形按钮内显示该厂商自己的头像/Logo
-        Box {
-            ToolCircleButton(
-                onClick = { providerMenu = true },
-                contentDescription = "切换服务商（当前${providerLabel(currentProvider, providers)}）",
-                container = Color.Transparent,
-                contentColor = Color.Transparent,
-            ) {
-                ProviderAvatar(currentProvider, providerLabel(currentProvider, providers), size = 40.dp)
-            }
-            DropdownMenu(
-                expanded = providerMenu,
-                onDismissRequest = { providerMenu = false },
-                // 不抢主窗口焦点，避免输入框失焦导致输入法收起
-                properties = PopupProperties(focusable = false),
-            ) {
-                providers.forEach { p ->
-                    DropdownMenuItem(
-                        modifier = Modifier.focusProperties { canFocus = false },
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                ProviderAvatar(p.provider, p.displayName, size = 24.dp)
-                                Spacer(Modifier.width(8.dp))
-                                Text(p.displayName)
-                            }
-                        },
-                        onClick = { onSelectProvider(p.provider); providerMenu = false },
-                    )
-                }
-            }
-        }
-        // 模型：圆形按钮内显示该模型所属厂商的模型头像
-        Box {
-            ToolCircleButton(
-                onClick = { modelMenu = true },
-                contentDescription = "切换模型（当前${modelLabel(llmModel)}）",
-                container = Color.Transparent,
-                contentColor = Color.Transparent,
-            ) {
-                ModelAvatar(currentProvider, modelLabel(llmModel), size = 40.dp)
-            }
-            DropdownMenu(
-                expanded = modelMenu,
-                onDismissRequest = { modelMenu = false },
-                // 不抢主窗口焦点，避免输入框失焦导致输入法收起
-                properties = PopupProperties(focusable = false),
-            ) {
-                availableModels.forEach { m ->
-                    DropdownMenuItem(
-                        modifier = Modifier.focusProperties { canFocus = false },
-                        text = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                ModelAvatar(currentProvider, modelLabel(m), size = 24.dp)
-                                Spacer(Modifier.width(8.dp))
-                                Text(m)
-                            }
-                        },
-                        onClick = { onSelectModel(m); modelMenu = false },
-                    )
-                }
-            }
-        }
+        // 附加模式胶囊（原 provider/model 两圆钮位置；plan/goal 单槽位互斥显示）
+        AttachedModeCapsule(
+            attachedMode = attachedMode,
+            hasSession = hasSession,
+            onAttachPlan = onAttachPlan,
+            onAttachGoal = onAttachGoal,
+            onDetach = onDetachAttachedMode,
+        )
         // 思考强度：圆形闪电图标，随档位变换底色/图标颜色
         val effortContainer = when (reasoningEffort) {
             "off" -> MaterialTheme.colorScheme.surfaceVariant
@@ -363,6 +309,218 @@ fun ChatToolbar(
         ) {
             Icon(Icons.Filled.AttachFile, contentDescription = null, modifier = Modifier.size(20.dp))
         }
+    }
+}
+
+/** 胶囊三态样式（文案 / 底色 / 内容色 / 是否描边空态） */
+private data class CapsuleStyle(
+    val label: String,
+    val container: Color,
+    val contentColor: Color,
+    val outlined: Boolean,
+)
+
+/** 附加模式胶囊样式：空态描边 → 生效中灰底转圈 → 确认态实色（plan-standard-mode §5.4） */
+@Composable
+private fun capsuleStyle(mode: AttachedMode?): CapsuleStyle = when {
+    mode == null -> CapsuleStyle(
+        "附加模式",
+        Color.Transparent,
+        MaterialTheme.colorScheme.onSurfaceVariant,
+        outlined = true,
+    )
+    mode.pending && mode is AttachedMode.Plan -> CapsuleStyle(
+        "规划…",
+        MaterialTheme.colorScheme.surfaceVariant,
+        MaterialTheme.colorScheme.onSurfaceVariant,
+        outlined = false,
+    )
+    mode.pending -> // Goal 生效中
+        CapsuleStyle(
+            "目标…",
+            MaterialTheme.colorScheme.surfaceVariant,
+            MaterialTheme.colorScheme.onSurfaceVariant,
+            outlined = false,
+        )
+    mode is AttachedMode.Plan -> CapsuleStyle(
+        "📋 规划",
+        MaterialTheme.colorScheme.primaryContainer,
+        MaterialTheme.colorScheme.onPrimaryContainer,
+        outlined = false,
+    )
+    else -> // Goal 确认态：目标只显示前 8 字摘要
+        CapsuleStyle(
+            "🎯 目标：" + (mode as? AttachedMode.Goal)?.objective.orEmpty().take(8),
+            MaterialTheme.colorScheme.primaryContainer,
+            MaterialTheme.colorScheme.onPrimaryContainer,
+            outlined = false,
+        )
+}
+
+/**
+ * 附加模式胶囊（plan-standard-mode §5.4）：单槽位（plan/goal 互斥显示，以 attachedMode 当前值为准）。
+ *
+ * 三态：
+ * - 空态（attachedMode == null）：淡色描边「附加模式」→ 点击弹选择菜单（📋 规划模式 / 🎯 目标模式）；
+ * - 生效中（pending）：「规划…」/「目标…」+ 转圈（命令已发、状态事件未回）；
+ * - 确认态：「📋 规划」/「🎯 目标：<前 8 字>」实色 → 点击弹确认框执行 detach。
+ *
+ * 仅「一条会话都没有」时禁用置灰（contentDescription 提示先新建会话）。
+ */
+@Composable
+private fun AttachedModeCapsule(
+    attachedMode: AttachedMode?,
+    hasSession: Boolean,
+    onAttachPlan: () -> Unit,
+    onAttachGoal: (String) -> Unit,
+    onDetach: () -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    var goalDialog by remember { mutableStateOf(false) }
+    var detachDialog by remember { mutableStateOf(false) }
+    var goalText by remember { mutableStateOf("") }
+
+    val mode = attachedMode
+    // 胶囊文案与配色三态
+    val confirmed = mode != null && !mode.pending
+    val style = capsuleStyle(mode)
+    val label = style.label
+    val container = style.container
+    val contentColor = style.contentColor
+    val outlined = style.outlined
+    val description = when {
+        !hasSession -> "先新建会话"
+        mode == null -> "附加模式：规划 / 目标"
+        mode is AttachedMode.Plan -> "规划模式（点击关闭）"
+        else -> "目标模式（点击关闭）"
+    }
+    val disabled = !hasSession && mode == null
+
+    Box {
+        Row(
+            modifier = Modifier
+                .defaultMinSize(minHeight = 36.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .then(
+                    if (outlined) {
+                        Modifier.border(
+                            1.dp,
+                            MaterialTheme.colorScheme.outline.copy(alpha = 0.6f),
+                            RoundedCornerShape(20.dp),
+                        )
+                    } else {
+                        Modifier
+                    }
+                )
+                .background(container)
+                .alpha(if (disabled) 0.45f else 1f)
+                .clickable(enabled = !disabled) {
+                    when {
+                        mode == null -> menuOpen = true
+                        confirmed -> detachDialog = true
+                        // pending（生效中）：不响应，等事件确认
+                    }
+                }
+                .padding(horizontal = 14.dp, vertical = 7.dp)
+                .semantics { this.contentDescription = description },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (mode != null && mode.pending) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 1.5.dp,
+                    color = contentColor,
+                )
+                Spacer(Modifier.width(5.dp))
+            }
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
+                color = contentColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        // 空态选择菜单（风格同思考强度菜单）
+        DropdownMenu(
+            expanded = menuOpen,
+            onDismissRequest = { menuOpen = false },
+            properties = PopupProperties(focusable = false),
+        ) {
+            DropdownMenuItem(
+                modifier = Modifier.focusProperties { canFocus = false },
+                text = { Text("📋 规划模式") },
+                onClick = {
+                    menuOpen = false
+                    onAttachPlan()
+                },
+            )
+            DropdownMenuItem(
+                modifier = Modifier.focusProperties { canFocus = false },
+                text = { Text("🎯 目标模式") },
+                onClick = {
+                    menuOpen = false
+                    goalDialog = true
+                },
+            )
+        }
+    }
+
+    // 目标输入框（必填）：确认后走 /goal <objective>
+    if (goalDialog) {
+        AlertDialog(
+            onDismissRequest = { goalDialog = false; goalText = "" },
+            title = { Text("附加目标模式") },
+            text = {
+                Column {
+                    Text(
+                        "告诉喵喵老师要朝哪个目标推进喵~",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = goalText,
+                        onValueChange = { goalText = it },
+                        singleLine = true,
+                        label = { Text("目标（必填）") },
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = goalText.isNotBlank(),
+                    onClick = {
+                        onAttachGoal(goalText)
+                        goalText = ""
+                        goalDialog = false
+                    },
+                ) { Text("附加") }
+            },
+            dismissButton = {
+                TextButton(onClick = { goalDialog = false; goalText = "" }) { Text("取消") }
+            },
+        )
+    }
+
+    // 确认态点击 → 关闭确认框（规划 / 目标）
+    if (detachDialog && mode != null) {
+        val modeName = if (mode is AttachedMode.Plan) "规划" else "目标"
+        AlertDialog(
+            onDismissRequest = { detachDialog = false },
+            title = { Text("是否关闭${modeName}模式？") },
+            text = { Text("关闭后模型将退出${modeName}模式，恢复正常对话喵~") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDetach()
+                    detachDialog = false
+                }) { Text("关闭") }
+            },
+            dismissButton = {
+                TextButton(onClick = { detachDialog = false }) { Text("取消") }
+            },
+        )
     }
 }
 
