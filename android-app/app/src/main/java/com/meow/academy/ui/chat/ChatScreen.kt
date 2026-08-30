@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -346,8 +345,11 @@ private fun ChatDetailView(
                     topBar = {
                         TopAppBar(
                             // 两行标题（§5.10）：上方小字 = 工作区短名 · Agent 预设名（不可点击），
-                            // 下方大字 = 会话标题（重命名点击绑在大字上不动）；高度 68dp 容纳两行
-                            modifier = Modifier.height(68.dp),
+                            // 下方大字 = 会话标题（重命名点击绑在大字上不动）。
+                            // 坑：M3 1.3.0 在 TopAppBar 内部对内容区做 windowInsetsPadding +
+                            // heightIn(max = expandedHeight=64dp)，外层 modifier.height() 会把
+                            // 内容区压成「自己高度 − 状态栏 inset」，两行必被裁——高度全权交给
+                            // 默认 expandedHeight，两行（labelSmall + 标题行）在 64dp 内垂直居中。
                             title = {
                                 Column {
                                     Text(
