@@ -8,7 +8,7 @@
 
 | 状态 | 信息 |
 | --- | --- |
-| 最新版本 | [0.2.5（debug）](https://github.com/hu568/meow-academy/releases/latest) |
+| 最新版本 | [0.2.6（debug）](https://github.com/hu568/meow-academy/releases/latest) |
 | 平台 | Android 8.0+（minSdk 26 / targetSdk 34） |
 | 技术栈 | Kotlin · Jetpack Compose · Material 3 · Room · DataStore · Markwon |
 | Agent 后端 | 内置 DeepSeek Harness 运行时（真终端 PTY + 本地 socket JSON-RPC） |
@@ -22,14 +22,16 @@
 ### 💬 聊天 · Chatbox 化体验
 
 - **流式对话**：思考 / 正文 / 工具调用**步骤化有序渲染**，工具调用折叠成卡片组，自动贴底跟随
-- **会话管理**：毛玻璃会话抽屉、新建 / 切换 / 删除会话，顶栏快捷操作
+- **会话管理**：毛玻璃悬浮会话抽屉，新建 / 切换 / 删除 / 重命名 / 多选批量删，按「全部会话 / 当前工作区」过滤
+- **Agent 预设与能力 GUI**：普通（meow-standard）/ 创造（meow-cordis）预设，附加模式胶囊（规划 / 目标）、todo / 子代理悬浮栏、问答卡（选项 / 自由文本 / 计划审批）；右侧看板「工作设置」页管理工作区与预设，会话按工作区 + 预设隔离
 - **会话持久化**：Room（SQLite）双表存储会话与消息，App 重启后上下文不丢（DSH 侧 `agents.resume()` 无缝恢复）
 - **阅读不跳动**：上滑脱离自动滚动 + 「回到底部」按钮；看历史时冻结流式气泡
-- **输入栏工具栏**：模型快切、网络搜索开关、思考强度（off / high / max）、文件上传
+- **输入栏工具栏**：网络搜索开关、思考强度（按模型能力动态渲染，第三方 Provider 可声明思考档位）、附加模式胶囊（规划 / 目标）、文件上传
 
 ### 🤖 Agent 能力（内置 DSH 运行时）
 
-- **完整 Agent 循环**：DeepSeek Harness 跑在 App 内置 Linux 运行时（`runtime.bin` ≈ 67MB）里，`linker64` 拉起 node，聊天经**本地 unix socket JSON-RPC** 通信（非 HTTP）
+- **完整 Agent 循环**：DeepSeek Harness 跑在 App 内置 Linux 运行时（`runtime.bin` ≈ 75MB）里，`linker64` 拉起 node，聊天经**本地 unix socket JSON-RPC** 通信（非 HTTP）
+- **Agent 预设体系**：接入 DSH 原生 agent-presets（普通 / 创造预设播种，用户自建预设动态扫描）；**灵魂文件** `SOUL.md` 是人设唯一定义处，AI / 用户可编辑、下一条消息生效
 - **工具全可用**：`bash` / `read` / `write` / `edit` / `str_replace_editor` / `web_search`（联网搜索）/ `todo_write`
 - **模型管理**：运行时热切换模型与思考强度；支持添加**自定义 Provider**（OpenAI 兼容格式），密钥存 App 私有目录、bash 子进程不可见
 - **安全边界**：工作区收敛到 `filesDir/workspace`，敏感文件（密钥 / 内部数据）对 Agent 禁读
@@ -37,14 +39,15 @@
 ### 🖥️ 真终端
 
 - 持久 **PTY bash** 进程（Termux 化 node 运行时内），ANSI 转义全渲染
+- `node` / `bash` 可在 App 内终端直接运行（BASH_FUNC 导出函数通道，绕开 W^X exec 限制）
 - 与文件管理页双向联动：进入终端自动 `cd` 到当前浏览目录
 
 ### 📁 文件数据中心
 
-- 全部文件浏览 / 打开编辑（编辑 + 预览双模式）/ 内容搜索
+- 全部文件浏览 / 打开编辑（编辑 + 预览双模式）/ 内容搜索；宫格 / 瀑布流视图切换，收藏抽屉（长按收藏，重命名 / 移动 / 删除自动同步）
 - **HTML 文件 WebView 预览**：点击 `.html` 进入统一编辑器，默认渲染页面（JS/CSS/相对资源可用），一键切源码编辑
-- 导入 / 复制 / 移动 / 多选批量操作 / 多模式排序
-- 面包屑可编辑：直接输入路径跳转；根目录语义为「工作区」，不暴露系统目录
+- 导入 / 复制 / 移动（长按直调 + 目录选择器）/ 多选批量操作 / 多模式排序 / 隐藏文件开关
+- 完整绝对路径面包屑：点段跳级 / 铅笔输入路径跨根跳转，可上溯到工作区上级 filesDir
 
 ### 📖 Markdown 渲染（JSONC 驱动外观）
 
@@ -97,7 +100,7 @@ flowchart TD
 
 **DSH 组合与插件**：`android-app/runtime-assets/dsh/cordis.yml` 定义了喵仓的 Agent 组合（llm-deepseek / bash / agent-spine / 可配置 Provider 等）；`meow-extensions/meow-jsonrpc.js` 是自定义 Cordis 插件，扩展了官方 jsonrpc server（`session/cancel`、`session/bash`、`session/setModel`、`ping`、`agents.resume()` 跨进程会话恢复）。
 
-**App 内目录约定**（phase4 重构后）：`workspace/` 为 Agent 工作区（DSH_CWD），`appconfig/` 存放渲染配置与 Provider 设置，`.agents/` 预留 skills / 记忆 / 插件。
+**App 内目录约定**：`files/` 下按工作区组织 Agent 工作目录（DSH_CWD 随会话返回），`appconfig/` 存放渲染配置与 Provider 设置，`.agents/memory/SOUL.md` 为灵魂文件（人设唯一定义处），skills / 插件预留。
 
 > 🗺️ 每个源码模块的职责与协作关系见 [docs/module-structure.md](docs/module-structure.md)。
 
@@ -120,12 +123,12 @@ cd android-app
 ./gradlew assembleDebug
 ```
 
-构建产物自动同步到 `release/meow-academy-0.2.5-debug.apk`（约 94MB，内置 DSH 运行时 `runtime.bin` 约 62MB）。
+构建产物自动同步到 `release/meow-academy-0.2.6-debug.apk`（约 95MB，内置 DSH 运行时 `runtime.bin` 约 75MB）。
 
 ### 安装到真机
 
 ```bash
-adb install -r release/meow-academy-0.2.5-debug.apk
+adb install -r release/meow-academy-0.2.6-debug.apk
 ```
 
 ### 首次配置
@@ -199,7 +202,7 @@ meow-academy/
 | [docs/notes/meow-dynamic-architecture-note.md](docs/notes/meow-dynamic-architecture-note.md) | 动态架构笔记：JSONC 配置、默认模板 + 用户覆盖、WebView 背景等 |
 | [docs/notes/embedded-dsh-capabilities.md](docs/notes/embedded-dsh-capabilities.md) | 内置 DSH 运行时能力盘点 |
 | [docs/reference/](docs/reference/) | RAG 算法 / Cherry Studio / RikkaHub 参考实现 |
-| [release/RELEASE_NOTES_0.2.5.md](release/RELEASE_NOTES_0.2.5.md) | 版本更新记录（最新） |
+| [release/RELEASE_NOTES_0.2.6.md](release/RELEASE_NOTES_0.2.6.md) | 版本更新记录（最新） |
 
 ---
 
