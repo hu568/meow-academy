@@ -85,6 +85,7 @@ private fun ChatDetailView(
     val defaultPreset by vm.defaultPreset.collectAsState()
     val defaultWorkspacePath by vm.defaultWorkspacePath.collectAsState()
     val presetCatalog by vm.presetCatalog.collectAsState()
+    val sessionFilter by vm.sessionFilter.collectAsState()
     var input by remember { mutableStateOf("") }
     var attachments by remember { mutableStateOf<List<PendingAttachment>>(emptyList()) }
     val attachedPaths = attachments.map { it.path }.toSet()
@@ -171,6 +172,10 @@ private fun ChatDetailView(
                     sessions = sessions,
                     currentId = currentId,
                     drawerOpen = drawerOpen,
+                    sessionFilter = sessionFilter,
+                    defaultWorkspacePath = defaultWorkspacePath,
+                    presetCatalog = presetCatalog,
+                    onFilterChange = vm::setSessionFilter,
                     onOpen = { id -> vm.openSession(id); scope.launch { drawerState.close() } },
                     onNew = { vm.newSession(); scope.launch { drawerState.close() } },
                     onDelete = vm::deleteSession,
