@@ -3,51 +3,29 @@ package com.meow.academy.ui.files
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Checklist
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DriveFileMove
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -59,16 +37,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.meow.academy.data.files.FileEntry
 import com.meow.academy.data.files.FileRepository
-import com.meow.academy.data.files.FileSearchResult
 import com.meow.academy.ui.components.AppTopBar
 import com.meow.academy.ui.components.EmptyState
 import kotlinx.coroutines.launch
@@ -81,6 +54,10 @@ import java.io.File
  * 点击文件通过 [onOpenFile] / [onOpenImage] 回调交给父级（MainScreen）打开统一的
  * [FileEditorScreen] / 图片浮层——状态在父层 [androidx.compose.runtime.saveable.rememberSaveable]
  * 持有，切走 tab / 系统切换明暗色后能原地恢复（喵~）。
+ *
+ * 薄壳化（2026-08-31，见 plan/plan-filesscreen-refactor.md）：只做五件事——
+ * 持有状态（按区域收敛 5 组）、BackHandler 三级响应、Scaffold 骨架（顶栏/底栏/FAB + 面包屑/收藏抽屉）、
+ * 三种视图分派、对话框挂载点；内联组件已外迁 [FileScreenComponents.kt]。
  */
 @Composable
 fun FilesScreen(
@@ -95,20 +72,29 @@ fun FilesScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // 对话框 / 菜单 / 搜索态（本地转发，实际搜索在 ViewModel）
+    // ── 5 组状态区域（本地暂态，关对话框/菜单后自动重置；仅 drawerExpanded 跨 tab 保留）──
+
+    // ① 搜索态：searchOpen（本地暂态，跨 tab 不保留）
+    var searchOpen by remember { mutableStateOf(false) }
+
+    // ② 对话框组：新建/重命名/删除/批量删除/目标选择器
     var showNewFile by remember { mutableStateOf(false) }
     var showNewFolder by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
     var deleteTarget by remember { mutableStateOf<FileEntry?>(null) }
-    var menuEntry by remember { mutableStateOf<FileEntry?>(null) }
     var showBatchDelete by remember { mutableStateOf(false) }
     var targetMode by remember { mutableStateOf<TargetMode?>(null) }
     // 长按单文件复制/移动的目标路径；多选批量操作时保持 null（走 selection），喵~
     var singleOpPath by remember { mutableStateOf<String?>(null) }
-    var searchOpen by remember { mutableStateOf(false) }
+
+    // ③ 菜单组：顶栏更多菜单 / FAB 新建菜单
     var showMoreMenu by remember { mutableStateOf(false) }
     var fabMenuExpanded by remember { mutableStateOf(false) }
-    // 收藏抽屉展开态（切 tab / 旋转后原地恢复）
+
+    // ④ 长按菜单组：menuEntry（内联宫格菜单，独立出来）
+    var menuEntry by remember { mutableStateOf<FileEntry?>(null) }
+
+    // ⑤ 收藏抽屉：drawerExpanded（切 tab / 旋转后原地恢复）
     var drawerExpanded by rememberSaveable { mutableStateOf(false) }
 
     // SAF 多选导入到当前目录
@@ -377,59 +363,25 @@ fun FilesScreen(
         )
     }
     menuEntry?.let { target ->
-        val favorited = target.path in state.favoritePaths
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { menuEntry = null },
-            title = { Text(target.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-            text = {
-                // 双列宫格菜单：图标在左、名称在右，两列等宽；删除红显警示（喵~）
-                Column {
-                    Row(Modifier.fillMaxWidth()) {
-                        MenuActionCell(
-                            label = if (favorited) "取消收藏" else "收藏",
-                            icon = if (favorited) Icons.Filled.StarBorder else Icons.Filled.Star,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            menuEntry = null
-                            vm.toggleFavorite(target.path)
-                        }
-                        MenuActionCell(label = "复制", icon = Icons.Filled.ContentCopy, modifier = Modifier.weight(1f)) {
-                            menuEntry = null
-                            singleOpPath = target.path
-                            targetMode = TargetMode.COPY
-                        }
-                    }
-                    Row(Modifier.fillMaxWidth()) {
-                        MenuActionCell(label = "移动", icon = Icons.Filled.DriveFileMove, modifier = Modifier.weight(1f)) {
-                            menuEntry = null
-                            singleOpPath = target.path
-                            targetMode = TargetMode.MOVE
-                        }
-                        MenuActionCell(label = "多选", icon = Icons.Filled.Checklist, modifier = Modifier.weight(1f)) {
-                            menuEntry = null
-                            vm.enterMultiSelect()
-                            vm.toggleSelect(target.path)
-                        }
-                    }
-                    Row(Modifier.fillMaxWidth()) {
-                        MenuActionCell(label = "重命名", icon = Icons.Filled.Edit, modifier = Modifier.weight(1f)) {
-                            menuEntry = null
-                            renameTarget = target
-                        }
-                        MenuActionCell(
-                            label = "删除",
-                            icon = Icons.Filled.Delete,
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            menuEntry = null
-                            deleteTarget = target
-                        }
-                    }
-                }
+        FileEntryMenuDialog(
+            entry = target,
+            favorited = target.path in state.favoritePaths,
+            onToggleFavorite = { vm.toggleFavorite(target.path) },
+            onCopy = {
+                singleOpPath = target.path
+                targetMode = TargetMode.COPY
             },
-            confirmButton = {},
-            dismissButton = { TextButton(onClick = { menuEntry = null }) { Text("取消") } },
+            onMove = {
+                singleOpPath = target.path
+                targetMode = TargetMode.MOVE
+            },
+            onEnterMultiSelect = {
+                vm.enterMultiSelect()
+                vm.toggleSelect(target.path)
+            },
+            onRename = { renameTarget = target },
+            onDelete = { deleteTarget = target },
+            onDismiss = { menuEntry = null },
         )
     }
     if (showBatchDelete) {
@@ -466,140 +418,5 @@ fun FilesScreen(
                 singleOpPath = null
             },
         )
-    }
-}
-
-/** 复制 / 移动目标模式 */
-private enum class TargetMode { COPY, MOVE }
-
-/** 搜索输入框（自动聚焦由用户点击输入触发；含清除按钮） */
-@Composable
-private fun SearchField(query: String, onQueryChange: (String) -> Unit, onClose: () -> Unit) {
-    OutlinedTextField(
-        value = query,
-        onValueChange = onQueryChange,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        singleLine = true,
-        placeholder = { Text("文件名包含…") },
-        leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-        trailingIcon = {
-            IconButton(onClick = onClose) {
-                Icon(Icons.Outlined.Close, contentDescription = "关闭搜索")
-            }
-        },
-    )
-}
-
-/**
- * 「新建/导入」菜单：顶栏更多与右下角 FAB 共用同一组动作。
- * [showHiddenFiles] 非空时（仅顶栏更多传入）追加「显示隐藏文件」开关项（. 开头，Linux 习惯）；
- * [viewMode] 非空时（仅顶栏更多传入）再追加「查看方式」分组：列表 / 宫格（一行三项）/ 瀑布流（一行两项），
- * 当前模式用 RadioButton 标出（喵~）。
- */
-@Composable
-private fun NewItemMenu(
-    expanded: Boolean,
-    onDismiss: () -> Unit,
-    onNewFile: () -> Unit,
-    onNewFolder: () -> Unit,
-    onImport: () -> Unit,
-    showHiddenFiles: Boolean? = null,
-    onToggleShowHidden: (() -> Unit)? = null,
-    viewMode: FileViewMode? = null,
-    onSelectViewMode: ((FileViewMode) -> Unit)? = null,
-) {
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        DropdownMenuItem(text = { Text("新建文件") }, onClick = { onDismiss(); onNewFile() })
-        DropdownMenuItem(text = { Text("新建文件夹") }, onClick = { onDismiss(); onNewFolder() })
-        DropdownMenuItem(text = { Text("导入文件") }, onClick = { onDismiss(); onImport() })
-        if (showHiddenFiles != null && onToggleShowHidden != null) {
-            HorizontalDivider()
-            DropdownMenuItem(
-                text = { Text("显示隐藏文件") },
-                trailingIcon = { Checkbox(checked = showHiddenFiles, onCheckedChange = null) },
-                onClick = { onDismiss(); onToggleShowHidden() },
-            )
-        }
-        if (viewMode != null && onSelectViewMode != null) {
-            HorizontalDivider()
-            ViewModeMenuItem("列表视图", FileViewMode.LIST, viewMode, onSelectViewMode, onDismiss)
-            ViewModeMenuItem("宫格视图", FileViewMode.GRID, viewMode, onSelectViewMode, onDismiss)
-            ViewModeMenuItem("瀑布流视图", FileViewMode.WATERFALL, viewMode, onSelectViewMode, onDismiss)
-        }
-    }
-}
-
-/** 查看方式菜单项：名称 + RadioButton 标示当前模式，点击切换并收起菜单 */
-@Composable
-private fun ViewModeMenuItem(
-    label: String,
-    mode: FileViewMode,
-    current: FileViewMode,
-    onSelectViewMode: (FileViewMode) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    DropdownMenuItem(
-        text = { Text(label) },
-        trailingIcon = { RadioButton(selected = current == mode, onClick = null) },
-        onClick = { onDismiss(); onSelectViewMode(mode) },
-    )
-}
-
-/**
- * 长按菜单宫格单格：图标在左、名称在右（整组居中），圆角点击波纹（喵~）。
- * [tint] 同时作用于图标与文字（删除项传 error 色红显）。
- */
-@Composable
-private fun MenuActionCell(
-    label: String,
-    icon: ImageVector,
-    tint: Color = MaterialTheme.colorScheme.onSurface,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = tint)
-    }
-}
-
-/** 搜索结果列表：显示相对路径，点击进入所在目录/文件 */
-@Composable
-private fun SearchResultList(
-    results: List<FileSearchResult>,
-    onNavigate: (String) -> Unit,
-) {
-    if (results.isEmpty()) {
-        EmptyState(icon = Icons.Outlined.Search, title = "无搜索结果", description = "换个关键词试试")
-        return
-    }
-    LazyColumn(contentPadding = PaddingValues(bottom = 16.dp)) {
-        items(results, key = { it.path }) { r ->
-            val kind = fileKindOf(r.name, r.isDirectory)
-            val targetPath = if (r.isDirectory) r.path else File(r.path).parentFile?.absolutePath ?: r.path
-            ListItem(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onNavigate(targetPath) },
-                leadingContent = {
-                    if (kind == FileKind.IMAGE) {
-                        FileThumbnail(path = r.path, name = r.name)
-                    } else {
-                        Icon(fileIcon(kind), contentDescription = null, tint = fileColor(kind))
-                    }
-                },
-                headlineContent = { Text(r.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                supportingContent = { Text(r.relativePath, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-            )
-        }
     }
 }
