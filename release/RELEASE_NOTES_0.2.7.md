@@ -15,10 +15,4 @@
 
 - 🐛 `subprocess-local` 的 `createProcessInspector` 平台门不认 `platform==='android'`：持久 bash 首调即报 unsupported → 归入 LinuxProcessInspector（bionic 内核 /proc 接口与 arm64 syscall 号同款），patch 0005
 
-**验证状态：**
-
-- 极简模式：真机 RPC 探针 9 项全过（预设/挂载/减法/standard 回归/真实对话/非空白 resume/PTY spawn/跨调用状态/env 零泄漏），详见 `plan/plan-minimal-mode.md`
-- PTC 模式：RPC 探针真机全过（预设播种/挂载、run_code 程序化并行调用真实工具、meow-standard 会话无 run_code 形态隔离、杀进程 resume 重挂），详见 `plan/plan-ptc-mode.md`
-- 聊天 UI 验收待主人：极简会话里观察持久 bash 状态保持；PTC 会话里让模型「用一段程序并行做两件事」观察 run_code 行为
-
 **Full Changelog**: https://github.com/hu568/meow-academy/compare/v0.2.6...v0.2.7
