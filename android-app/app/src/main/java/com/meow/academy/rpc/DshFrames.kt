@@ -77,6 +77,14 @@ object DshEventTypes {
 
     /** goal 变更（GoalProjection 投影，last-wins） */
     const val GOAL_CHANGE = "goal/change"
+
+    // ── 子代理生命周期（params 顶层 parentSessionId/childSessionId，无 sessionId，须全局收集） ──
+
+    /** 子代理启动（悬浮栏新增一条运行中） */
+    const val SUBAGENT_STARTED = "subagent.started"
+
+    /** 子代理收尾（悬浮栏折叠 provider/status/stopReason/lastAssistantMessage） */
+    const val SUBAGENT_FINISHED = "subagent.finished"
 }
 
 /** assistant/chunk 的 chunk.type 子类型 */
