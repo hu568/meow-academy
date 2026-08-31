@@ -1,0 +1,86 @@
+From 896ddba76f09c5681af1f47cbc5e30719dd3886e Mon Sep 17 00:00:00 2001
+From: meow <meow@localhost>
+Date: Mon, 31 Aug 2026 08:10:51 +0800
+Subject: [PATCH] =?UTF-8?q?=E2=9C=A8=20feat(meow):=20PTC-mode=20closure=20?=
+ =?UTF-8?q?support=20=E2=80=94=20code-runtime=20family?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+PTC 模式（meow-code 预设，plan-ptc-mode）的 fork 侧支撑：
+
+- deploy/meow-runtime/package.json — 闭包清单 +3 包（全部上游原包，纯 JS）：
+  dsh-agent-tool-presentation（selector：native/code/both → tools.presentAs）/
+  dsh-code-runtime（codeRuntime 服务契约，零依赖）/
+  dsh-code-runtime-worker-thread（执行引擎：worker_threads + stripTypeScriptTypes）。
+- pnpm-lock.yaml — meow-runtime importer 块 +3 条 workspace link。
+
+配套（不入本 patch）：基座 cordis.yml 挂 code-runtime host 服务行
+（对齐官方 CLI bundle patch 的挂载平面）；预设本体
+app/src/main/assets/dsh-presets/meow-code/（meow-standard 全文 + tool-presentation
+mode: both）。真机前置已验（会议笔记 §9.1）：node v26.4.0 stripTypeScriptTypes
+可用、worker_threads 起停/resourceLimits 正常。
+---
+ deploy/meow-runtime/package.json | 5 ++++-
+ pnpm-lock.yaml                   | 9 +++++++++
+ 2 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/deploy/meow-runtime/package.json b/deploy/meow-runtime/package.json
+index 2be6320cb3..43d4c14ca2 100755
+--- a/deploy/meow-runtime/package.json
++++ b/deploy/meow-runtime/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "meow-academy-dsh-runtime",
+-  "description": "喵仓（meow-academy）安卓 App 内置 DSH jsonrpc 运行时的依赖清单：以官方 python/sdk-runtime 闭包为基，剔除 ACP/subagent 驱动/sandbox 原生模块(landlock)/query/lsp/mcp 等；含 SQLite 会话持久化、DeepSeek web 搜索、创造模式自指工具集（tool-cordis + cordis-host-runner，0.2.6）与极简模式持久终端家族（terminal/terminal-bash/tool-bash-persistent/pwsh-local，0.2.7）。",
++  "description": "喵仓（meow-academy）安卓 App 内置 DSH jsonrpc 运行时的依赖清单：以官方 python/sdk-runtime 闭包为基，剔除 ACP/subagent 驱动/sandbox 原生模块(landlock)/query/lsp/mcp 等；含 SQLite 会话持久化、DeepSeek web 搜索、创造模式自指工具集（tool-cordis + cordis-host-runner，0.2.6）与极简模式持久终端家族（terminal/terminal-bash/tool-bash-persistent/pwsh-local，0.2.7）与 PTC 模式 code-runtime 家族（agent-tool-presentation/code-runtime/code-runtime-worker-thread，0.2.7）。",
+   "version": "0.0.1",
+   "private": true,
+   "type": "module",
+@@ -13,6 +13,7 @@
+     "@deepseek-ai/dsh-agent": "workspace:^",
+     "@deepseek-ai/dsh-agent-loop": "workspace:^",
+     "@deepseek-ai/dsh-agent-spine-demo": "workspace:^",
++    "@deepseek-ai/dsh-agent-tool-presentation": "workspace:^",
+     "@deepseek-ai/dsh-app-boot": "workspace:^",
+     "@deepseek-ai/dsh-atomic-write": "workspace:^",
+     "@deepseek-ai/dsh-agent-presets": "workspace:^",
+@@ -25,6 +26,8 @@
+     "@deepseek-ai/dsh-compaction": "workspace:^",
+     "@deepseek-ai/dsh-compaction-basic": "workspace:^",
+     "@deepseek-ai/dsh-compaction-tool-result-pruner": "workspace:^",
++    "@deepseek-ai/dsh-code-runtime": "workspace:^",
++    "@deepseek-ai/dsh-code-runtime-worker-thread": "workspace:^",
+     "@deepseek-ai/dsh-command-compact": "workspace:^",
+     "@deepseek-ai/dsh-command-goal": "workspace:^",
+     "@deepseek-ai/dsh-commands": "workspace:^",
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index e078d49f8c..3b036945b8 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -448,6 +448,9 @@ importers:
+       '@deepseek-ai/dsh-agent-spine-demo':
+         specifier: workspace:^
+         version: link:../../packages/examples/agent-spine-demo
++      '@deepseek-ai/dsh-agent-tool-presentation':
++        specifier: workspace:^
++        version: link:../../packages/core/agent-tool-presentation
+       '@deepseek-ai/dsh-anonymous-user-id':
+         specifier: workspace:^
+         version: link:../../packages/identity/anonymous-user-id
+@@ -469,6 +472,12 @@ importers:
+       '@deepseek-ai/dsh-brand':
+         specifier: workspace:^
+         version: link:../../packages/util/brand
++      '@deepseek-ai/dsh-code-runtime':
++        specifier: workspace:^
++        version: link:../../packages/code-runtime/code-runtime
++      '@deepseek-ai/dsh-code-runtime-worker-thread':
++        specifier: workspace:^
++        version: link:../../packages/code-runtime/code-runtime-worker-thread
+       '@deepseek-ai/dsh-command-compact':
+         specifier: workspace:^
+         version: link:../../packages/compaction/command-compact
+-- 
+2.43.0
+

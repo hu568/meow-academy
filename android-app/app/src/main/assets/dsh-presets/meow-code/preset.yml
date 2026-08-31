@@ -1,0 +1,6 @@
+# meow-code 预设元数据（plan-ptc-mode）。
+# 仅展示文本：id = 目录名，trust = 发现根（dsh-presets/ → system）。
+# name/description 会直接显示在 App 右侧看板「工作设置 → Agent 预设」的卡片上。
+name: PTC
+description: 具备标准模式的全部能力，并通过 Code Mode（run_code）呈现工具：模型可写一段 TypeScript 程序一次性编排多步工具调用（原生工具目录仍并存）。
+order: 4

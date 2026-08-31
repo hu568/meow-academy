@@ -172,6 +172,17 @@
 - id: cordis-host-runner
   name: '@deepseek-ai/dsh-cordis-host-runner'
 
+# PTC 模式底座（0.2.7，plan-ptc-mode）：Code Mode 执行引擎 —— codeRuntime 服务。
+# 官方 CLI 由 bundle patch 挂 host 平面（packages/bundle/headless/cordis.patch.yml:25），
+# 官方 code 预设组合不含此行、只「等待宿主的 codeRuntime」→ 喵仓同样挂基座：
+# 只有会话挂了 tool-presentation 行（meow-code 预设）才消费它，其余会话零影响。
+# 资源预算（worker_threads）：computeMs/maxWallMs/maxOutputBytes 走默认（60s/600s/64MB），
+# maxOldGenerationSizeMb 默认 512 按安卓调低到 128（会议笔记 §8.2；真机 §9.1 已验 128 可用）。
+- id: code-runtime
+  name: '@deepseek-ai/dsh-code-runtime-worker-thread'
+  config:
+    maxOldGenerationSizeMb: 128
+
 # 会话持久化：SQLite backend（node:sqlite，无原生依赖）。规避 jsonl 的 link() 在 Android
 # SELinux 下 EACCES 的问题；session-checkpoints 提供模型请求/工具调用边界的语义 checkpoint。
 - id: sessions

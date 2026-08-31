@@ -36,8 +36,8 @@ android {
         applicationId = "com.meow.academy"
         minSdk = 26
         targetSdk = 34
-        versionCode = 8
-        versionName = "0.2.6"
+        versionCode = 9
+        versionName = "0.2.7"
 
         // Room 导出 schema 到本地（用于后续迁移）
         ksp {

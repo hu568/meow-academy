@@ -199,10 +199,14 @@ async function composeAgent(presetId) {
 > （组合内 restrict 插件裁基座全局行 + 持久 bash 按名遮蔽 spine 全局行），闭包补 terminal
 > 家族 4 包；§10.2「PTY 原语安卓本就可跑」补了一个缺口：process-inspector 平台门不认
 > `platform==='android'`，已修（patch 0005）并真机全链验证通过（含跨调用状态与 env 零泄漏）。
+> 2026-08-31 回填：**PTC 模式随 0.2.7 落地**（`plan/plan-ptc-mode.md`）——形态 `mode: both`
+> （主人拍板）；闭包 +3 纯 JS 包（patch 0006）；codeRuntime 挂基座（§8.4 路径①②合并，
+> 官方分工 = host 平面，preset 只带 tool-presentation 行）；worker 堆 512→128；RPC 探针
+> 全过（run_code 实跑 Promise.all 双工具 / std 会话无 run_code / resume 重挂）。
 
 - [x] 立细化计划文档（→ `plan/plan-standard-mode.md` + `plan/plan-creative-mode.md`，未对齐 plan-phase1 格式）
 - [x] manifest 加包 + pnpm-workspace/lockfile importer → 重打闭包 → 实测体积（标准=0002 patch；创造=0004 patch：tool-cordis + cordis-host-runner；极简=0005 patch：terminal 家族 + process-inspector android 门）
-- [x] ~~四个 preset~~ → `meow-standard`（0.2.6）与 `meow-cordis`（0.2.6 晚，两份 skill 中文化魔改：路径/deny/无沙箱无审批/外观路由 appconfig/工具名对齐 baseline）；`meow-minimal`（0.2.7，persistent-shell 组 + minimal-face restrict 插件，pwsh 行删除）；`meow-code` 仍占位
+- [x] ~~四个 preset~~ → **四预设全部落地**：`meow-standard`（0.2.6）；`meow-cordis`（0.2.6 晚）；`meow-minimal`（0.2.7）；`meow-code`/PTC（0.2.7，mode: both）。App 侧占位卡机制随 meow-code 播种退役（WorkspaceSettingsPanel PLACEHOLDER_PRESETS 删除）
 - [x] meow-jsonrpc `composeAgent` 移植 + presets/list / 错误映射（0.2.6 完成；session/setPreset 演进为 prompt 携带 presetId + session/command）
 - [x] 确认 DshProcessLauncher 的 DSH_HOME 注入（0.2.6 起显式注入，另注入 DSH_FILES_DIR）
 - [x] App 侧模式管理 UI + 会话创建参数 + 错误呈现（0.2.6 完成）

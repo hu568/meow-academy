@@ -95,18 +95,6 @@ fun workspaceShortName(path: String?, filesDirPath: String): String {
     }
 }
 
-/** 本地占位预设卡（plan-standard-mode §5.7②）：真实数据（presets/list）优先，同 id 出现即不渲染占位。
- *  meow-cordis（创造）已随 0.2.6 播种、meow-minimal（极简）已随 0.2.7 播种为真实预设
- *  （assets/dsh-presets/），占位卡删除。 */
-private val PLACEHOLDER_PRESETS = listOf(
-    PresetEntry(
-        id = "meow-code",
-        name = "PTC",
-        description = "程序化转化（PTC）预设：模型生成可执行代码步骤完成任务。" +
-            "预设文件与闭包包未随本版启用。",
-    ),
-)
-
 /** 右侧看板「工作设置」面板入口（ChatScreen 的 DashboardDrawer.workspaceSettingsPanel 槽位接线用） */
 @Composable
 fun WorkspaceSettingsPanel(vm: ChatViewModel) {
@@ -309,7 +297,7 @@ private fun WorkspaceSessionRow(session: SessionEntity, onOpen: () -> Unit) {
 
 // ─────────────────────────── ② Agent 预设栏 ───────────────────────────
 
-/** ② Agent 预设：动态结果 + 本地占位卡合并渲染，卡片说明可折叠，trust=user 长按删除 */
+/** ② Agent 预设：presets/list 动态渲染（占位卡机制已随四预设全部播种退役），卡片说明可折叠，trust=user 长按删除 */
 @Composable
 private fun AgentPresetSection(vm: ChatViewModel, modifier: Modifier = Modifier) {
     val presetCatalog by vm.presetCatalog.collectAsState()
@@ -318,10 +306,7 @@ private fun AgentPresetSection(vm: ChatViewModel, modifier: Modifier = Modifier)
     // 进面板刷新一次 presets/list（DSH 侧无推送事件，触发时机归 UI 层，喵~）
     LaunchedEffect(Unit) { vm.refreshPresets() }
 
-    // 真实数据优先：presets/list 里已有的 id 不再渲染占位卡（未来播种了即自动替换）
-    val realIds = presetCatalog.map { it.id }.toSet()
-    val entries = presetCatalog + PLACEHOLDER_PRESETS.filter { it.id !in realIds }
-    val placeholderIds = PLACEHOLDER_PRESETS.map { it.id }.toSet()
+    val entries = presetCatalog
 
     var expandedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var deletingPreset by remember { mutableStateOf<PresetEntry?>(null) }
@@ -335,14 +320,12 @@ private fun AgentPresetSection(vm: ChatViewModel, modifier: Modifier = Modifier)
             modifier = Modifier.padding(start = 20.dp, top = 2.dp, bottom = 4.dp),
         )
         entries.forEach { entry ->
-            val isPlaceholder = entry.id in placeholderIds && realIds.none { it == entry.id }
-            val disabled = isPlaceholder || entry.broken != null
+            val disabled = entry.broken != null
             val isDefault = entry.id == defaultPreset && !disabled
             PresetCard(
                 entry = entry,
                 isDefault = isDefault,
                 disabled = disabled,
-                isPlaceholder = isPlaceholder,
                 expanded = entry.id in expandedIds,
                 onToggleExpand = {
                     expandedIds = if (entry.id in expandedIds) expandedIds - entry.id else expandedIds + entry.id
@@ -374,7 +357,7 @@ private fun AgentPresetSection(vm: ChatViewModel, modifier: Modifier = Modifier)
  * 单张预设卡片（同原版 DSH「名称 + 描述」展示风格，喵~）：
  * - 卡片头：名称（name 缺省回退 id）+ 右侧当前默认高亮 ✓（可选卡行尾为「设为默认」动作）；
  * - 说明可折叠：默认一行 ellipsis，点卡片展开完整说明；
- * - broken 预设灰显 + 展开后显示原因；占位卡灰显标注「未启用」不可选；
+ * - broken 预设灰显 + 展开后显示原因，标注「不可用」不可选；
  * - trust == "user" 的自定义预设长按删除（确认框）。
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -383,7 +366,6 @@ private fun PresetCard(
     entry: PresetEntry,
     isDefault: Boolean,
     disabled: Boolean,
-    isPlaceholder: Boolean,
     expanded: Boolean,
     onToggleExpand: () -> Unit,
     onSelect: () -> Unit,
@@ -400,8 +382,8 @@ private fun PresetCard(
             .padding(horizontal = 16.dp, vertical = 4.dp)
             .combinedClickable(
                 onClick = onToggleExpand,
-                // 仅 trust=user 的真实自定义预设支持长按删除（占位/内置不可删，喵~）
-                onLongClick = if (!isPlaceholder && !disabled && entry.trust == "user") onRequestDelete else null,
+                // 仅 trust=user 的真实自定义预设支持长按删除（内置不可删，喵~）
+                onLongClick = if (!disabled && entry.trust == "user") onRequestDelete else null,
             ),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = containerColor),
@@ -443,7 +425,7 @@ private fun PresetCard(
                             .padding(horizontal = 6.dp, vertical = 4.dp),
                     )
                     else -> Text(
-                        text = if (isPlaceholder) "未启用" else "不可用",
+                        text = "不可用",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     )
