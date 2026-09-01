@@ -15,7 +15,6 @@ package com.meow.academy.ui.chat
  */
 
 import android.util.TypedValue
-import android.widget.TextView
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
@@ -196,7 +195,12 @@ fun MarkdownText(
     }
 }
 
-/** 普通段落块：Markwon 渲染成 Spanned 后交给 TextView，长按可选中、链接可点开浏览器 */
+/**
+ * 普通段落块：Markwon 渲染成 Spanned 后交给 TextView，长按可选中、链接可点开浏览器。
+ *
+ * 必须用 [MarkdownTextView] 而非裸 TextView：行内代码圆角背景要靠它注入的 Layout
+ * 才能对齐真实排版坐标（详见该类的注释）。
+ */
 @Composable
 private fun ParagraphBlock(
     text: String,
@@ -212,7 +216,7 @@ private fun ParagraphBlock(
     AndroidView(
         modifier = modifier.then(if (fillWidth) Modifier.fillMaxWidth() else Modifier),
         factory = { ctx ->
-            TextView(ctx).apply {
+            MarkdownTextView(ctx).apply {
                 textSize = 15f
                 movementMethod = BrowserLinkMovementMethod(ctx)
                 // 长按可选择/复制文本（先设 movementMethod 再设 isTextSelectable，链接仍可点击）

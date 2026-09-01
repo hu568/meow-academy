@@ -3,7 +3,6 @@ package com.meow.academy.ui.chat
 import android.graphics.Color as AndroidColor
 import android.text.method.LinkMovementMethod
 import android.view.View
-import android.widget.TextView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -238,7 +237,7 @@ private fun TableGrid(
                     ) {
                         AndroidView(
                             factory = { ctx ->
-                                TextView(ctx).apply {
+                                MarkdownTextView(ctx).apply {
                                     textSize = 12f
                                     // 先设 movementMethod 再设 isTextSelectable，链接仍可点击（与 MarkdownText 约定一致）
                                     movementMethod = LinkMovementMethod.getInstance()
