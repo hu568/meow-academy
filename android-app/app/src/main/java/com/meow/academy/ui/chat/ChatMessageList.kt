@@ -26,12 +26,17 @@ import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.unit.dp
 import com.meow.academy.data.chat.MessageEntity
 import com.meow.academy.data.chat.MessageStatus
@@ -107,11 +112,14 @@ fun ChatMessageList(
         pq.sessionId == null || pq.sessionId == dshSessionIdOf(currentId)
     }
 
+    // 记录本 Column 在窗口中的左上角，用于把指针手势的局部坐标换算成窗口坐标
+    var columnTopLeft by remember { mutableStateOf(Offset.Zero) }
     Column(
         modifier = modifier
             // 和左抽屉一致：在聊天内容区任意位置向左滑即可打开功能看板。
             // 注意这里必须用“只观察不消费”的手势，否则会抢走左侧 ModalNavigationDrawer 的滑动手势。
-            .swipeToOpenDashboard(onOpenDashboard),
+            .swipeToOpenDashboard(onOpenDashboard) { columnTopLeft }
+            .onGloballyPositioned { columnTopLeft = it.boundsInWindow().topLeft },
     ) {
         Box(modifier = Modifier.weight(1f)) {
             if (messages.isEmpty() && streaming == null) {
@@ -191,8 +199,15 @@ fun ChatMessageList(
  * 左滑打开右侧功能看板的手势扩展：挂在聊天内容区（顶栏与输入栏之间）。
  * 只观察不消费（requireUnconsumed = false），不抢左侧 ModalNavigationDrawer 的滑动手势；
  * pointerInput(Unit) key 固定，不随状态重启手势。
+ *
+ * 兜底：当手势落在某个 [MarkdownTable] 的可见范围内且内层 `horizontalScroll` 没消费
+ * （长 item 下半段命中区域被 LazyColumn 截断时发生），就直接驱动该表格横向滚动并消费手势，
+ * 不让它落到抽屉上。
  */
-private fun Modifier.swipeToOpenDashboard(onOpenDashboard: () -> Unit): Modifier =
+private fun Modifier.swipeToOpenDashboard(
+    onOpenDashboard: () -> Unit,
+    columnTopLeft: () -> Offset,
+): Modifier =
     pointerInput(Unit) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
@@ -202,7 +217,21 @@ private fun Modifier.swipeToOpenDashboard(onOpenDashboard: () -> Unit): Modifier
                 val event = awaitPointerEvent()
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 if (!change.pressed) break
-                totalX += change.positionChange().x
+
+                val delta = change.positionChange().x
+                // 只处理「还没有被任何内层手势消费」的横向拖拽
+                if (delta != 0f && !change.isConsumed) {
+                    val windowPos = down.position + columnTopLeft()
+                    val tableScroll = TableScrollRegistry.findAt(windowPos.x, windowPos.y)
+                    if (tableScroll != null) {
+                        // 左滑（delta<0）→ 内容向右滚动：传正 delta 给 dispatchRawDelta
+                        tableScroll.dispatchRawDelta(-delta)
+                        change.consume()
+                        continue
+                    }
+                }
+
+                totalX += delta
                 if (!opened && totalX <= -viewConfiguration.touchSlop) {
                     opened = true
                     onOpenDashboard()

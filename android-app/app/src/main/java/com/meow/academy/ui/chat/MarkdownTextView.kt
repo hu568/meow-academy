@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Canvas
 import android.text.Layout
 import android.text.Spanned
+import android.text.style.ClickableSpan
+import android.view.MotionEvent
 import android.widget.TextView
 
 /**
@@ -20,7 +22,7 @@ import android.widget.TextView
  * `Layout.drawBackground`，不会有一帧的错位；文本变化（[setText]）时顺带解绑旧 span，
  * 避免它们继续持有已废弃的 Layout。
  */
-class MarkdownTextView(context: Context) : TextView(context) {
+open class MarkdownTextView(context: Context) : TextView(context) {
 
     private var cachedText: CharSequence? = null
     private var cachedSpans: Array<out RoundedCodeSpan>? = null
@@ -52,5 +54,37 @@ class MarkdownTextView(context: Context) : TextView(context) {
         if (spans.isNotEmpty()) {
             spans.forEach { it.bindLayout(currentLayout) }
         }
+    }
+}
+
+/**
+ * 表格单元格专用 TextView：在保持 Markwon 行内 Markdown（含行内代码圆角背景）的同时，
+ * 不把「未命中链接」的按下手势吞掉，让 Compose 外层 [androidx.compose.foundation.horizontalScroll]
+ * 能正常接管横向滑动（喵~）。
+ *
+ * 背景：TextView + [android.text.method.LinkMovementMethod] 在 ACTION_DOWN 时可能把手势
+ * 标记为 consumed，Compose interop 因而让外层横向滚动收不到拖拽，在聊天页就会穿透成
+ * 抽屉手势（文件管理页无抽屉所以正常）。
+ * 这里先判断按点是否命中 [ClickableSpan]：命中才交给父类（链接可点），
+ * 未命中直接返回 false，把整条手势放行给 Compose 水平滚动处理。
+ */
+class MarkdownCellTextView(context: Context) : MarkdownTextView(context) {
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        // 非链接按点不消费：外层表格横向滚动可以接收到水平拖拽
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && !isClickableLinkAt(event)) {
+            return false
+        }
+        return super.onTouchEvent(event)
+    }
+
+    private fun isClickableLinkAt(event: MotionEvent): Boolean {
+        val buffer = text as? Spanned ?: return false
+        val layout = layout ?: return false
+        val x = event.x - totalPaddingLeft + scrollX
+        val y = event.y - totalPaddingTop + scrollY
+        val line = layout.getLineForVertical(y.toInt())
+        val off = layout.getOffsetForHorizontal(line, x)
+        return buffer.getSpans(off, off, ClickableSpan::class.java).isNotEmpty()
     }
 }

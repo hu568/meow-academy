@@ -3,6 +3,7 @@ package com.meow.academy.ui.chat
 import android.graphics.Color as AndroidColor
 import android.text.method.LinkMovementMethod
 import android.view.View
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -18,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,6 +30,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -78,6 +82,12 @@ fun MarkdownTable(
     val columnCount = table.header.size.coerceAtLeast(1)
     val copyText = remember(table) { rebuildMarkdownSource(table) }
     val gridWidthPx = with(LocalDensity.current) { tableConfig.borderWidthDp.dp.toPx() }
+    // 兜底手势注册：LazyColumn 长 item 下半部分的命中区域会截断，交给外层观察器直接驱动滚动
+    val scrollState = rememberScrollState()
+    DisposableEffect(scrollState) {
+        TableScrollRegistry.register(scrollState)
+        onDispose { TableScrollRegistry.unregister(scrollState) }
+    }
 
     Column(
         modifier = modifier
@@ -111,7 +121,9 @@ fun MarkdownTable(
         ) {
             val viewportPx = with(LocalDensity.current) { maxWidth.toPx() }.toInt()
             Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                modifier = Modifier
+                    .horizontalScroll(scrollState)
+                    .onGloballyPositioned { TableScrollRegistry.updateBounds(scrollState, it.boundsInWindow()) },
             ) {
                 TableGrid(
                     table = table,
@@ -237,11 +249,16 @@ private fun TableGrid(
                     ) {
                         AndroidView(
                             factory = { ctx ->
-                                MarkdownTextView(ctx).apply {
+                                MarkdownCellTextView(ctx).apply {
                                     textSize = 12f
-                                    // 先设 movementMethod 再设 isTextSelectable，链接仍可点击（与 MarkdownText 约定一致）
+                                    // ⚠️ 不要 setTextIsSelectable(true)：selectable TextView 会消费所有
+                                    // ACTION_DOWN，Compose interop 把它标记为 consumed，导致外层
+                                    // horizontalScroll 收不到水平拖拽 → 数据行（表格下半部分）左右滑动
+                                    // 穿透到上层抽屉手势（ModalNavigationDrawer / swipeToOpenDashboard）。
+                                    // 表头是 Compose Text 不消费所以上半部分能滚；文件管理器无抽屉手势所以正常。
+                                    // MarkdownCellTextView 会在「没点到链接」的 ACTION_DOWN 直接返回 false，
+                                    // 让水平拖拽交给表格横向滚动；点到链接时仍交给 LinkMovementMethod 正常打开。
                                     movementMethod = LinkMovementMethod.getInstance()
-                                    setTextIsSelectable(true)
                                 }
                             },
                             update = { view ->
