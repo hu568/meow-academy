@@ -7,6 +7,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -81,7 +82,10 @@ fun CodeBlockCompose(
             .clip(cornerShape)
             .background(backgroundColor),
     ) {
-        // 顶部工具栏：左语言标签，右复制按钮
+        // 顶部工具栏：左语言标签，右复制按钮。
+        // SpaceBetween 在「只有一个子项」时会把该子项放在最左侧（见 Compose 布局语义）；
+        // 无语言标签的纯文本块（language == null）正是这种情况，复制按钮会被挤到左边，
+        // 与其他块（右对齐）不统一。故加一个 weight 占位 Spacer，保证复制按钮始终靠右（喵~）。
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -101,6 +105,9 @@ fun CodeBlockCompose(
                         )
                         .padding(horizontal = 8.dp, vertical = 2.dp),
                 )
+            } else {
+                // 无语言标签：占位把复制按钮推到右侧，与带语言标签的代码块对齐
+                Spacer(Modifier.weight(1f))
             }
             CopyButton(text = code)
         }
