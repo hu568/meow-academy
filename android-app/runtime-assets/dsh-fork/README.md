@@ -161,6 +161,37 @@ terminal 家族四个上游原包（纯 JS，零新外部依赖）+ subprocess-l
   minimal-face restrict 插件；shellPath=linker64 + lib/bash.bin 的安卓 spawn 配置、
   减法机制与真机验收记录见 plan-minimal-mode）。
 
+## 0006 内容（feat-meow-PTC-mode-closure-support-code-runtime-fami，2026-08-31）
+
+PTC 模式（`meow-code` 预设，`plan/plan-ptc-mode.md`）的 fork 侧支撑：闭包补 code-runtime
+家族三个上游原包（`dsh-agent-tool-presentation` / `dsh-code-runtime` /
+`dsh-code-runtime-worker-thread`，全纯 JS，上游原包零源码改动）。
+
+- **`deploy/meow-runtime/package.json`** — + 上述三包 workspace link。
+- **`pnpm-lock.yaml`** — meow-runtime importer 块 +3 条。
+- worker 堆 `maxOldGenerationSizeMb` 512→128 不在此处改，走 `cordis.yml` 的 config（安卓内存预算）。
+
+## 0007 内容（fix-meow-deny-rules-match-realpath-aliased-targets，2026-09-02）
+
+**安全修复**：`deny` 名单在安卓上自 0.2.6 起一直空转（真机实测：`dsh-presets`、
+`appconfig/dsh-credentials.yaml`、`memory/JOURNAL.jsonl` 全部可被通用文件工具读取）。
+
+根因：fs-local 把规则串按 `resolve()` 归一化（不解析符号链接），却拿它去比
+realpath 派生的 `targetKey`。安卓部署侧写的是 `/data/user/0/<pkg>/files/...`，
+而 realpath 解析成 `/data/data/<pkg>/files/...`，两套前缀永不相等 → 一条都命中不了。
+
+- **`packages/fs/fs-local/src/index.ts`**
+  - 新增 `denyRuleKeys()`：每条规则同时保留**词法形态 + realpath 形态**；规则路径尚不存在时
+    沿最近存在祖先求 realpath 再补回缺失后缀（与 `resolveLocalTarget` 同构），
+    使「凭证文件还没生成」这类规则在创建后照样拦得住。
+  - `assertNotDenied()`：`targetKey` 与 `displayPath` **两面都比**，调用方经别名路径访问同样拒。
+- **`packages/fs/fs-local/tests/filesystem.spec.ts`** — 新增 `describe('deny rules')` 4 例
+  （此前 fork 对 deny 零测试覆盖，才让这个漏洞带了三个版本）：别名形态规则、realpath 形态规则、
+  尚未创建的路径、整目录拒绝且不误伤兄弟路径。
+
+> 喵：这条与 Android 无关的通用缺陷，只在「部署根可通过多个挂载别名到达」时暴露——
+> 所以 PC 冒烟测不出来，必须真机验。写 deny 规则时优先给 realpath 形态最稳。
+
 ## 从零复现 runtime.bin
 
 ```bash
@@ -173,7 +204,9 @@ git apply ../android-app/runtime-assets/dsh-fork/0002-feat-meow-Agent-presets-st
 git apply ../android-app/runtime-assets/dsh-fork/0003-fix-deploy-img-sharp-wasm32-sharp-0.35.4-pnpm-instal.patch
 git apply ../android-app/runtime-assets/dsh-fork/0004-feat-meow-creative-mode-closure-support-tool-cordis-host-runner-headless-prompt.patch
 git apply ../android-app/runtime-assets/dsh-fork/0005-feat-meow-minimal-mode-closure-support-terminal-fami.patch
-pnpm install          # lockfile 已随 0002/0003/0004 入库，install 为幂等校验（有出入时以重新生成结果为准）
+git apply ../android-app/runtime-assets/dsh-fork/0006-feat-meow-PTC-mode-closure-support-code-runtime-fami.patch
+git apply ../android-app/runtime-assets/dsh-fork/0007-fix-meow-deny-rules-match-realpath-aliased-targets.patch
+pnpm install          # lockfile 已随 0002/0003/0004/0006 入库，install 为幂等校验（有出入时以重新生成结果为准）
 
 # 1. PC 构建并打 DSH 闭包（产物 .tmp/dsh-closure.tar.gz）
 npm run build:lib     # workspace 包 files 字段只发布 lib/，必须先构建

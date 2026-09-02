@@ -1,0 +1,196 @@
+From daaab410cd436892f8a313b352730c7b2e9ddcf5 Mon Sep 17 00:00:00 2001
+From: meow <meow@local>
+Date: Thu, 3 Sep 2026 00:02:03 +0800
+Subject: [PATCH] =?UTF-8?q?=F0=9F=90=9B=20fix(meow):=20deny=20=E8=A7=84?=
+ =?UTF-8?q?=E5=88=99=E8=A6=81=E6=8C=89=20realpath=20=E5=BD=A2=E6=80=81?=
+ =?UTF-8?q?=E6=AF=94=E5=AF=B9=EF=BC=8C=E5=AE=89=E5=8D=93=E4=B8=8A=E6=AD=A4?=
+ =?UTF-8?q?=E5=89=8D=E6=95=B4=E4=BB=BD=E5=90=8D=E5=8D=95=E7=A9=BA=E8=BD=AC?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+fs-local 的 deny 只把规则串与 realpath 派生的 targetKey 比对，而规则串按
+`resolve()` 归一化（不解析符号链接）。安卓上部署侧写的是
+`/data/user/0/<pkg>/files/...`，realpath 却解析成 `/data/data/<pkg>/files/...`，
+两套前缀永不相等 —— 真机实测：读 dsh-presets / memory/JOURNAL.jsonl 全部放行，
+自 0.2.6 起整份 deny 名单在安卓上一直无效。
+
+- denyRuleKeys()：每条规则同时保留词法形态与 realpath 形态（规则路径尚不存在时，
+  沿最近存在祖先求 realpath 再补回缺失后缀，与 resolveLocalTarget 同构，
+  保证「凭证文件尚未生成」这类规则也命中）
+- assertNotDenied()：targetKey 与 displayPath 两面都比，调用方经别名路径访问同样拒
+- 补 deny 的回归测试（此前 fork 对 deny 零测试覆盖）：别名形态规则、realpath 形态规则、
+  尚未创建的路径、整目录拒绝且不误伤兄弟路径
+---
+ packages/fs/fs-local/src/index.ts             | 51 +++++++++++--
+ packages/fs/fs-local/tests/filesystem.spec.ts | 72 +++++++++++++++++++
+ 2 files changed, 119 insertions(+), 4 deletions(-)
+
+diff --git a/packages/fs/fs-local/src/index.ts b/packages/fs/fs-local/src/index.ts
+index 340bd83d30..55f0baa290 100644
+--- a/packages/fs/fs-local/src/index.ts
++++ b/packages/fs/fs-local/src/index.ts
+@@ -6,8 +6,9 @@
+ 
+ import { Context } from '@deepseek-ai/cordis'
+ import { constants as bufferConstants } from 'node:buffer'
++import { realpathSync } from 'node:fs'
+ import { realpath } from 'node:fs/promises'
+-import { isAbsolute, relative, resolve, sep } from 'node:path'
++import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+ import { pathToFileURL } from 'node:url'
+ import z from '@deepseek-ai/schemastery'
+ import { FileSystem, FsError, FsVersion } from '@deepseek-ai/dsh-fs'
+@@ -68,6 +69,41 @@ const MAX_DIFF_BASIS_BYTES = Math.min(
+   bufferConstants.MAX_STRING_LENGTH,
+ )
+ 
++/**
++ * Compare faces for one `deny` rule: its lexical absolute path plus its symlink-resolved
++ * identity. Target keys are realpath-derived, so a rule that keeps only the authored form
++ * never matches when the deployment root is reached through a mount alias (Android authors
++ * `/data/user/0/<pkg>/files/...` while resolution yields `/data/data/<pkg>/files/...`).
++ * A missing rule path resolves through its nearest existing ancestor, mirroring
++ * `resolveLocalTarget` so rules for files created later still match.
++ * @param path - the configured rule path, absolute or relative to the process cwd.
++ * @returns every form the rule can appear in, deduplicated.
++ */
++function denyRuleKeys(path: string): string[] {
++  const absolute = resolve(path)
++  const real = realpathNearest(absolute)
++  return real === undefined || real === absolute ? [absolute] : [absolute, real]
++}
++
++/**
++ * Realpath of `path`, falling back to its nearest existing ancestor with the missing suffix
++ * re-appended. `undefined` when no ancestor resolves.
++ */
++function realpathNearest(path: string): string | undefined {
++  const missing: string[] = []
++  let current = path
++  while (true) {
++    try {
++      return join(realpathSync(current), ...missing)
++    } catch {
++      const parent = dirname(current)
++      if (parent === current) return undefined
++      missing.unshift(basename(current))
++      current = parent
++    }
++  }
++}
++
+ /**
+  * The host-filesystem backend. Reads resolve relative paths from {@link Config.cwd}
+  * (a resolution default, NOT a containment boundary — see the filesystem
+@@ -102,7 +138,7 @@ export class LocalFileSystem extends FileSystem {
+       throw new Error(`fs-local: diffBasisMaxBytes must be a positive safe integer no greater than ${MAX_DIFF_BASIS_BYTES}`)
+     }
+     this.config = resolved
+-    this.denyRules = resolved.deny.map(rule => resolve(rule.path))
++    this.denyRules = resolved.deny.flatMap(rule => denyRuleKeys(rule.path))
+   }
+ 
+   /** A target is denied when it exactly matches a rule or lives under a rule's subtree. */
+@@ -114,9 +150,16 @@ export class LocalFileSystem extends FileSystem {
+     return new FsError(`cannot access "${displayPath}": denied by fs-local deny rules`, 'FS_PERMISSION_DENIED')
+   }
+ 
+-  /** Throw when a resolved target key matches a deny rule. */
++  /**
++   * Throw when either face of a resolved target matches a deny rule. The comparison covers
++   * both the caller-facing `displayPath` and the realpath-derived `targetKey` because a rule
++   * authored under one mount alias can be reached through another (Android reports the same
++   * file as `/data/user/0/...` to callers and `/data/data/...` after resolution).
++   */
+   private assertNotDenied(target: LocalTarget): void {
+-    if (this.isDenied(target.targetKey)) throw this.denyError(target.displayPath)
++    if (this.isDenied(target.targetKey) || this.isDenied(target.displayPath)) {
++      throw this.denyError(target.displayPath)
++    }
+   }
+ 
+   /** Resolve best-effort realpath so a symlink alias to a denied file is also refused. */
+diff --git a/packages/fs/fs-local/tests/filesystem.spec.ts b/packages/fs/fs-local/tests/filesystem.spec.ts
+index 1977f438b9..e7a378fa69 100644
+--- a/packages/fs/fs-local/tests/filesystem.spec.ts
++++ b/packages/fs/fs-local/tests/filesystem.spec.ts
+@@ -779,3 +779,75 @@ describe('HMR / disposal', () => {
+     expect(local.fs).toBeUndefined()
+   })
+ })
++
++describe('deny rules', () => {
++  /** Boot an isolated backend whose config carries the given deny list. */
++  async function withDeny(paths: string[], cwd: string) {
++    const local = new Context()
++    const handle = await local.plugin(LocalFileSystem, { cwd, deny: paths.map(path => ({ path })) })
++    return { fs: local.fs as LocalFileSystem, dispose: () => handle.dispose() }
++  }
++
++  /** Create `<base>/private/secret.txt` plus `<base>/alias` symlinked to that directory. */
++  async function aliasedSecret() {
++    const base = await realpath(dir)
++    const realDirectory = join(base, 'private')
++    const alias = join(base, 'alias')
++    await mkdir(realDirectory)
++    await writeFile(join(realDirectory, 'secret.txt'), 'top-secret')
++    await writeFile(join(base, 'open.txt'), 'public')
++    await symlink(realDirectory, alias, process.platform === 'win32' ? 'junction' : 'dir')
++    return { base, realDirectory, alias }
++  }
++
++  it('denies a rule authored under a mount alias, matched through either spelling', async () => {
++    const { base, realDirectory, alias } = await aliasedSecret()
++    const { fs: guarded, dispose } = await withDeny([join(alias, 'secret.txt')], base)
++    try {
++      // Target identity is realpath-derived, so only an alias-aware rule can match it.
++      await expect(guarded.resolve(join(realDirectory, 'secret.txt')))
++        .rejects.toMatchObject({ code: 'FS_PERMISSION_DENIED' })
++      await expect(guarded.resolve(join(alias, 'secret.txt')))
++        .rejects.toMatchObject({ code: 'FS_PERMISSION_DENIED' })
++    } finally {
++      await dispose()
++    }
++  })
++
++  it('denies a rule authored in resolved form when the caller uses the alias', async () => {
++    const { base, realDirectory, alias } = await aliasedSecret()
++    const { fs: guarded, dispose } = await withDeny([join(realDirectory, 'secret.txt')], base)
++    try {
++      await expect(guarded.resolve(join(alias, 'secret.txt')))
++        .rejects.toMatchObject({ code: 'FS_PERMISSION_DENIED' })
++    } finally {
++      await dispose()
++    }
++  })
++
++  it('denies a not-yet-created path whose alias ancestor resolves elsewhere', async () => {
++    const { base, realDirectory, alias } = await aliasedSecret()
++    const { fs: guarded, dispose } = await withDeny([join(alias, 'later.txt')], base)
++    try {
++      await expect(guarded.resolve(join(realDirectory, 'later.txt')))
++        .rejects.toMatchObject({ code: 'FS_PERMISSION_DENIED' })
++      await expect(guarded.resolve(join(alias, 'later.txt')))
++        .rejects.toMatchObject({ code: 'FS_PERMISSION_DENIED' })
++    } finally {
++      await dispose()
++    }
++  })
++
++  it('denies a whole subtree and leaves siblings readable', async () => {
++    const { base, realDirectory, alias } = await aliasedSecret()
++    const { fs: guarded, dispose } = await withDeny([alias], base)
++    try {
++      await expect(guarded.resolve(join(realDirectory, 'secret.txt')))
++        .rejects.toMatchObject({ code: 'FS_PERMISSION_DENIED' })
++      const open = await guarded.resolve(join(base, 'open.txt'))
++      expect(await guarded.readText(open)).toBe('public')
++    } finally {
++      await dispose()
++    }
++  })
++})
+-- 
+2.43.0
+
