@@ -85,6 +85,7 @@ private fun ChatDetailView(
     val defaultPreset by vm.defaultPreset.collectAsState()
     val defaultWorkspacePath by vm.defaultWorkspacePath.collectAsState()
     val presetCatalog by vm.presetCatalog.collectAsState()
+    val personaCatalog by vm.personaCatalog.collectAsState()
     val sessionFilter by vm.sessionFilter.collectAsState()
     var input by remember { mutableStateOf("") }
     var attachments by remember { mutableStateOf<List<PendingAttachment>>(emptyList()) }
@@ -152,6 +153,12 @@ private fun ChatDetailView(
     BackHandler(enabled = dashboardOpen) { dashboardOpen = false }
 
     val currentTitle = sessions.firstOrNull { it.id == currentId }?.title ?: "聊天"
+    // 当前会话角色名（plan-memory-execution §3.4）：角色开关 OFF / 未绑定 → 空串（顶栏不追加该段）
+    val personaName = if (currentSession?.personaEnabled == true) {
+        personaDisplayName(currentSession?.personaId, personaCatalog)
+    } else {
+        ""
+    }
 
     // 抽屉打开时给「底图 + 聊天内容」一起加毛玻璃模糊（API < 31 自动退化不模糊）。
     // 用 targetValue 而非 isOpen（isOpen 要等动画结束才变 true，模糊会慢半拍）——模糊与滑入/滑出并行（喵~）
@@ -175,6 +182,7 @@ private fun ChatDetailView(
                     sessionFilter = sessionFilter,
                     defaultWorkspacePath = defaultWorkspacePath,
                     presetCatalog = presetCatalog,
+                    personaCatalog = personaCatalog,
                     onFilterChange = vm::setSessionFilter,
                     onOpen = { id -> vm.openSession(id); scope.launch { drawerState.close() } },
                     onNew = { vm.newSession(); scope.launch { drawerState.close() } },
@@ -204,6 +212,7 @@ private fun ChatDetailView(
                             currentPresetId = currentSession?.presetId,
                             defaultPreset = defaultPreset,
                             presetCatalog = presetCatalog,
+                            personaName = personaName,
                             filesDirPath = context.filesDir.absolutePath,
                             onRename = vm::renameSession,
                             onOpenDrawer = { scope.launch { drawerState.open() } },

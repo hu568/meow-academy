@@ -84,27 +84,21 @@
 # 说明：spine 内部无条件挂 jobs 注册表（toolJobs:false 只裁模型面 job 工具）；
 # skills.enabled:false 裁掉 spine 内置的 skill 注册表/工具（改由下方 skill 行 + 预设组合提供，
 # 以便 skill 工具只随预设会话出现）；goals 不经 spine 开（同样改基座行 + 预设工具行）。
-# persona = 灵魂 + 身体（plan-soul.md，0.2.7）：{{soul}} 变量由 meow-jsonrpc 每次组装
-# 提示词时从 .agents/memory/SOUL.md 实时读入（人物设定唯一定义处，与 Agent 预设分离，
-# 预设组合不再带 persona 行）；文件缺失/为空时 persona 剩环境说明 = 纯净兜底。
-# 环境说明四段（工作区/外观路由/记忆/安全边界）是喵仓部署层共享文案，任何预设的会话都要。
+# 记忆系统改造（plan-memory-execution §1.10，2026-09-02）：persona 不再引用 {{soul}}——
+# 角色层（<soul>/<user>）与记忆层（<facts>/存储契约）改由 meow-jsonrpc 注册的独立
+# `meow:memory` section（order 50）按会话开关注入，并为首条消息固化快照；基座只留
+# 环境说明三段（工作区/外观路由/安全边界），任何预设的会话都要。
 - id: agent-spine
   name: '@deepseek-ai/dsh-agent-spine-demo'
   config:
     includeHarnessIdentity: false
     includeRuntimeContext: false
     persona: |
-      {{soul}}
-
       会话工作区：每个会话绑定一个工作目录（首条消息定死，是 App 私有数据目录下 files 的某个工作区文件夹）。读写文件请优先用相对路径（例如 notes/test.txt），也可以用对话中给出的会话内绝对路径；不要读写 /tmp、/sdcard 等系统目录。bash 工具可用于执行命令。
 
       外观与渲染类诉求（Markdown 样式、代码块/公式/Mermaid 外观、主题颜色、聊天背景等）：请修改 appconfig/ 目录下对应的 *.jsonc 配置文件（例如 markdown-config.jsonc），改完即时生效；不要把 UI 诉求写进 cordis.yml 或代码里。
 
-      记忆：记忆功能由后续版本提供；当前若用户希望你「记住」某件事，可以把要点写入工作区下的 workspace/memory/ 目录备用。
-
-      你的人格设定（灵魂）存放在 {{soul_path}}：用户要求调整你的性格、语气或人设时，可以直接编辑该文件，改动从下一条消息起生效；该文件缺失或为空时，你就是不带任何角色设定的纯净助手。
-
-      安全边界：禁止读取 appconfig/dsh-credentials.yaml 与 datastore/ 目录下的文件（包含密钥与内部数据）；config-defaults/ 是只读默认模板目录，可读取、可复制到 appconfig/ 修改，但不可直接修改；dsh-presets/ 目录是系统预设（只读纪律，不可修改）；dsh-settings.json 与 .dsh-sessions/chat.db 可读，但聊天记录含隐私，谨慎引用。
+      安全边界：禁止读取 appconfig/dsh-credentials.yaml 与 datastore/ 目录下的文件（包含密钥与内部数据）；config-defaults/ 是只读默认模板目录，可读取、可复制到 appconfig/ 修改，但不可直接修改；dsh-presets/ 目录是系统预设（只读纪律，不可修改）；.agents/memory/JOURNAL.jsonl 只能经 memory 工具读写（通用文件工具已被拒）；.agents/memory/snapshots/ 是内部快照缓存，不要读写；dsh-settings.json 与 .dsh-sessions/chat.db 可读，但聊天记录含隐私，谨慎引用。
     workspaceContext: false
     skills:
       enabled: false
@@ -232,6 +226,10 @@
       # 系统预设目录只读（plan-standard-mode §4.2④）：预设由 APK assets 播种，AI 改坏会
       # 毒化所有新会话；改预设走 roster.copy() 到用户根（host 平面 RPC，不受 deny 影响）
       - path: !!js (process.env.DSH_FILES_DIR ?? process.cwd()) + '/dsh-presets'
+      # 记忆日志（plan-memory-execution §4.3）：JOURNAL.jsonl 是 append-only 结构化日志，
+      # 只允许 memory 工具 append/search。memory 工具用 node:fs 直连读写、不经本服务，
+      # 故这条 deny 只挡通用文件工具（read/write/edit/str_replace_editor）——双保险的硬约束半边。
+      - path: !!js (process.env.DSH_FILES_DIR ?? process.cwd()) + '/.agents/memory/JOURNAL.jsonl'
 
 - id: fs-observation-policy
   name: '@deepseek-ai/dsh-fs-observation-policy'

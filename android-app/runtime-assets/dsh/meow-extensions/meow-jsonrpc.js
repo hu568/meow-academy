@@ -18,9 +18,15 @@
  *   - presets/list           {}                     → Agent 预设名单（自动扫描接口，§三.1）
  *   - presets/read           {id}                   → 读预设组合全文（§三.2）
  *   - presets/delete         {id}                   → 删用户预设（trust=user 才可删，§三.3）
- *   - prompt 变量 soul/soul_path                     → 灵魂注入：每次组装提示词时实时读
- *       files/.agents/memory/SOUL.md（mtime 缓存），基座 persona 经 {{soul}}/{{soul_path}}
- *       引用；人物设定与 Agent 预设分离（plan-soul.md）
+ *   - personas/list          {}                     → 角色库名单（自动扫描 .agents/personas/，plan-memory-execution §1.7）
+ *   - personas/reorder       {order:[id...]}        → 角色拖拽排序持久化（§1.8）
+ *   - prompt 变量 soul/soul_path/user/user_path      → 向后兼容透传，取值一律来自会话快照
+ *       （基座与官方预设不再引用，人格注入归 meow:memory section）
+ *   - memory 工具（update/append/search）             → 按会话 memoryEnabled 注册到 agent 作用域
+ *       （§1.9/§4.1），读写 .agents/memory/FACT.md 与 JOURNAL.jsonl
+ *   - meow:memory section（order 50）                → 角色层 <soul>/<user> + 记忆层 <facts>/契约，
+ *       按会话 personaEnabled/memoryEnabled 决定注入；内容首条消息固化快照
+ *       （.agents/memory/snapshots/<sessionId>.json），保证 system prompt 前缀稳定可命中 KV 缓存
  *
  * 错误通道：预设/命令类错误以 MeowRpcError 抛出，经 MeowJsonRpcTransport 序列化为
  * 带 code（-32001..-32005）与 data 的 JSON-RPC error（官方 transport 只透传 message）。
@@ -31,11 +37,12 @@
 
 import { createServer } from 'node:net'
 import { randomUUID } from 'node:crypto'
-import { readFileSync, statSync } from 'node:fs'
+import { readFileSync, writeFileSync, renameSync, mkdirSync, readdirSync, openSync, writeSync, closeSync } from 'node:fs'
 import { JsonRpcLineTransport } from '@deepseek-ai/dsh-sdk-protocol'
 import { HarnessSdkJsonRpcServer } from '@deepseek-ai/dsh-sdk-jsonrpc-server'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
+import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { isTokenDelta } from '@deepseek-ai/dsh-llm/message'
 import { admitEncodedImages } from '@deepseek-ai/dsh-attachment'
@@ -45,7 +52,7 @@ import z from '@deepseek-ai/schemastery'
 
 export const name = 'meow-jsonrpc'
 
-/** 需要 agents（cancel/官方 server 建会话）、shell（终端命令）与 systemPrompt（灵魂变量注册，apply 等它就绪才跑）三个服务 */
+/** 需要 agents（cancel/官方 server 建会话）、shell（终端命令）与 systemPrompt（记忆 section 与兼容变量注册，apply 等它就绪才跑）三个服务 */
 export const inject = ['agents', 'shell', 'systemPrompt']
 
 /** 插件配置：全部可选，缺省值即喵仓部署形态 */
@@ -59,7 +66,248 @@ export const Config = z.object({
 /** 终端输出流式转发的轮询间隔上限检查由调用处兜底；这里只做安全下限 */
 const MIN_STREAM_INTERVAL_MS = 20
 
+// ════════════════════════════════════════════════════════════════════════
+// 记忆系统（plan-memory-execution，2026-09-02）
+//
+// 全局共享的常驻状态（跨 socket 连接复用，进程级生命周期；agent/disposed 清理）：
+//   - memoryConfigs   sessionId → {personaId?, personaEnabled, memoryEnabled}（首条消息定死）
+//   - memorySnapshots sessionId → 快照对象（soul/user/facts，首条消息固化，见 ensureSnapshot）
+// 配置与快照内容分离：配置由 App 每次请求携带 + 首条消息写 Map；快照内容落
+// .agents/memory/snapshots/<sessionId>.json（冷 resume 从文件恢复）。
+// pendingMemoryConfigs 仍挂在 server 实例上（per-connection，仿 pendingHints）。
+// ════════════════════════════════════════════════════════════════════════
+
+/** 默认角色 id（personas/ 下含 persona.yml 的子目录；迁移存量 .agents/memory/SOUL.md 落此处） */
+const DEFAULT_PERSONA_ID = 'default'
+
+/** .agents 根（DSH_FILES_DIR 注入的是 filesDir，.agents 在其下） */
+function agentsRoot() {
+  return (process.env.DSH_FILES_DIR ?? process.cwd()) + '/.agents'
+}
+
+/** 记忆系统常驻配置 Map：sessionId → {personaId?, personaEnabled, memoryEnabled} */
+const memoryConfigs = new Map()
+/** 记忆系统快照缓存 Map：sessionId → 快照对象（与快照文件同构） */
+const memorySnapshots = new Map()
+
+/** 判断文本是否有实质内容（空 / 纯 HTML 注释 / 纯 markdown 注释行 → false） */
+function hasSubstantiveContent(text) {
+  const stripped = String(text ?? '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('#'))
+    .join(' ')
+  return stripped.trim().length > 0
+}
+
 /**
+ * 从 persona.yml 提取 name/description（极简 YAML 解析，足够本格式）：
+ * 逐行跳过注释与空行，取 `key: value` 的 value（去引号）。坏 YAML 由调用方 try/catch 兜底。
+ * @returns {{name: string, description: string}}
+ */
+function parsePersonaYaml(raw) {
+  const result = { name: '', description: '' }
+  for (const line of String(raw ?? '').split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed.length === 0 || trimmed.startsWith('#')) continue
+    const match = /^([A-Za-z_]+)\s*:\s*(.*)$/.exec(trimmed)
+    if (match === null) continue
+    const key = match[1]
+    const value = match[2].trim().replace(/^["']|["']$/g, '')
+    if (key === 'name' && result.name === '') result.name = value
+    else if (key === 'description' && result.description === '') result.description = value
+  }
+  return result
+}
+
+/**
+ * 角色回退链（design-memory-system §七）：
+ * personaId 有效（personas/<id>/persona.yml 存在）→ 用之；
+ * 空/未知/角色文件夹被删 → 默认角色（存在则用）→ 均缺 → null（空灵魂）。
+ * @param {string|undefined} requested
+ * @returns {string|null}
+ */
+function resolvePersonaId(requested) {
+  const root = `${agentsRoot()}/personas`
+  if (requested !== undefined && requested !== null && requested !== '') {
+    try {
+      if (readFileSync(`${root}/${requested}/persona.yml`, 'utf8')) return requested
+    } catch {
+      // 角色文件夹被删 / 无 persona.yml → 走回退
+    }
+  }
+  try {
+    readFileSync(`${root}/${DEFAULT_PERSONA_ID}/persona.yml`, 'utf8')
+    return DEFAULT_PERSONA_ID
+  } catch {
+    return null
+  }
+}
+
+/** 读某角色（或 null=无角色）的 SOUL.md / USER.md 原始内容；缺文件返回空串 */
+function readPersonaFiles(personaId) {
+  if (personaId === null || personaId === undefined || personaId === '') {
+    return { soul: '', user: '' }
+  }
+  const root = `${agentsRoot()}/personas/${personaId}`
+  let soul = ''
+  let user = ''
+  try { soul = readFileSync(`${root}/SOUL.md`, 'utf8') } catch {}
+  try { user = readFileSync(`${root}/USER.md`, 'utf8') } catch {}
+  return { soul, user }
+}
+
+/** 读全局共享 FACT.md（长期事实）；缺文件返回空串 */
+function readFactsFile() {
+  try {
+    return readFileSync(`${agentsRoot()}/memory/FACT.md`, 'utf8')
+  } catch {
+    return ''
+  }
+}
+
+/** 规范化为快照对象（容错：坏 JSON / 缺字段补默认） */
+function normalizeSnapshot(parsed) {
+  if (parsed === null || typeof parsed !== 'object') return null
+  const persona = parsed.persona
+  if (persona === null || typeof persona !== 'object') return null
+  const memory = parsed.memory
+  if (memory === null || typeof memory !== 'object') return null
+  return {
+    persona: {
+      id: typeof persona.id === 'string' ? persona.id : null,
+      soul: typeof persona.soul === 'string' ? persona.soul : '',
+      user: typeof persona.user === 'string' ? persona.user : '',
+    },
+    memory: {
+      facts: typeof memory.facts === 'string' ? memory.facts : '',
+    },
+    createdAt: typeof parsed.createdAt === 'string' ? parsed.createdAt : new Date().toISOString(),
+  }
+}
+
+/**
+ * 快照单点（plan-memory-execution §1.2，design-memory-system §快照持久化）：
+ * 1. 内存 Map → 有则返回；
+ * 2. 快照文件 `.agents/memory/snapshots/<sessionId>.json` → 载入 Map 后返回；
+ * 3. 首条消息/极旧会话 → 读当前角色文件 + FACT.md 一次写齐快照 → 内存 Map → 返回。
+ * 写快照失败不抛错（下次组装重试）；本函数同步（section provider 是同步签名）。
+ * @param {string} sessionId
+ * @param {boolean} [persist=true] 是否落盘。子代理（subagent）会话传 false：
+ *   它们本就一次性存在、随父进程销毁，落盘只会让 snapshots/ 目录无限堆积；
+ *   人格注入仍照常发生（与改造前基座 persona 对全 agent 生效的行为一致），
+ *   只是这份快照活在内存里、进程重启即随会话一起没了。
+ * @returns {object} 快照对象
+ */
+function ensureSnapshot(sessionId, persist = true) {
+  if (memorySnapshots.has(sessionId)) return memorySnapshots.get(sessionId)
+  const snapshotsDir = `${agentsRoot()}/memory/snapshots`
+  const snapshotPath = `${snapshotsDir}/${sessionId}.json`
+  // 2. 读快照文件（冷 resume / 进程重启后恢复）
+  try {
+    const normalized = normalizeSnapshot(JSON.parse(readFileSync(snapshotPath, 'utf8')))
+    if (normalized !== null) {
+      memorySnapshots.set(sessionId, normalized)
+      return normalized
+    }
+  } catch {
+    // 无快照 / 坏快照 → 走重建
+  }
+  // 3. 从当前角色文件 + FACT.md 构建
+  const config = memoryConfigs.get(sessionId)
+  const personaId = resolvePersonaId(config?.personaId)
+  const { soul, user } = readPersonaFiles(personaId)
+  const snapshot = {
+    persona: { id: personaId, soul, user },
+    memory: { facts: readFactsFile() },
+    createdAt: new Date().toISOString(),
+  }
+  memorySnapshots.set(sessionId, snapshot)
+  // 一次写齐快照文件（失败静默，下次组装重试）
+  if (!persist) return snapshot
+  try {
+    mkdirSync(snapshotsDir, { recursive: true })
+    const tmp = `${snapshotPath}.tmp-${process.pid}-${Date.now()}`
+    writeFileSync(tmp, JSON.stringify(snapshot, null, 2))
+    renameSync(tmp, snapshotPath)
+  } catch {
+    // 磁盘满 / EACCES：保持内存 Map，不打断 turn
+  }
+  return snapshot
+}
+
+/**
+ * 角色编辑指引（persona ON 时注入，告知 AI 角色文件位置与快照语义）。
+ * 用**绝对路径**：这些文件在 filesDir 下、不在会话工作区内，给相对路径会让模型按
+ * cwd（files/workspace）去拼路径而读不到（真机实测踩过，喵~）。
+ */
+function roleEditingGuidance(personaId) {
+  if (personaId === null || personaId === undefined || personaId === '') return ''
+  return `你的角色设定文件在 ${agentsRoot()}/personas/${personaId}/ 下的 SOUL.md（人格）与 USER.md（用户档案），可用文件工具按该绝对路径编辑；改动只影响新会话——当前会话已在首条消息时固化快照。`
+}
+
+/**
+ * 记忆存储契约文案（memory ON 时注入；design-memory-system §提示词存储契约）。
+ * 同样一律给绝对路径，并明确「memory 工具本身不需要路径参数」，
+ * 避免模型拿相对路径去 read/bash 探路而绕开工具。
+ */
+function memoryContractText() {
+  const mem = `${agentsRoot()}/memory`
+  return `【长期记忆】
+记忆目录在 ${mem}（**不在会话工作区内**，要用绝对路径）。以下两个文件的路径都不必自己拼——memory 工具没有路径参数，直接用它：
+- ${mem}/FACT.md：长期事实知识（跨会话，6 个月+）。用 memory 工具 action="update"、content=整份新内容 覆盖；也可用文件工具按上述绝对路径读写。
+- ${mem}/JOURNAL.jsonl：一次性事件/会话笔记（append-only 日志）。只能用 memory 工具 append 追加、search 搜索；文件工具对这个路径会被拒绝，不要绕路去试。
+- 记忆自主更新，不用问用户；写 FACT.md 前自问「6 个月后还有用吗？没用就 append 到日志」。
+- 当前会话的 <facts> 已在首条消息时固化快照，你写入的新内容将在下一个新会话的 <facts> 快照中体现（所以本会话内别指望重读能看到新内容，也不必重读确认）。
+- ${mem}/snapshots/ 是内部快照缓存目录，禁止读取/修改。`
+}
+
+/**
+ * 组装记忆 section 文本（plan-memory-execution §1.3）：
+ * 按开关决定注入：
+ *   personaEnabled ON → <soul> + <user> + 角色编辑指引（内容有实质文字才注入对应标签）
+ *   memoryEnabled ON   → <facts> + 存储契约
+ * 两开关均 OFF → 返回空串（renderPrompt 会丢弃空 section）。
+ * @param {object} context - assemble 的 AssembleContext（含 agent.id = sessionId）
+ */
+function memorySectionText(context) {
+  const sessionId = context?.agent?.id
+  if (sessionId === undefined) return ''
+  const key = String(sessionId)
+  // 子代理会话（session.header.parentSession 有值）只在内存里固化，不落盘（防目录膨胀）
+  const isChildSession = context?.agent?.session?.header?.parentSession !== undefined
+  const snapshot = ensureSnapshot(key, !isChildSession)
+  const config = memoryConfigs.get(key) ?? {}
+  const personaEnabled = config.personaEnabled !== false
+  const memoryEnabled = config.memoryEnabled !== false
+  const parts = []
+  if (personaEnabled) {
+    const soul = snapshot.persona?.soul ?? ''
+    const user = snapshot.persona?.user ?? ''
+    const hasSoul = hasSubstantiveContent(soul)
+    const hasUser = hasSubstantiveContent(user)
+    if (hasSoul || hasUser) {
+      const roleParts = []
+      if (hasSoul) roleParts.push(`<soul>\n${soul.trim()}\n</soul>`)
+      if (hasUser) roleParts.push(`<user>\n${user.trim()}\n</user>`)
+      const guidance = roleEditingGuidance(snapshot.persona?.id)
+      if (guidance !== '') roleParts.push(guidance)
+      parts.push(roleParts.join('\n\n'))
+    }
+  }
+  if (memoryEnabled) {
+    const facts = snapshot.memory?.facts ?? ''
+    if (hasSubstantiveContent(facts)) {
+      parts.push(`<facts>\n${facts.trim()}\n</facts>`)
+    }
+    parts.push(memoryContractText())
+  }
+  return parts.join('\n\n')
+}
+
+/**
+
  * 把思考强度钳制到目标模型的能力范围内（防止 DeepSeek 的 'high' 被原样带到
  * 不支持思考的 OpenAI 兼容模型上，导致请求以 UNSUPPORTED_REASONING_EFFORT 失败）。
  *
@@ -347,10 +595,16 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     this.reasoningEffort = undefined
     /** sessionId → {presetId?, cwd?}：session/prompt、session/command 透传的会话创建提示（§三.4） */
     this.pendingHints = new Map()
+    /** sessionId → {personaId?, personaEnabled?, memoryEnabled?}：待写入常驻 Map 的记忆配置（plan-memory-execution §1.1，per-connection） */
+    this.pendingMemoryConfigs = new Map()
     /** requestId → {resolve,reject,cleanup}：等待 App 回答的 userQuestions 请求（§三.6） */
     this.pendingQuestions = new Map()
     /** 本连接注册的问答 provider 释放器（UserQuestionService 全局单槽，连接结束必须释放） */
     this.questionProviderDisposer = undefined
+    // 会话销毁时清理本连接持有的记忆配置暂存（常驻 Map 的清理由 apply() 里的 agent/disposed 监听负责）
+    this.disposers?.push?.(ctx.on('agent/disposed', ({ agent }) => {
+      this.pendingMemoryConfigs.delete(String(agent.id))
+    }))
   }
 
   /**
@@ -405,6 +659,256 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     } catch {
       // 对照诊断本身不允许影响会话获取
     }
+  }
+
+  /**
+   * 记忆配置暂存（plan-memory-execution §1.6）：把 session/prompt 参数里的
+   * personaId/personaEnabled/memoryEnabled 写入 pendingMemoryConfigs，供 makeSetup 消费定死。
+   * - 已在内存的 live 会话（首条消息已过）：参数仅与常驻 Map 对照，不符 warn 忽略；
+   * - 新会话 / 冷 resume（进程重启后无 live session）：暂存，随 getOrCreateSession 消费。
+   */
+  stashMemoryConfig(sessionId, params) {
+    const key = String(sessionId)
+    const hasPersonaId = params?.personaId !== undefined && params.personaId !== null && params.personaId !== ''
+    const hasPersonaEnabled = typeof params?.personaEnabled === 'boolean'
+    const hasMemoryEnabled = typeof params?.memoryEnabled === 'boolean'
+    if (!hasPersonaId && !hasPersonaEnabled && !hasMemoryEnabled) return
+    if (this.sessions.has(key)) {
+      const existing = memoryConfigs.get(key)
+      if (existing === undefined) {
+        // live 会话但无常驻配置（例如先经 session/command 建会话再发首条消息）：
+        // 仍视为「首条消息」直接定死，否则 personaId 会永久丢失。
+        memoryConfigs.set(key, {
+          ...(hasPersonaId ? { personaId: String(params.personaId) } : {}),
+          personaEnabled: params.personaEnabled ?? true,
+          memoryEnabled: params.memoryEnabled ?? true,
+        })
+        return
+      }
+      // 首条消息已过：对照常驻 Map，不符 warn 忽略（首条定死）
+      if (hasPersonaId && existing.personaId !== String(params.personaId)) {
+        this.ctx.logger?.warn?.(`meow-jsonrpc: session ${key} locked personaId "${existing.personaId}", ignoring "${params.personaId}"`)
+      }
+      if (hasPersonaEnabled && existing.personaEnabled !== params.personaEnabled) {
+        this.ctx.logger?.warn?.(`meow-jsonrpc: session ${key} locked personaEnabled=${existing.personaEnabled}, ignoring ${params.personaEnabled}`)
+      }
+      if (hasMemoryEnabled && existing.memoryEnabled !== params.memoryEnabled) {
+        this.ctx.logger?.warn?.(`meow-jsonrpc: session ${key} locked memoryEnabled=${existing.memoryEnabled}, ignoring ${params.memoryEnabled}`)
+      }
+      return
+    }
+    this.pendingMemoryConfigs.set(key, {
+      ...(hasPersonaId ? { personaId: String(params.personaId) } : {}),
+      ...(hasPersonaEnabled ? { personaEnabled: params.personaEnabled } : {}),
+      ...(hasMemoryEnabled ? { memoryEnabled: params.memoryEnabled } : {}),
+    })
+  }
+
+  /**
+   * 把一条记忆配置写进常驻 Map（首条定死）。
+   *
+   * ⚠️ 取值来源必须是**调用方同步捕获的快照**，不能在这里回查 pendingMemoryConfigs：
+   * getOrCreateSession 返回的是未 await 的 creation promise，它的 finally 会在
+   * 函数 return 的当下就把暂存删干净，而 makeSetup 是在那之后的异步体里才跑的
+   * （pendingHints 正是靠开头同步取值 + 闭包捕获才没踩到这个坑，喵~）。
+   * 合并语义：缺失字段保留已有值，整体缺省回退默认（两开关默认 true）。
+   */
+  applyMemoryConfig(sessionId, pending) {
+    if (pending === undefined) return
+    const key = String(sessionId)
+    const existing = memoryConfigs.get(key)
+    memoryConfigs.set(key, {
+      ...(pending.personaId !== undefined
+        ? { personaId: pending.personaId }
+        : existing?.personaId !== undefined ? { personaId: existing.personaId } : {}),
+      personaEnabled: pending.personaEnabled ?? existing?.personaEnabled ?? true,
+      memoryEnabled: pending.memoryEnabled ?? existing?.memoryEnabled ?? true,
+    })
+  }
+
+  /**
+   * 记忆工具注册（plan-memory-execution §4.1，per-agent scope，仿 tool-ask-user 写法）。
+   * memoryEnabled OFF 时不调用（makeSetup 判断）。update 原子覆盖 FACT.md；
+   * append O_APPEND 追加 JOURNAL.jsonl；search 子串+tag+limit，坏行 skip 而非 throw。
+   */
+  installMemoryTool(agentCtx) {
+    const memoryDir = `${agentsRoot()}/memory`
+    const factsPath = `${memoryDir}/FACT.md`
+    const journalPath = `${memoryDir}/JOURNAL.jsonl`
+    agentCtx.tools.register(defineTool({
+      name: 'memory',
+      description: '读写长期记忆：update 整份覆盖 FACT.md、append 追加一条到 JOURNAL 日志、search 检索日志。'
+        + '本工具不需要任何文件路径参数，直接按 action 调用即可（记忆文件不在会话工作区内，别用 read/bash 去探路）。',
+      parameters: {
+        action: {
+          type: 'string',
+          enum: ['update', 'append', 'search'],
+          required: true,
+          description: 'What to do: update FACT.md, append a journal entry, or search the journal.',
+        },
+        content: { type: 'string', description: 'For update: the full new content of FACT.md (atomic overwrite).' },
+        text: { type: 'string', description: 'For append: the journal entry text.' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'For append: optional tags.' },
+        query: { type: 'string', description: 'For search: case-insensitive substring to match.' },
+        tag: { type: 'string', description: 'For search: filter entries that carry this tag.' },
+        limit: { type: 'integer', description: 'For search: max entries to return (default 20).' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ok: { type: 'boolean', required: true },
+            message: { type: 'string' },
+            matches: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  ts: { type: 'string' },
+                  tags: { type: 'array', items: { type: 'string' } },
+                  text: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+      },
+      async execute(args, _exec) {
+        switch (args.action) {
+          case 'update': {
+            if (typeof args.content !== 'string') throw new Error('memory: content is required for update')
+            mkdirSync(memoryDir, { recursive: true })
+            const tmp = `${factsPath}.tmp-${process.pid}-${Date.now()}`
+            writeFileSync(tmp, args.content)
+            renameSync(tmp, factsPath)
+            return {
+              ok: true,
+              message: 'FACT.md 已更新（下个新会话的 <facts> 快照会包含新内容；当前会话快照不变）',
+            }
+          }
+          case 'append': {
+            if (typeof args.text !== 'string' || args.text.length === 0) {
+              throw new Error('memory: text is required for append')
+            }
+            mkdirSync(memoryDir, { recursive: true })
+            const tags = Array.isArray(args.tags) ? args.tags.map(String) : []
+            const entry = { ts: new Date().toISOString(), tags, text: args.text }
+            const fd = openSync(journalPath, 'a')
+            try {
+              writeSync(fd, JSON.stringify(entry) + '\n')
+            } finally {
+              closeSync(fd)
+            }
+            return { ok: true, message: '已追加到 JOURNAL.jsonl' }
+          }
+          case 'search': {
+            const query = typeof args.query === 'string' ? args.query.toLowerCase() : ''
+            const tag = typeof args.tag === 'string' ? args.tag : undefined
+            const limit = Number.isInteger(args.limit) && args.limit > 0 ? Math.min(args.limit, 200) : 20
+            const matches = []
+            try {
+              const content = readFileSync(journalPath, 'utf8')
+              for (const line of content.split('\n')) {
+                if (line.trim() === '') continue
+                let entry
+                try {
+                  entry = JSON.parse(line)
+                } catch {
+                  continue // 坏行容忍：历史坏数据不使 search 失败
+                }
+                const text = typeof entry.text === 'string' ? entry.text : ''
+                const entryTags = Array.isArray(entry.tags) ? entry.tags.map(String) : []
+                if (query !== '' && !text.toLowerCase().includes(query)) continue
+                if (tag !== undefined && !entryTags.includes(tag)) continue
+                matches.push({
+                  ts: typeof entry.ts === 'string' ? entry.ts : '',
+                  tags: entryTags,
+                  text,
+                })
+                if (matches.length >= limit) break
+              }
+            } catch (error) {
+              if (error?.code !== 'ENOENT') throw error // 日志不存在 = 无记录
+            }
+            return { ok: true, matches }
+          }
+          default:
+            throw new Error(`memory: unknown action "${String(args.action)}"`)
+        }
+      },
+    }))
+  }
+
+  /**
+   * personas/list（plan-memory-execution §1.7）：自动扫描 .agents/personas/ 子目录，
+   * 仅含 persona.yml 的目录算角色；读 name/description（坏 YAML try/catch 跳过）；
+   * 按 .personas-order 排序，未列出角色按字母序排最后；isDefault = id === 'default'。
+   */
+  async personasList() {
+    const root = `${agentsRoot()}/personas`
+    let entries
+    try {
+      entries = readdirSync(root, { withFileTypes: true })
+    } catch {
+      return { personas: [] }
+    }
+    const personas = []
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const id = entry.name
+      // 排除规则（§1.7）：仅「含 persona.yml 的子目录」算角色 —— README.md/skills/ 等自动落榜
+      let raw
+      try {
+        raw = readFileSync(`${root}/${id}/persona.yml`, 'utf8')
+      } catch {
+        continue
+      }
+      let name = id
+      let description = ''
+      try {
+        const parsed = parsePersonaYaml(raw)
+        if (parsed.name !== '') name = parsed.name
+        description = parsed.description
+      } catch {
+        // 坏 YAML → 按 id 兜底保留条目（用户仍能在选择器里看到并修/删），不使整表失败
+      }
+      personas.push({ id, name, description, isDefault: id === DEFAULT_PERSONA_ID })
+    }
+    let order = []
+    try {
+      const raw = JSON.parse(readFileSync(`${root}/.personas-order`, 'utf8'))
+      if (Array.isArray(raw)) order = [...new Set(raw.map(String))]
+    } catch {
+      // 无排序文件 → 全部按字母序
+    }
+    const byId = new Map(personas.map((p) => [p.id, p]))
+    const ordered = order.map((id) => byId.get(id)).filter((p) => p !== undefined)
+    const listed = new Set(order)
+    const unordered = personas
+      .filter((p) => !listed.has(p.id))
+      .sort((a, b) => a.id.localeCompare(b.id))
+    return { personas: [...ordered, ...unordered] }
+  }
+
+  /**
+   * personas/reorder（plan-memory-execution §1.8）：前端拖拽排序持久化。
+   * 过滤掉不存在的角色 id（与 personasList 扫描结果对拍），幂等去重后写 .personas-order。
+   */
+  async personasReorder(params) {
+    const requested = Array.isArray(params?.order) ? params.order.map(String) : []
+    const valid = new Set((await this.personasList()).personas.map((p) => p.id))
+    const filtered = [...new Set(requested.filter((id) => valid.has(id)))]
+    const root = `${agentsRoot()}/personas`
+    try {
+      mkdirSync(root, { recursive: true })
+      writeFileSync(`${root}/.personas-order`, JSON.stringify(filtered))
+    } catch (error) {
+      throw new Error(`personas/reorder failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    return { order: filtered }
   }
 
   /**
@@ -470,9 +974,13 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
   async getOrCreateSession(sessionId) {
     if (this.shuttingDown) throw new Error('SDK server is shutting down')
     const hints = this.pendingHints.get(sessionId)
+    // 同步捕获（同上：finally 会在本函数 return 的当下清掉暂存）
+    const memoryHints = this.pendingMemoryConfigs.get(sessionId)
     try {
       if (this.sessions.has(sessionId)) {
         this.warnHintsIgnored(sessionId, hints)
+        // live 但无常驻配置（另一连接刚建过会话）：补写，保证 personaId 不丢
+        this.applyMemoryConfig(sessionId, memoryHints)
         return this.sessions.get(sessionId)
       }
       const pending = this.resumeCreations.get(sessionId)
@@ -496,12 +1004,21 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
         const makeSetup = (presetId) => async (agentCtx) => {
           installModelSelection(agentCtx, selection)
           this.selections.set(sessionId, selection)
+          // 首条消息定死记忆配置（plan-memory-execution §1.1/§1.6）：makeSetup 早于任何
+          // assemble，先把开头同步捕获的快照写进常驻 Map，section provider 与工具注册都据它判定。
+          this.applyMemoryConfig(sessionId, memoryHints)
           if (presets !== undefined && presetId !== undefined) {
             try {
               await presets.mount(agentCtx, presetId)
             } catch (error) {
               throwMappedPresetError(error)
             }
+          }
+          // 记忆工具按开关条件注册到 agent 作用域（§1.9）：OFF → 完全不注册，AI 不知情。
+          // 注册在 mount 之后、agentCtx 自己的层 —— tools.restrict 只裁继承面，不裁本层
+          // （meow-minimal 的 minimal-face 不影响记忆工具，喵~）。
+          if (memoryConfigs.get(sessionId)?.memoryEnabled !== false) {
+            this.installMemoryTool(agentCtx)
           }
         }
         let handle
@@ -577,16 +1094,21 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
       return creation
     } finally {
       this.pendingHints.delete(sessionId)
+      // 暂存未被消费（live 快路径 / 并发竞态复用 live agent）时兜底清理，避免残留
+      this.pendingMemoryConfigs.delete(sessionId)
     }
   }
 
   /**
-   * 覆盖官方 prompt：把参数里的 presetId/cwd 写进 pendingHints（§三.4）后走官方流程
+   * 覆盖官方 prompt：把参数里的 presetId/cwd 写进 pendingHints、personaId/开关写进
+   * pendingMemoryConfigs（§三.4 / plan-memory-execution §1.6）后走官方流程
    * （super.prompt → this.getOrCreateSession 虚分发到上方覆盖版，创建时消费）。
    * 预设域异常映射为结构化 RPC 错误（§三.8）。
    */
   async prompt(params) {
-    this.stashHints(String(params?.sessionId ?? ''), params)
+    const sessionId = String(params?.sessionId ?? '')
+    this.stashHints(sessionId, params)
+    this.stashMemoryConfig(sessionId, params)
     try {
       return await super.prompt(params)
     } catch (error) {
@@ -815,6 +1337,8 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
       case 'presets/list': return this.presetsList()
       case 'presets/read': return this.presetsRead(params ?? {})
       case 'presets/delete': return this.presetsDelete(params ?? {})
+      case 'personas/list': return this.personasList()
+      case 'personas/reorder': return this.personasReorder(params ?? {})
       default: return super.handleRequest(method, params)
     }
   }
@@ -1276,26 +1800,67 @@ export function apply(ctx, config) {
   const resolved = config
   const exit = (code) => process.exit(code)
 
-  // ── 灵魂注入（plan-soul.md）───────────────────────────────────────────────
-  // 人物设定与 Agent 预设分离：SOUL.md 是灵魂的唯一定义处，这里注册成全局 prompt
-  // 变量，基座 persona 经 {{soul}}/{{soul_path}} 引用。provider 每次提示词组装重估
-  // （mtime 缓存避免重复读盘），AI/用户改完 SOUL.md 下一条消息即生效；文件缺失或
-  // 不可读 → 空灵魂（纯净模式，persona 剩环境说明）。变量必须无条件注册：persona
-  // 的 {{soul}} 引用是严格插值，缺变量会让所有会话组装报错。
-  const soulPath = (process.env.DSH_FILES_DIR ?? process.cwd()) + '/.agents/memory/SOUL.md'
-  let soulCache = { mtimeMs: Number.NaN, text: '' }
-  // 变量名只能小写（system-prompt 的 VARIABLE_NAME = /^[a-z][a-z0-9_]*$/），大写会炸严格插值
-  ctx.systemPrompt.variable('soul_path', () => soulPath)
-  ctx.systemPrompt.variable('soul', () => {
-    try {
-      const mtimeMs = statSync(soulPath).mtimeMs
-      if (mtimeMs !== soulCache.mtimeMs) {
-        soulCache = { mtimeMs, text: readFileSync(soulPath, 'utf8').trim() }
+  // ── 记忆系统注入（plan-memory-execution §1.2–§1.5）────────────────────────
+  // 角色层 + 记忆层由一个独立 section 全权负责（order 50，排在基座 persona 之后、
+  // 工具指引之前）：不依赖基座 persona 内的变量引用，避免被自建预设的 dsh-persona 遮蔽。
+  // 内容全部走 ensureSnapshot 单点 —— 首条消息固化，后续组装复用同一份文本，
+  // system prompt 前缀恒定（KV 缓存可命中）。两开关均 OFF 时返回空串（renderPrompt 丢弃空 section）。
+  ctx.systemPrompt.section({
+    name: 'meow:memory',
+    order: 50,
+    text: (context) => {
+      try {
+        return memorySectionText(context)
+      } catch (error) {
+        // section provider 抛异常会炸掉整个 turn：兜底成「不注入」，下次组装重试
+        ctx.logger?.warn?.(`meow-jsonrpc: memory section failed: ${error instanceof Error ? error.message : String(error)}`)
+        return ''
       }
-      return soulCache.text
-    } catch {
-      return ''
-    }
+    },
+  })
+
+  // ── 向后兼容的 prompt 变量（§1.4/§1.5）───────────────────────────────────
+  // 基座与官方预设不再引用 {{soul}}/{{user}}（人格注入归上方 section，避免重复）；
+  // 保留注册只为兼容引用了它们的旧自建预设。取值一律从快照（不再实时读文件），
+  // 与 section 同源，故同一会话内前缀稳定。变量必须无条件注册：persona 的 {{...}}
+  // 引用是严格插值，缺变量会让所有会话组装报错。
+  // 变量名只能小写（system-prompt 的 VARIABLE_NAME = /^[a-z][a-z0-9_]*$/），大写会炸严格插值
+  ctx.systemPrompt.variable('soul_path', (context) => {
+    const id = context?.agent?.id
+    const personaId = id !== undefined
+      ? (memorySnapshots.get(String(id))?.persona?.id ?? resolvePersonaId(memoryConfigs.get(String(id))?.personaId))
+      : resolvePersonaId(undefined)
+    return personaId === null ? '' : `${agentsRoot()}/personas/${personaId}/SOUL.md`
+  })
+  ctx.systemPrompt.variable('user_path', (context) => {
+    const id = context?.agent?.id
+    const personaId = id !== undefined
+      ? (memorySnapshots.get(String(id))?.persona?.id ?? resolvePersonaId(memoryConfigs.get(String(id))?.personaId))
+      : resolvePersonaId(undefined)
+    return personaId === null ? '' : `${agentsRoot()}/personas/${personaId}/USER.md`
+  })
+  // 角色开关 OFF → 两个内容变量都返回空串（design-memory-system §五.2）
+  ctx.systemPrompt.variable('soul', (context) => {
+    const id = context?.agent?.id
+    if (id === undefined) return ''
+    const key = String(id)
+    if (memoryConfigs.get(key)?.personaEnabled === false) return ''
+    return ensureSnapshot(key).persona?.soul?.trim() ?? ''
+  })
+  ctx.systemPrompt.variable('user', (context) => {
+    const id = context?.agent?.id
+    if (id === undefined) return ''
+    const key = String(id)
+    if (memoryConfigs.get(key)?.personaEnabled === false) return ''
+    return ensureSnapshot(key).persona?.user?.trim() ?? ''
+  })
+
+  // 会话销毁清理常驻 Map（design-memory-system §内存 Map 生命周期）：
+  // 快照文件由 App 删 Room 行时清理，这里只回收进程内内存。
+  ctx.on('agent/disposed', ({ agent }) => {
+    const key = String(agent.id)
+    memoryConfigs.delete(key)
+    memorySnapshots.delete(key)
   })
 
   let exitTask

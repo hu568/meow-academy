@@ -20,8 +20,8 @@
 #   - 用户预设 = ${DSH_HOME}/.agent-presets/<id>/（可读可写可删，创作的落点）。
 #
 # 裁剪项（在 meow-standard 之上只加不减；同源纪律见 meow-standard 头注释）：
-#   - 不带 persona 行（plan-soul：灵魂唯一定义在 .agents/memory/SOUL.md，经基座
-#     {{soul}} 注入，换预设不换人）；本模式的行为纪律全在 skills/ 两份技能里。
+#   - 不带 persona 行（人格归 .agents/personas/<角色id>/，由 meow:memory section 按会话
+#     开关注入，换预设不换人）；本模式的行为纪律全在 skills/ 两份技能里。
 #   - 上游 cordis 的 tool-fs-search / tool-pwsh / workflow 全家 / tool-subagent-fork /
 #     agent-instructions 照 meow-standard 口径继续裁（fs-search 无 rg 二进制、pwsh 无
 #     PowerShell、workflow worker_threads 未真机验证、fork 驱动未验证、环境文案在基座）。

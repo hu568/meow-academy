@@ -11,6 +11,8 @@ import com.meow.academy.data.chat.SessionEntity
 import com.meow.academy.data.chat.SessionUsageStats
 import com.meow.academy.data.model.PresetCatalogRepository
 import com.meow.academy.data.model.PresetEntry
+import com.meow.academy.data.model.PersonaCatalogRepository
+import com.meow.academy.data.model.PersonaEntry
 import com.meow.academy.data.settings.ChatBackground
 import com.meow.academy.rpc.DshParams
 import com.meow.academy.rpc.LlmProviderInfo
@@ -41,6 +43,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val sessionController = ChatSessionController(
         scope = viewModelScope, dao = dao, runtimeManager = runtimeManager,
         settingsRepository = settingsRepository, defaultWorkspaceAbsPath = defaultWorkspaceAbsPath,
+        filesDirPath = app.filesDir.absolutePath,
     )
     private val modelController = ChatModelController(
         scope = viewModelScope, settingsRepository = settingsRepository,
@@ -53,6 +56,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         scope = viewModelScope, settingsRepository = settingsRepository,
         presetCatalogRepo = PresetCatalogRepository(app),
         runtimeManager = runtimeManager, defaultWorkspaceAbsPath = defaultWorkspaceAbsPath,
+        toast = ::toast,
+    )
+    private val personaController = ChatPersonaController(
+        scope = viewModelScope, settingsRepository = settingsRepository,
+        personaCatalogRepo = PersonaCatalogRepository(app),
+        runtimeManager = runtimeManager, dao = dao,
+        filesDirPath = app.filesDir.absolutePath,
+        currentSessionId = { sessionController.currentSessionId.value },
         toast = ::toast,
     )
     private val capabilityController = ChatCapabilityController(
@@ -93,6 +104,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val presetCatalog: StateFlow<List<PresetEntry>> = presetController.presetCatalog
     val dashboardFeature: StateFlow<DashboardFeature> = presetController.dashboardFeature
 
+    // ── 组合暴露：角色设定（plan-memory-execution §3.1） ──
+
+    val personaCatalog: StateFlow<List<PersonaEntry>> = personaController.personaCatalog
+    val defaultPersonaId: StateFlow<String> = personaController.defaultPersonaId
+    val personaEnabled: StateFlow<Boolean> = personaController.personaEnabled
+    val memoryEnabled: StateFlow<Boolean> = personaController.memoryEnabled
+
     // ── 组合暴露：能力态 ──
 
     val attachedMode: StateFlow<AttachedMode?> = capabilityController.attachedMode
@@ -115,6 +133,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     modelController.refreshModelCatalog()
                     sessionController.refreshUsageStats()
                     presetController.refreshPresets()
+                    personaController.refreshPersonas()
                     sessionController.currentSessionId.value?.let { capabilityController.hydrateCurrentSession(it) }
                     subscribeGlobalEvents()
                     launch { streamingController.flushPending() }
@@ -131,7 +150,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun openSession(id: Long) = sessionController.openSession(id)
     fun closeSession() = sessionController.closeSession()
-    fun newSession() = sessionController.newSession()
+    fun newSession(personaId: String? = null) = sessionController.newSession(personaId)
     fun deleteSession(session: SessionEntity) = sessionController.deleteSession(session)
     fun deleteSessions(sessions: List<SessionEntity>) = sessionController.deleteSessions(sessions)
     fun renameSession(sessionId: Long, title: String) = sessionController.renameSession(sessionId, title)
@@ -157,6 +176,19 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun switchWorkspace(path: String) = presetController.switchWorkspace(path)
     fun setSessionFilter(mode: String) = presetController.setSessionFilter(mode)
     fun selectDashboardFeature(feature: DashboardFeature) = presetController.selectDashboardFeature(feature)
+
+    // ── 动作转发：角色设定（plan-memory-execution §3.1–§3.4） ──
+
+    fun refreshPersonas() = personaController.refreshPersonas()
+    fun selectDefaultPersona(id: String) = personaController.selectDefaultPersona(id)
+    fun setPersonaEnabled(enabled: Boolean) = personaController.setPersonaEnabled(enabled)
+    fun setMemoryEnabled(enabled: Boolean) = personaController.setMemoryEnabled(enabled)
+    fun reorderPersonas(order: List<String>) = personaController.reorderPersonas(order)
+    fun createPersona(id: String, name: String, description: String) =
+        personaController.createPersona(id, name, description)
+    fun deletePersona(id: String) = personaController.deletePersona(id)
+
+
 
     // ── 动作转发：附加模式 / 问答 ──
 

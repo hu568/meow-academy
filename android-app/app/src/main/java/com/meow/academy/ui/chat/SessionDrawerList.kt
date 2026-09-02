@@ -19,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.meow.academy.data.chat.SessionEntity
+import com.meow.academy.data.model.PersonaEntry
 import com.meow.academy.data.model.PresetEntry
 import com.meow.academy.ui.components.EmptyStateCompact
 
@@ -32,6 +33,7 @@ internal fun ColumnScope.SessionDrawerList(
     sessionFilter: String,                   // 元信息行：仅「全部会话」且非默认工作区时显示工作区段
     defaultWorkspacePath: String,
     presetCatalog: List<PresetEntry>,
+    personaCatalog: List<PersonaEntry>,
     filesDirPath: String,
     onTap: (Long) -> Unit,
     onSwipeRightTrigger: (Long) -> Unit,
@@ -79,12 +81,20 @@ internal fun ColumnScope.SessionDrawerList(
                     } else {
                         presetLabel
                     }
+                    // 标题上方角色名小标签（plan-memory-execution §3.3）：角色开关 OFF 时不显示；
+                    // personaId 在目录里查不到（角色被删）→「（已删除角色）」
+                    val personaLabel = if (session.personaEnabled) {
+                        personaDisplayName(session.personaId, personaCatalog)
+                    } else {
+                        ""
+                    }
                     SessionRow(
                         session = session,
                         isCurrent = session.id == currentId,
                         selectionMode = selectionMode,
                         isSelected = isSelected,
                         metaLine = metaLine,
+                        personaLabel = personaLabel,
                         onTap = { onTap(session.id) },
                         onSwipeRightTrigger = { onSwipeRightTrigger(session.id) },
                         onEdit = { onEdit(session) },

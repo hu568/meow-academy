@@ -1,6 +1,6 @@
 # meow-minimal —— 喵仓「极简」Agent 预设（会议笔记 §10，plan-minimal-mode）。
 # 上游 minimal（apps/cli/config/agent-presets/minimal）的喵仓魔改：
-#   - 无 persona 行：灵魂分离纪律（plan-soul.md），基座 persona 经 {{soul}} 注入，同 meow-standard；
+#   - 无 persona 行：人格由 meow:memory section 按会话开关注入（同 meow-standard），与能力面正交；
 #   - pwsh 孪生两行删除（无 PowerShell），win32 disabled 门一并删除（安卓 only）；
 #   - filesystem 组整个不挂：fs-local 服务留基座（带 deny 纪律：凭证/datastore/config-defaults/
 #     dsh-presets 只读），str_replace_editor 直接用基座全局行（同参 maxOutputChars=16000）；

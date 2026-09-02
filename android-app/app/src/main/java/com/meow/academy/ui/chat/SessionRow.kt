@@ -60,6 +60,8 @@ internal fun SessionRow(
     selectionMode: Boolean,
     isSelected: Boolean,
     metaLine: String,
+    /** 角色名小标签（plan-memory-execution §3.3）：空串 = 不显示（角色开关 OFF / 未绑定） */
+    personaLabel: String = "",
     onTap: () -> Unit,
     onSwipeRightTrigger: () -> Unit,
     onEdit: () -> Unit,
@@ -126,6 +128,16 @@ internal fun SessionRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
+                // 角色名小标签（标题上方，plan-memory-execution §3.3）：仅在会话绑定了角色时占行
+                if (personaLabel.isNotEmpty()) {
+                    Text(
+                        text = personaLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 // 三行布局：标题 / 预设名 · 工作区短名 / 紧凑时间（行高约 +16dp，真机目检列表密度）
                 Text(
                     text = session.title,

@@ -20,6 +20,22 @@ data class SessionEntity(
      * 迁移时回填为 filesDir/workspace——v3 前所有会话都在唯一工作区）。
      */
     val workspacePath: String? = null,
+    /**
+     * 会话绑定的角色 id（.agents/personas/<id>/，新会话创建时写定，此后不更新；
+     * 随首条消息携带给定死归属，plan-memory-execution §2.1）。
+     * null = 未绑定（角色开关 OFF，或 v4 前旧数据 → DSH 侧按回退链走默认角色）。
+     */
+    val personaId: String? = null,
+    /**
+     * 角色开关（会话级，plan-memory-execution §2.1）：ON = 注入 <soul>/<user>，
+     * OFF = 不注入任何人格内容。首条消息后锁定（DSH 侧同样首条定死）。
+     */
+    val personaEnabled: Boolean = true,
+    /**
+     * 记忆开关（会话级）：ON = 注入 <facts> + 存储契约并注册 memory 工具，
+     * OFF = 三者全无。首条消息后锁定。
+     */
+    val memoryEnabled: Boolean = true,
 )
 
 /** 消息角色 */

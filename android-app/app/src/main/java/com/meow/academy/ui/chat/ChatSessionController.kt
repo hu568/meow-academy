@@ -5,6 +5,7 @@ import com.meow.academy.data.chat.MessageEntity
 import com.meow.academy.data.chat.SessionEntity
 import com.meow.academy.data.chat.SessionUsageStats
 import com.meow.academy.data.settings.SettingsRepository
+import com.meow.academy.runtime.RuntimeExtractor
 import com.meow.academy.runtime.RuntimeManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.io.File
 
 /**
  * 会话状态控制器——会话列表/当前会话/CRUD/自动标题/调用量（plan-chatviewmodel-refactor §2.1）。
@@ -30,6 +32,8 @@ class ChatSessionController(
     private val runtimeManager: RuntimeManager,
     private val settingsRepository: SettingsRepository,
     private val defaultWorkspaceAbsPath: String,
+    /** filesDir 绝对路径（会话删除时清理 .agents/memory/snapshots 用，plan-memory-execution §2.4） */
+    private val filesDirPath: String,
 ) {
     // ── 会话列表 ──
     val sessions: StateFlow<List<SessionEntity>> = dao.observeSessions()
@@ -92,14 +96,32 @@ class ChatSessionController(
 
     /**
      * 插入新会话并设为当前，返回新 id。
-     * 供 [ChatViewModel.sendMessage] 自动建会话用（preset/workplace 归属缓冲进 Room 行）。
+     * 供 [ChatViewModel.sendMessage] 自动建会话用（preset/workplace/角色绑定/两开关缓冲进 Room 行）。
+     * @param personaId 显式指定角色 id；null = 从 DataStore 默认角色读取（角色开关 OFF 时为 null）。
+     * @param personaEnabled / [memoryEnabled] 传 null = 从 DataStore 新会话默认读取。
      */
-    suspend fun createSessionAndOpen(): Long {
+    suspend fun createSessionAndOpen(
+        personaId: String? = null,
+        personaEnabled: Boolean? = null,
+        memoryEnabled: Boolean? = null,
+    ): Long {
+        val enabled = personaEnabled ?: settingsRepository.personaEnabled.first()
+        val memory = memoryEnabled ?: settingsRepository.memoryEnabled.first()
+        // 调用方没显式传角色时，从新会话默认读取（与 preset/workspace 同款 DataStore 模式）；
+        // 角色开关 OFF 时不绑定 personaId。
+        val resolvedPersonaId = if (personaId === null && enabled) {
+            settingsRepository.defaultPersonaId.first().takeIf { it.isNotBlank() }
+        } else {
+            personaId
+        }
         val id = dao.insertSession(
             SessionEntity(
                 title = DEFAULT_SESSION_TITLE,
                 presetId = settingsRepository.defaultPreset.first(),
                 workspacePath = settingsRepository.workspacePath.first(),
+                personaId = resolvedPersonaId,
+                personaEnabled = enabled,
+                memoryEnabled = memory,
             )
         )
         _currentSessionId.value = id
@@ -108,17 +130,19 @@ class ChatSessionController(
     }
 
     /**
-     * 新建会话：preset/workplace 归属缓冲进 Room 行（plan-standard-mode §3.4），
-     * 随首条消息/首条命令携带给定死归属。
+     * 新建会话：preset/workplace/角色 归属缓冲进 Room 行（plan-standard-mode §3.4，
+     * plan-memory-execution §2.2），随首条消息/首条命令携带给定死归属。
+     * @param personaId 显式指定角色（角色选择器「新建会话即用此角色」，§3.2）；null = 用默认。
      */
-    fun newSession() {
-        scope.launch { createSessionAndOpen() }
+    fun newSession(personaId: String? = null) {
+        scope.launch { createSessionAndOpen(personaId = personaId) }
     }
 
     fun deleteSession(session: SessionEntity) {
         scope.launch {
             dao.deleteMessages(session.id)
             dao.deleteSession(session)
+            deleteSnapshotFile(session.id)
             if (_currentSessionId.value == session.id) {
                 _currentSessionId.value = null
             }
@@ -134,10 +158,25 @@ class ChatSessionController(
             val ids = sessions.map { it.id }
             dao.deleteMessagesBySessionIds(ids)
             dao.deleteSessionsByIds(ids)
+            ids.forEach { deleteSnapshotFile(it) }
             if (_currentSessionId.value != null && _currentSessionId.value in ids) {
                 _currentSessionId.value = null
                 _sessionUsageStats.value = null
             }
+        }
+    }
+
+    /**
+     * 会话删除时顺带清理 DSH 侧快照文件（plan-memory-execution §2.4）：
+     * `.agents/memory/snapshots/<sessionId>.json`（sessionId = "room-<id>"，与 DSH 侧一致）。
+     * 删除失败静默（文件可能本就不存在 / DSH 未初始化）。
+     */
+    private fun deleteSnapshotFile(roomId: Long) {
+        runCatching {
+            File(
+                File(filesDirPath, RuntimeExtractor.AGENTS_DIR),
+                "memory/snapshots/${dshSessionIdOf(roomId)}.json",
+            ).delete()
         }
     }
 

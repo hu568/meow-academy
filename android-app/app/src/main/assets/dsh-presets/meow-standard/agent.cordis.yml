@@ -15,10 +15,11 @@
 # tool-cordis（创造预设随其后落地）、agent-instructions（喵仓 workspaceContext=false）。
 # 不重复基座已有的工具行（bash/fs/str-replace/todo/web）：基座注册全局可见，预设会话照常可用。
 
-# ── 身份（已迁出，0.2.7 plan-soul.md）───────────────────────────────────────
-# 预设不再带 persona 行：人物设定（灵魂）唯一定义在 files/.agents/memory/SOUL.md，
-# 由 meow-jsonrpc 注册的 {{soul}} prompt 变量注入基座 persona（每次组装实时读取）；
-# 工作区/外观路由/记忆/安全边界等部署环境说明也上移到基座 persona（全预设共享）。
+# ── 身份（已迁出，plan-memory-execution §1.10）──────────────────────────────
+# 预设不再带 persona 行：人格归角色库 files/.agents/personas/<角色id>/（SOUL.md + USER.md），
+# 由 meow-jsonrpc 注册的独立 `meow:memory` section（order 50）按会话 personaEnabled /
+# memoryEnabled 开关注入，并在首条消息固化快照（.agents/memory/snapshots/<id>.json）；
+# 工作区/外观路由/安全边界等部署环境说明留在基座 persona（全预设共享）。
 # 本组合因此是「纯净模式」：只有工具与模式组合，无人设、无环境文案。
 # 用户自建预设如需覆盖人设，仍可挂 @deepseek-ai/dsh-persona 行（scoped 遮蔽基座）。
 

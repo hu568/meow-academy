@@ -8,7 +8,7 @@ package com.meow.academy.ui.chat
  *               候选列表（filesDir 本身 + 一级子目录动态扫描）+ 当前默认工作区会话列表；
  * ② Agent 预设 —— presets/list 动态结果 + 本地占位卡合并渲染，卡片说明可折叠，
  *               trust=user 支持长按删除；
- * ③ 记忆/角色 —— 本版只做角色展示（喵喵老师，唯一不可切换），记忆功能占位。
+ * ③ 角色设定 —— 角色/记忆两个开关 + 角色选择器入口（plan-memory-execution §3.1）。
  *
  * 切换工作区 = 只写 DataStore（vm.switchWorkspace），不重启 DSH、不打扰生成中的会话
  * （工作区 > 会话，归属随首条消息定死，喵~）。
@@ -19,7 +19,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -30,14 +29,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CreateNewFolder
-import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -46,7 +43,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -103,7 +100,7 @@ fun WorkspaceSettingsPanel(vm: ChatViewModel) {
         HorizontalDivider()
         AgentPresetSection(vm = vm, modifier = Modifier.weight(1f))
         HorizontalDivider()
-        MemoryRoleSection(modifier = Modifier.weight(1f))
+        PersonaSettingsSection(vm = vm, modifier = Modifier.weight(1f))
     }
 }
 
@@ -466,101 +463,127 @@ private fun PresetCard(
     }
 }
 
-// ─────────────────────────── ③ 记忆/角色栏 ───────────────────────────
+// ─────────────────────────── ③ 角色设定栏 ───────────────────────────
 
 /**
- * ③ 记忆/角色：本版只做角色展示（喵喵老师，唯一，不可切换）。
+ * ③ 角色设定（plan-memory-execution §3.1）：两个会话级开关 + 角色选择器入口。
  *
- * 结构预留：后续记忆工具 + 角色目录落地后，这里变成多角色单选——数据源按目录扫描动态渲染
- * （与 Agent 预设的 presets/list 自动扫描同构：扫到什么渲染什么，App 不硬编码列表，喵~）。
- * 届时把 [RoleCard] 换成「角色列表 + 点击切换默认角色」即可，徽标「当前角色」语义不变。
+ * - [角色开关] ON → 注入 <soul>/<user>；[记忆开关] ON → 注入 <facts>/存储契约并挂 memory 工具；
+ *   两者默认 ON，改动写 DataStore（新会话默认）并同步当前空白会话行；
+ * - 角色开关 OFF → 「打开角色选择器」按钮**灰掉不可点**（design §2.3：不弹窗、personaId 不绑定）；
+ * - 当前会话已有消息 → 角色锁定，选择器以只读模式打开（§3.4）。
  */
 @Composable
-private fun MemoryRoleSection(modifier: Modifier = Modifier) {
+private fun PersonaSettingsSection(vm: ChatViewModel, modifier: Modifier = Modifier) {
+    val personaCatalog by vm.personaCatalog.collectAsState()
+    val defaultPersonaId by vm.defaultPersonaId.collectAsState()
+    val personaEnabled by vm.personaEnabled.collectAsState()
+    val memoryEnabled by vm.memoryEnabled.collectAsState()
+    val currentSession by vm.currentSession.collectAsState()
+    val messages by vm.messages.collectAsState()
+    val streaming by vm.streaming.collectAsState()
+
+    var showPicker by remember { mutableStateOf(false) }
+
+    // 进面板刷新一次 personas/list（DSH 侧无推送事件，触发时机归 UI 层，喵~）
+    LaunchedEffect(Unit) { vm.refreshPersonas() }
+
+    // 当前会话锁定的角色（优先）；未开会话时显示默认角色
+    val boundPersonaId = currentSession?.personaId?.takeIf { it.isNotBlank() } ?: defaultPersonaId
+    val boundName = personaCatalog.firstOrNull { it.id == boundPersonaId }?.name ?: boundPersonaId
+
     Column(modifier.verticalScroll(rememberScrollState())) {
-        AppSectionHeader("记忆 / 角色")
-
-        // 当前角色（唯一；占位结构，数据源接口留空待角色目录落地）
-        RoleCard(
-            name = "喵喵老师",
-            description = "陪你学习的猫娘老师，耐心又温柔喵~",
-            isCurrent = true,
-        )
-
-        // 记忆功能占位（延后三期：memory 文件与注入开关本版不做，plan-standard-mode §2.7）
-        Spacer(Modifier.height(10.dp))
+        AppSectionHeader("角色设定")
         Text(
-            text = "记忆功能即将上线，敬请期待喵~",
+            text = "两个开关与会话绑定，首条消息后锁定喵~",
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-            modifier = Modifier.padding(start = 20.dp, top = 2.dp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 20.dp, top = 2.dp, bottom = 4.dp),
         )
+
+        // 角色开关
+        SwitchRow(
+            title = "角色",
+            subtitle = if (personaEnabled) "注入 <soul> + <user> 人格设定" else "不注入任何人格内容",
+            checked = personaEnabled,
+            onCheckedChange = vm::setPersonaEnabled,
+        )
+        // 记忆开关
+        SwitchRow(
+            title = "记忆",
+            subtitle = if (memoryEnabled) "注入 <facts> + 存储契约，并挂 memory 工具" else "不注入事实、无 memory 工具",
+            checked = memoryEnabled,
+            onCheckedChange = vm::setMemoryEnabled,
+        )
+
+        Spacer(Modifier.height(6.dp))
+
+        // 当前角色名 + 选择器入口（角色开关 OFF → 灰掉不可点）
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = if (personaEnabled) boundName.ifBlank { "未选择角色" } else "（角色已关闭）",
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = when {
+                        !personaEnabled -> "开关打开后可选择角色"
+                        currentSession != null && messages.isNotEmpty() -> "当前会话已锁定该角色"
+                        else -> "新会话默认使用"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                )
+            }
+            OutlinedButton(
+                onClick = { showPicker = true },
+                enabled = personaEnabled,
+            ) { Text("选择角色") }
+        }
         Spacer(Modifier.height(8.dp))
+    }
+
+    if (showPicker) {
+        // 会话已有消息（或在生成）→ 选择器只读：显示锁定角色但不可切（§3.4）
+        val locked = currentSession != null && (messages.isNotEmpty() || streaming != null)
+        PersonaPickerDialog(
+            personas = personaCatalog,
+            selectedId = boundPersonaId.takeIf { it.isNotBlank() },
+            locked = locked,
+            onDismiss = { showPicker = false },
+            onSelect = { id ->
+                vm.selectDefaultPersona(id)
+                showPicker = false
+            },
+            onCreate = vm::createPersona,
+            onDelete = vm::deletePersona,
+            onReorder = vm::reorderPersonas,
+        )
     }
 }
 
-/** 角色卡片：头像 + 名称 + 一句话说明 + 「当前角色」徽标（唯一角色不可切换） */
+/** 开关行（标题 + 副注 + 右侧 Switch），两开关各占一行（§3.1） */
 @Composable
-private fun RoleCard(
-    name: String,
-    description: String,
-    isCurrent: Boolean,
-) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // 头像位（圆形容器 + 图标；后续角色目录落地可换成真实头像文件）
-            Box(
-                modifier = Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Filled.School,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp),
-                )
-            }
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = name,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            if (isCurrent) {
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                ) {
-                    Text(
-                        text = "当前角色",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    )
-                }
-            }
+        Column(Modifier.weight(1f)) {
+            Text(text = title, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }

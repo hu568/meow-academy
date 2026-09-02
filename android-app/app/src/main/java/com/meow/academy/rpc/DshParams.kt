@@ -48,8 +48,10 @@ object DshParams {
      * session/prompt：入队一条用户消息（纯文本版，兼容旧调用）。
      * presetId / cwd 随参数顶层携带（plan-standard-mode §3.4）：会话未建时定死归属（Agent 预设 + 工作区），
      * 会话已存在时服务端忽略（以日志为唯一事实源），多传无害。
+     * personaId / personaEnabled / memoryEnabled（plan-memory-execution §1.6）：首条消息定死角色配置。
      */
-    fun prompt(sessionId: String, text: String, presetId: String? = null, cwd: String? = null): JsonObject = buildJsonObject {
+    fun prompt(sessionId: String, text: String, presetId: String? = null, cwd: String? = null,
+               personaId: String? = null, personaEnabled: Boolean? = null, memoryEnabled: Boolean? = null): JsonObject = buildJsonObject {
         put("sessionId", sessionId)
         put("contentBlocks", buildJsonArray {
             add(buildJsonObject {
@@ -59,13 +61,17 @@ object DshParams {
         })
         if (presetId != null) put("presetId", presetId)
         if (cwd != null) put("cwd", cwd)
+        if (personaId != null) put("personaId", personaId)
+        if (personaEnabled != null) put("personaEnabled", personaEnabled)
+        if (memoryEnabled != null) put("memoryEnabled", memoryEnabled)
     }
 
     /**
      * session/prompt：入队一条用户消息（contentBlocks 支持 text + image 混合块）。
-     * presetId / cwd 同纯文本版（§3.4）。
+     * presetId / cwd 同纯文本版（§3.4）；personaId / 开关同纯文本版（plan-memory-execution §1.6）。
      */
-    fun prompt(sessionId: String, blocks: List<ContentBlock>, presetId: String? = null, cwd: String? = null): JsonObject = buildJsonObject {
+    fun prompt(sessionId: String, blocks: List<ContentBlock>, presetId: String? = null, cwd: String? = null,
+               personaId: String? = null, personaEnabled: Boolean? = null, memoryEnabled: Boolean? = null): JsonObject = buildJsonObject {
         put("sessionId", sessionId)
         put("contentBlocks", buildJsonArray {
             blocks.forEach { block ->
@@ -78,6 +84,9 @@ object DshParams {
         })
         if (presetId != null) put("presetId", presetId)
         if (cwd != null) put("cwd", cwd)
+        if (personaId != null) put("personaId", personaId)
+        if (personaEnabled != null) put("personaEnabled", personaEnabled)
+        if (memoryEnabled != null) put("memoryEnabled", memoryEnabled)
     }
 
     /** session/attachImages：canonical base64 图片批 → 附件服务规范化入库 → durable refs */
@@ -142,6 +151,16 @@ object DshParams {
     /** presets/delete：删自定义预设（仅 trust=user 可删；内置预设服务端抛 PRESET_IMMUTABLE） */
     fun presetsDelete(id: String): JsonObject = buildJsonObject {
         put("id", id)
+    }
+
+    // ── 角色库（plan-memory-execution §1.7/§1.8） ──
+
+    /** personas/list：列角色库（自动扫描接口，请求为空对象） */
+    fun personasList(): JsonObject = buildJsonObject { }
+
+    /** personas/reorder：角色拖拽排序持久化（order = 完整角色 id 顺序；服务端过滤不存在 id） */
+    fun personasReorder(order: List<String>): JsonObject = buildJsonObject {
+        put("order", buildJsonArray { order.forEach { add(JsonPrimitive(it)) } })
     }
 
     /**

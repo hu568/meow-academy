@@ -58,6 +58,12 @@ class SettingsRepository(private val context: Context) {
         val WORKSPACE_PATH = stringPreferencesKey("workspace_path")
         // 会话抽屉显示过滤（"all" 全部会话 / "workspace" 当前工作区会话，默认 all）
         val SESSION_FILTER = stringPreferencesKey("session_filter")
+        // 新会话默认角色 id（plan-memory-execution §3.1；null/空 = 角色开关 OFF 时不绑定，默认 "default"）
+        val DEFAULT_PERSONA_ID = stringPreferencesKey("default_persona_id")
+        // 新会话默认角色开关（默认 ON）
+        val PERSONA_ENABLED = booleanPreferencesKey("persona_enabled")
+        // 新会话默认记忆开关（默认 ON）
+        val MEMORY_ENABLED = booleanPreferencesKey("memory_enabled")
     }
 
     val themeMode: Flow<ThemeMode> = context.settingsDataStore.data.map { prefs ->
@@ -269,5 +275,37 @@ class SettingsRepository(private val context: Context) {
     /** 设置会话抽屉显示过滤（"all" / "workspace"） */
     suspend fun setSessionFilter(mode: String) {
         context.settingsDataStore.edit { it[Keys.SESSION_FILTER] = mode }
+    }
+
+    // ── 角色设定（新会话默认，plan-memory-execution §3.1） ──
+
+    /** 新会话默认角色 id（默认 "default"；空串 = 角色开关 OFF 时不绑定） */
+    val defaultPersonaId: Flow<String> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.DEFAULT_PERSONA_ID] ?: "default"
+    }
+
+    /** 新会话默认角色开关（默认 ON） */
+    val personaEnabled: Flow<Boolean> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.PERSONA_ENABLED] ?: true
+    }
+
+    /** 新会话默认记忆开关（默认 ON） */
+    val memoryEnabled: Flow<Boolean> = context.settingsDataStore.data.map { prefs ->
+        prefs[Keys.MEMORY_ENABLED] ?: true
+    }
+
+    /** 设置新会话默认角色 id */
+    suspend fun setDefaultPersonaId(id: String?) {
+        context.settingsDataStore.edit { it[Keys.DEFAULT_PERSONA_ID] = id ?: "" }
+    }
+
+    /** 设置新会话默认角色开关 */
+    suspend fun setPersonaEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { it[Keys.PERSONA_ENABLED] = enabled }
+    }
+
+    /** 设置新会话默认记忆开关 */
+    suspend fun setMemoryEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { it[Keys.MEMORY_ENABLED] = enabled }
     }
 }

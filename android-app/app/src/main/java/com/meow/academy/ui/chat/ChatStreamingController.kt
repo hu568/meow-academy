@@ -274,18 +274,32 @@ class ChatStreamingController(
                 val blocks = buildContentBlocks(promptText, attachments, rpc, modelController)
                 // 会话归属随行（Room 行缓冲，plan-standard-mode §3.4）：每条 prompt 都携带
                 // presetId/cwd，服务端对非空白会话忽略，多传无害；首条消息定死归属。
+                // personaId + 两开关同理随每条请求携带（plan-memory-execution §2.3）：
+                // Room 行是唯一事实源，冷 resume 后 DSH 侧重建常驻 Map 全靠它。
                 val sessionRow = dao.getSession(roomSessionId)
                 val rowPresetId = sessionRow?.presetId
                 val rowCwd = sessionRow?.workspacePath
+                val rowPersonaId = sessionRow?.personaId
+                val rowPersonaEnabled = sessionRow?.personaEnabled
+                val rowMemoryEnabled = sessionRow?.memoryEnabled
                 val response = if (blocks != null) {
-                    rpc.prompt(dshSessionId, blocks, presetId = rowPresetId, cwd = rowCwd, timeoutMs = 15_000)
+                    rpc.prompt(
+                        dshSessionId, blocks,
+                        presetId = rowPresetId, cwd = rowCwd,
+                        personaId = rowPersonaId,
+                        personaEnabled = rowPersonaEnabled,
+                        memoryEnabled = rowMemoryEnabled,
+                        timeoutMs = 15_000,
+                    )
                 } else {
                     // 图片上传/attach 失败 → 回退 Markdown 文本方式（模型看不到图但不丢消息）
                     rpc.prompt(
                         dshSessionId,
                         buildMessageWithAttachments(promptText, attachments),
-                        presetId = rowPresetId,
-                        cwd = rowCwd,
+                        presetId = rowPresetId, cwd = rowCwd,
+                        personaId = rowPersonaId,
+                        personaEnabled = rowPersonaEnabled,
+                        memoryEnabled = rowMemoryEnabled,
                         timeoutMs = 15_000,
                     )
                 }

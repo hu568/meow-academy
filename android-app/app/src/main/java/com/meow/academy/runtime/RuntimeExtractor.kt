@@ -61,11 +61,17 @@ object RuntimeExtractor {
     /** 长期记忆目录（.agents 下） */
     const val AGENTS_MEMORY_DIR = ".agents/memory"
 
-    /** 灵魂文件（.agents/memory 下，人物设定唯一定义处，plan-soul.md） */
+    /** 角色库目录（.agents 下，plan-soul 灵魂迁移后角色设定唯一定义处） */
+    const val AGENTS_PERSONAS_DIR = ".agents/personas"
+
+    /** 灵魂文件名（角色目录内为人格定义处；.agents/memory 下的同名文件是**存量旧位置**） */
     const val SOUL_FILE = "SOUL.md"
 
-    /** assets 里灵魂文件的播种源（assets 无前导点目录，目标在 .agents/memory/） */
-    private const val SOUL_ASSET = "agents/memory/$SOUL_FILE"
+    /** 角色目录名（personas 下的默认角色子目录） */
+    const val DEFAULT_PERSONA_DIR = "default"
+
+    /** assets 里角色库的播种源（.agents/personas/ 整目录） */
+    private const val PERSONAS_ASSET = "agents/personas"
 
     /**
      * 解压 [ASSET_NAME] 到 filesDir/[RUNTIME_DIR]。
@@ -216,28 +222,90 @@ object RuntimeExtractor {
             File(filesDir, AGENTS_PLUGINS_DIR),
             File(filesDir, AGENTS_SKILLS_DIR),
             File(filesDir, AGENTS_MEMORY_DIR),
+            File(filesDir, AGENTS_PERSONAS_DIR),
         )
         dirs.forEach { it.mkdirs() }
-        // 灵魂文件播种：缺则播种、永不覆盖（用户/AI 所有，基座 persona 经 {{soul}} 实时读取）
-        seedSoulIfNeeded(context)
+        // 角色库播种：README.md + skills/ + 内置 default 角色缺则播种、永不覆盖（用户/AI 可改）
+        seedPersonasIfNeeded(context)
+        // 存量迁移：老版本（0.2.7 及之前）写在 .agents/memory/SOUL.md 的人格 → 迁进 default 角色
+        // 顺序敏感——必须在 seedPersonasIfNeeded 之后（default/ 空白模板先就位，§5.1）
+        migrateLegacySoulIfNeeded(context)
         Log.d(TAG, "ensureAppDirs ok")
     }
 
     /**
-     * 灵魂文件播种：assets agents/memory/SOUL.md → filesDir/.agents/memory/SOUL.md。
+     * 存量人格迁移（plan-memory-execution §5.1）。
      *
-     * 只在目标缺失时复制（永不覆盖——SOUL.md 归用户/AI 所有，是人格的唯一定义处，
-     * 改坏由编辑者自己负责）；assets 未带该文件（老 APK）则静默跳过。
-     * 调用点随 [ensureAppDirs] 三保险，均早于 DSH 进程读取 {{soul}} 变量。
+     * 老版本把人物设定写在 `.agents/memory/SOUL.md`（经基座 persona 的 {{soul}} 实时注入）；
+     * 记忆系统落地后人格归 `.agents/personas/default/SOUL.md`。本函数只做路径拼装与日志，
+     * 实际搬迁逻辑在纯文件版 [migrateLegacySoul]（可 JVM 单测）。
+     *
+     * 调用点随 [ensureAppDirs] 三保险，且必须在 seedPersonasIfNeeded 之后
+     * （default/ 空白模板先就位，§5.1）；均早于 DSH 进程首次组装提示词。
      */
-    private fun seedSoulIfNeeded(context: Context) {
+    private fun migrateLegacySoulIfNeeded(context: Context) {
         runCatching {
-            val target = File(agentsMemoryDir(context), SOUL_FILE)
-            if (target.exists()) return
-            copyAssetFile(context, SOUL_ASSET, target)
-            Log.i(TAG, "SOUL.md 已播种 -> ${target.absolutePath}")
+            val legacy = File(agentsMemoryDir(context), SOUL_FILE)
+            val target = File(File(agentsPersonasDir(context), DEFAULT_PERSONA_DIR), SOUL_FILE)
+            val backup = File(legacy.parentFile, "$SOUL_FILE.bak")
+            when (migrateLegacySoul(legacy, target, backup)) {
+                SoulMigration.NO_LEGACY -> Unit
+                SoulMigration.MIGRATED -> Log.i(TAG, "存量人格已迁移 ${legacy.absolutePath} -> ${target.absolutePath}")
+                SoulMigration.TARGET_OCCUPIED -> Log.i(TAG, "default/SOUL.md 已填写，保留目标、仅备份旧文件")
+                SoulMigration.BACKED_UP_ONLY -> Log.i(TAG, "存量 SOUL.md 是空白模板，仅备份不迁移")
+            }
         }.onFailure {
-            Log.w(TAG, "SOUL.md 播种失败: ${it.message}")
+            Log.w(TAG, "存量 SOUL.md 迁移失败: ${it.message}")
+        }
+    }
+
+    /**
+     * 是否有实质文字（与 DSH 侧 meow-jsonrpc 的 hasSubstantiveContent 同规则）：
+     * 去掉 HTML 注释块与 markdown 注释行后仍有内容才算。空白模板 = 只有注释 → false。
+     */
+    internal fun hasSubstantiveContent(text: String): Boolean =
+        text.replace(Regex("<!--[\\s\\S]*?-->"), "")
+            .lines()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") }
+            .joinToString(" ")
+            .isNotBlank()
+
+    /**
+     * 角色库播种：assets `agents/personas/` → `filesDir/.agents/personas/`。
+     *
+     * 按子项分别判断「缺则播种、永不覆盖」：
+     * - README.md / skills/：目标缺失才复制（永不覆盖——用户/AI 可改坏自担）；
+     * - 内置角色 `default/`：单独判断 `default/persona.yml` 是否存在，
+     *   不存在才复制（确保升级后新增的默认角色能补种，不被 README 存在的整树跳过）。
+     * assets 未带该目录（老 APK）则静默跳过。
+     */
+    private fun seedPersonasIfNeeded(context: Context) {
+        runCatching {
+            val assetsChildren = context.assets.list(PERSONAS_ASSET) ?: return
+            if (assetsChildren.isEmpty()) return
+            val targetDir = agentsPersonasDir(context)
+            targetDir.mkdirs()
+
+            // 1) README.md：缺则播种
+            val readme = File(targetDir, "README.md")
+            if (!readme.exists()) copyAssetFile(context, "$PERSONAS_ASSET/README.md", readme)
+
+            // 2) skills/：目录缺失才整树复制
+            val skillsTarget = File(targetDir, "skills")
+            if (!skillsTarget.exists()) {
+                copyAssetTree(context, "$PERSONAS_ASSET/skills", skillsTarget)
+            }
+
+            // 3) 内置默认角色 default/：persona.yml 缺失才复制（补种升级场景）
+            val defaultTarget = File(targetDir, "default")
+            if (!File(defaultTarget, "persona.yml").exists()) {
+                copyAssetTree(context, "$PERSONAS_ASSET/default", defaultTarget)
+            }
+
+            Log.i(TAG, "personas 角色库播种检查完成 -> ${targetDir.absolutePath}")
+        }.onFailure {
+            Log.w(TAG, "personas 角色库播种失败: ${it.message}")
         }
     }
 
@@ -331,8 +399,56 @@ object RuntimeExtractor {
     /** .agents/memory（长期记忆） */
     fun agentsMemoryDir(context: Context): File = File(context.filesDir, AGENTS_MEMORY_DIR)
 
+    /** .agents/personas（角色库） */
+    fun agentsPersonasDir(context: Context): File = File(context.filesDir, AGENTS_PERSONAS_DIR)
+
     private const val DSH_PRESETS_ASSET = "dsh-presets"
 
     /** dsh-presets 的同步 token 文件（放在播种目录内，与 config-defaults 同款约定） */
     private const val SYNC_TOKEN_FILE = ".sync-token"
+
+    /** 存量人格迁移的结果（日志分支与 JVM 单测断言共用） */
+    internal enum class SoulMigration {
+        /** 旧位置无 SOUL.md（新装用户 / 已迁移过）→ 未做任何事 */
+        NO_LEGACY,
+
+        /** 旧文件有实质内容且 default/SOUL.md 仍是空白模板 → 已迁入并备份 */
+        MIGRATED,
+
+        /** default/SOUL.md 已被用户/AI 填写 → 保留目标内容，只备份旧文件（不冲掉） */
+        TARGET_OCCUPIED,
+
+        /** 旧文件本身是空白模板 → 不迁移，只备份 */
+        BACKED_UP_ONLY,
+    }
+
+    /**
+     * 纯文件版存量人格迁移（只依赖 [File]，不需要 Context，故可 JVM 单测）。
+     *
+     * 规则见 [migrateLegacySoulIfNeeded] 的文档。备份一律落在与旧文件同目录的
+     * `SOUL.md.bak`；改名失败时退化为「复制 + 删除」，两条路径都保证旧位置不再留 SOUL.md
+     * （幂等：二次调用走 NO_LEGACY）。
+     */
+    internal fun migrateLegacySoul(legacy: File, target: File, backup: File): SoulMigration {
+        if (!legacy.exists()) return SoulMigration.NO_LEGACY
+        val legacyText = runCatching { legacy.readText() }.getOrNull() ?: ""
+        val targetText = runCatching { target.readText() }.getOrNull() ?: ""
+        val outcome = when {
+            hasSubstantiveContent(legacyText) && !hasSubstantiveContent(targetText) -> {
+                target.parentFile?.mkdirs()
+                target.writeText(legacyText)
+                SoulMigration.MIGRATED
+            }
+            hasSubstantiveContent(targetText) -> SoulMigration.TARGET_OCCUPIED
+            else -> SoulMigration.BACKED_UP_ONLY
+        }
+        // renameTo 目标是已存在的普通文件时覆盖（重复迁移也幂等）；失败退化为复制+删除
+        if (!legacy.renameTo(backup)) {
+            runCatching {
+                legacy.copyTo(backup, overwrite = true)
+                legacy.delete()
+            }
+        }
+        return outcome
+    }
 }

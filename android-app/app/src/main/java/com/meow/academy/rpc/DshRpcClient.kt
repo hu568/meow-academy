@@ -153,14 +153,22 @@ class DshRpcClient(
      * 返回原始响应帧（原 Boolean 版丢弃了 error 载荷）：null = 超时/断管；
      * error 非空 = 受理失败，载荷（PRESET_UNKNOWN / PRESET_MOUNT_FAILED 等）可透传给气泡。
      * presetId / cwd 随首条消息定死会话归属（§3.4），会话已存在时服务端忽略。
+     * personaId / personaEnabled / memoryEnabled（plan-memory-execution §1.6）：首条消息定死角色配置。
      */
     suspend fun prompt(
         sessionId: String,
         text: String,
         presetId: String? = null,
         cwd: String? = null,
+        personaId: String? = null,
+        personaEnabled: Boolean? = null,
+        memoryEnabled: Boolean? = null,
         timeoutMs: Long = 15_000,
-    ): DshResponse? = request("session/prompt", DshParams.prompt(sessionId, text, presetId, cwd), timeoutMs)
+    ): DshResponse? = request(
+        "session/prompt",
+        DshParams.prompt(sessionId, text, presetId, cwd, personaId, personaEnabled, memoryEnabled),
+        timeoutMs,
+    )
 
     /** session/prompt：入队一条带 contentBlocks 的消息（text + image 混合，图片块用 attachImages 返回的 durable ref） */
     suspend fun prompt(
@@ -168,8 +176,15 @@ class DshRpcClient(
         blocks: List<DshParams.ContentBlock>,
         presetId: String? = null,
         cwd: String? = null,
+        personaId: String? = null,
+        personaEnabled: Boolean? = null,
+        memoryEnabled: Boolean? = null,
         timeoutMs: Long = 15_000,
-    ): DshResponse? = request("session/prompt", DshParams.prompt(sessionId, blocks, presetId, cwd), timeoutMs)
+    ): DshResponse? = request(
+        "session/prompt",
+        DshParams.prompt(sessionId, blocks, presetId, cwd, personaId, personaEnabled, memoryEnabled),
+        timeoutMs,
+    )
 
     /**
      * session/attachImages：canonical base64 图片批 → durable refs。
@@ -280,6 +295,16 @@ class DshRpcClient(
     /** presets/delete：删自定义预设（仅 trust=user；内置预设 error=PRESET_IMMUTABLE） */
     suspend fun presetsDelete(id: String, timeoutMs: Long = 15_000): Boolean =
         requestOk("presets/delete", DshParams.presetsDelete(id), timeoutMs)
+
+    // ── 角色库（plan-memory-execution §1.7/§1.8） ──
+
+    /** personas/list：列角色库（自动扫描 .agents/personas/；result.personas 数组） */
+    suspend fun personasList(timeoutMs: Long = 15_000): JsonObject? =
+        request("personas/list", DshParams.personasList(), timeoutMs)?.result
+
+    /** personas/reorder：持久化角色拖拽排序（result 回带过滤后的 order 数组） */
+    suspend fun personasReorder(order: List<String>, timeoutMs: Long = 15_000): JsonObject? =
+        request("personas/reorder", DshParams.personasReorder(order), timeoutMs)?.result
 
     /**
      * session/command：程序化执行斜杠命令（附加模式胶囊的执行通道，禁止把 /plan 当消息发）。

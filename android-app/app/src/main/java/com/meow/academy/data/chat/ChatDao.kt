@@ -28,9 +28,21 @@ interface ChatDao {
     @Query("UPDATE sessions SET title = :title, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateSessionTitle(id: Long, title: String, updatedAt: Long = System.currentTimeMillis())
 
+    /**
+     * 更新会话的角色绑定与两个开关（plan-memory-execution §3.2）。
+     * 仅用于「空会话首条消息前可自由切换」：有消息的会话由 UI 层拦住不调用，
+     * 且 DSH 侧首条定死，真发出去了改了也不生效（只 warn 忽略）。
+     */
+    @Query("UPDATE sessions SET personaId = :personaId, personaEnabled = :personaEnabled, memoryEnabled = :memoryEnabled WHERE id = :id")
+    suspend fun updateSessionPersona(id: Long, personaId: String?, personaEnabled: Boolean, memoryEnabled: Boolean)
+
     /** 取某会话的第一条用户消息（自动生成标题用） */
     @Query("SELECT * FROM messages WHERE sessionId = :sessionId AND role = 'USER' ORDER BY createdAt ASC, id ASC LIMIT 1")
     suspend fun getFirstUserMessage(sessionId: Long): MessageEntity?
+
+    /** 会话消息条数（判断「空会话」：角色/开关只在首条消息前可改，plan-memory-execution §3.2） */
+    @Query("SELECT COUNT(*) FROM messages WHERE sessionId = :sessionId")
+    suspend fun countMessages(sessionId: Long): Int
 
     /** 取尚未自动生成标题的会话（title 为「新会话」的会话） */
     @Query("SELECT * FROM sessions WHERE title = :title")

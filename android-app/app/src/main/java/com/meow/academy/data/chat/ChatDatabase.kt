@@ -28,7 +28,7 @@ class Converters {
 /** 聊天数据库（M2.4：会话 + 消息两表，先做到存得下读得出） */
 @Database(
     entities = [SessionEntity::class, MessageEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -57,6 +57,19 @@ abstract class ChatDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v3 → v4（plan-memory-execution §2.1）：sessions 新增 personaId / personaEnabled /
+         * memoryEnabled 三列。personaId 可选（角色开关 OFF 时不绑定）；两开关默认 ON。
+         * 存量会话升级后：personaId=null（按回退链走默认角色），开关 ON。
+         */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sessions ADD COLUMN personaId TEXT")
+                db.execSQL("ALTER TABLE sessions ADD COLUMN personaEnabled INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE sessions ADD COLUMN memoryEnabled INTEGER NOT NULL DEFAULT 1")
+            }
+        }
+
         @Volatile
         private var instance: ChatDatabase? = null
 
@@ -76,6 +89,7 @@ abstract class ChatDatabase : RoomDatabase() {
                                 RuntimeExtractor.WORKSPACE_DIR,
                             ).absolutePath,
                         ),
+                        MIGRATION_3_4,
                     )
                     .build().also { instance = it }
             }

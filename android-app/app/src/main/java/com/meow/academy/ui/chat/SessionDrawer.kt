@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.meow.academy.data.chat.SessionEntity
+import com.meow.academy.data.model.PersonaEntry
 import com.meow.academy.data.model.PresetEntry
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -55,6 +56,7 @@ fun SessionDrawer(
     sessionFilter: String,                    // 注入：过滤档（"all"/"workspace"）
     defaultWorkspacePath: String,             // 注入：当前工作区路径
     presetCatalog: List<PresetEntry>,         // 注入：预设目录（元信息行预设名用）
+    personaCatalog: List<PersonaEntry>,       // 注入：角色目录（标题上方角色名小标签，§3.3）
     onFilterChange: (String) -> Unit,         // 注入：切换过滤档（原 chatVm.setSessionFilter）
     onOpen: (Long) -> Unit,
     onNew: () -> Unit,
@@ -103,7 +105,7 @@ fun SessionDrawer(
                 sessions = filteredSessions, hasAnySession = sessions.isNotEmpty(),
                 currentId = currentId, selectionMode = selectionMode, selectedIds = selectedIds,
                 sessionFilter = sessionFilter, defaultWorkspacePath = defaultWorkspacePath,
-                presetCatalog = presetCatalog, filesDirPath = filesDirPath,
+                presetCatalog = presetCatalog, personaCatalog = personaCatalog, filesDirPath = filesDirPath,
                 onTap = { id -> if (selectionMode) toggleSelected(id) else onOpen(id) },
                 onSwipeRightTrigger = { id ->
                     if (!selectionMode) { selectionMode = true; selectedIds = setOf(id) }

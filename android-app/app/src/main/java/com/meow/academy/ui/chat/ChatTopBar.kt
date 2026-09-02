@@ -30,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
+import com.meow.academy.data.model.PersonaEntry
 import com.meow.academy.data.model.PresetEntry
 
 /**
@@ -48,6 +49,8 @@ fun ChatTopBar(
     currentPresetId: String?,
     defaultPreset: String,
     presetCatalog: List<PresetEntry>,
+    /** 当前会话锁定的角色显示名（plan-memory-execution §3.4：只读展示，空串 = 角色开关 OFF / 未绑定） */
+    personaName: String,
     filesDirPath: String,
     onRename: (Long, String) -> Unit,
     onOpenDrawer: () -> Unit,
@@ -55,11 +58,18 @@ fun ChatTopBar(
     onNewSession: () -> Unit,
 ) {
     // 顶栏小字：工作区短名 · Agent 预设显示名（§5.10；数据源 = 当前会话，未打开回退全局默认）
-    val contextLine = remember(workspacePath, defaultWorkspacePath, currentPresetId, defaultPreset, presetCatalog, filesDirPath) {
+    // 角色名追加在末尾（plan-memory-execution §3.4：会话页只读显示当前角色，不可切）
+    val contextLine = remember(
+        workspacePath, defaultWorkspacePath, currentPresetId, defaultPreset, presetCatalog, personaName, filesDirPath,
+    ) {
         buildString {
             append(topbarWorkspaceShortName(workspacePath ?: defaultWorkspacePath, filesDirPath))
             append(" · ")
             append(presetDisplayName(currentPresetId ?: defaultPreset.takeIf { it.isNotBlank() }, presetCatalog))
+            if (personaName.isNotBlank()) {
+                append(" · ")
+                append(personaName)
+            }
         }
     }
 
@@ -152,6 +162,17 @@ fun ChatTopBar(
 internal fun presetDisplayName(presetId: String?, catalog: List<PresetEntry>): String {
     if (presetId.isNullOrBlank()) return "默认"
     return catalog.firstOrNull { it.id == presetId }?.name ?: presetId
+}
+
+/**
+ * 角色显示名（plan-memory-execution §3.3/§3.4）：personaCatalog 缓存查 name。
+ * - personaId 空 / 角色开关 OFF → 空串（不显示，调用方据此跳过分隔符）；
+ * - 目录里查不到（角色文件夹被删）→「（已删除角色）」——注入内容仍按快照继续（快照价值所在）。
+ */
+internal fun personaDisplayName(personaId: String?, catalog: List<PersonaEntry>): String {
+    if (personaId.isNullOrBlank()) return ""
+    return catalog.firstOrNull { it.id == personaId }?.name?.takeIf { it.isNotBlank() }
+        ?: "（已删除角色）"
 }
 
 /**
