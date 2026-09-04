@@ -53,6 +53,7 @@ data class FilesUiState(
     val error: String? = null,
     val externalAvailable: Boolean = true,      // getExternalFilesDir 是否为 null
     val snackbarMessage: String? = null,        // 操作反馈（UI 消费后调 consumeSnackbar()）
+    val shareFiles: List<File>? = null,         // 📤 待分享文件（UI 消费后调 consumeShare()；非空即触发分享面板）
 )
 
 /**
@@ -510,6 +511,39 @@ class FilesViewModel @JvmOverloads constructor(
             showSnackbar(if (success > 0) "已导入 $success 个文件" else "导入失败")
         }
     }
+
+    // ── 分享（导出） ──
+
+    /**
+     * 📤 分享/导出选中项（喵~）：单文件直发原文件；多选/目录先 [FileRepository.zipForShare]
+     * 打包成 zip。产物放入 [FilesUiState.shareFiles]，由 UI 层监听后经 [FileShare] 拉起系统分享面板。
+     * 打包是 IO 操作，放协程里跑，不阻塞主线程。
+     */
+    fun sharePaths(paths: List<String>) {
+        if (paths.isEmpty()) {
+            showSnackbar("请先选择要分享的文件")
+            return
+        }
+        viewModelScope.launch {
+            val files = withContext(Dispatchers.IO) {
+                val list = paths.map(::File)
+                when {
+                    // 单个普通文件：直发原文件（保留原名与类型，接收方能直接打开）
+                    list.size == 1 && list[0].isFile -> list
+                    // 其余（多选 / 含目录）：打包成单个 zip 再分享
+                    else -> repository.zipForShare(paths)?.let(::listOf) ?: emptyList()
+                }
+            }
+            if (files.isEmpty()) {
+                showSnackbar("分享失败：无法打包所选内容")
+            } else {
+                _uiState.update { it.copy(shareFiles = files) }
+            }
+        }
+    }
+
+    /** 消费待分享文件（UI 拉起分享面板后调用，置空） */
+    fun consumeShare() = _uiState.update { it.copy(shareFiles = null) }
 
     // ── 搜索 ──
 

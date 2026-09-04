@@ -318,10 +318,11 @@ fun SortMenu(
     }
 }
 
-/** 底部批量操作栏（多选态）：复制 / 移动 / 删除 / 取消 */
+/** 底部批量操作栏（多选态）：分享 / 复制 / 移动 / 删除 / 取消 */
 @Composable
 fun MultiSelectBar(
     count: Int,
+    onShare: () -> Unit,
     onCopy: () -> Unit,
     onMove: () -> Unit,
     onDelete: () -> Unit,
@@ -335,6 +336,7 @@ fun MultiSelectBar(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text("已选 $count 项", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+        TextButton(onClick = onShare, enabled = count > 0) { Text("分享") }
         TextButton(onClick = onCopy, enabled = count > 0) { Text("复制") }
         TextButton(onClick = onMove, enabled = count > 0) { Text("移动") }
         TextButton(onClick = onDelete, enabled = count > 0) { Text("删除") }

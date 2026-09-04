@@ -112,6 +112,14 @@ fun FilesScreen(
         }
     }
 
+    // 📤 待分享文件：打包完成（单文件直发 / 多选·目录已压 zip）→ 拉起系统分享面板（喵~）
+    LaunchedEffect(state.shareFiles) {
+        state.shareFiles?.let { files ->
+            FileShare.startShare(context, files)?.let { snackbarHostState.showSnackbar(it) }
+            vm.consumeShare()
+        }
+    }
+
     // 系统返回键：搜索 → 多选 → 上级目录
     BackHandler {
         when {
@@ -200,6 +208,7 @@ fun FilesScreen(
             if (state.isMultiSelect && !searchActive) {
                 MultiSelectBar(
                     count = state.selection.size,
+                    onShare = { vm.sharePaths(state.selection.toList()) },
                     onCopy = { targetMode = TargetMode.COPY },
                     onMove = { targetMode = TargetMode.MOVE },
                     onDelete = { showBatchDelete = true },
@@ -367,6 +376,7 @@ fun FilesScreen(
             entry = target,
             favorited = target.path in state.favoritePaths,
             onToggleFavorite = { vm.toggleFavorite(target.path) },
+            onShare = { vm.sharePaths(listOf(target.path)) },
             onCopy = {
                 singleOpPath = target.path
                 targetMode = TargetMode.COPY

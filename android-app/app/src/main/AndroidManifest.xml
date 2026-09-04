@@ -36,6 +36,22 @@
             android:name=".runtime.DshRuntimeService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!--
+          📤 文件分享（导出）：App 私有目录里的文件不能直接用 file:// 交给外部 App
+          （Android 7+ 会抛 FileUriExposedException），必须经 FileProvider 换成
+          content:// 并临时授权（FLAG_GRANT_READ_URI_PERMISSION）。
+          路径范围见 res/xml/file_paths.xml（只覆盖文件管理页两个浏览根 + 分享临时 zip 目录）。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
 </manifest>

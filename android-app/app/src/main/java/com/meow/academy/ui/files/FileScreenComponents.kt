@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -17,6 +18,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.outlined.Close
@@ -191,6 +193,7 @@ fun FileEntryMenuDialog(
     entry: FileEntry,
     favorited: Boolean,
     onToggleFavorite: () -> Unit,
+    onShare: () -> Unit,
     onCopy: () -> Unit,
     onMove: () -> Unit,
     onEnterMultiSelect: () -> Unit,
@@ -202,7 +205,7 @@ fun FileEntryMenuDialog(
         onDismissRequest = onDismiss,
         title = { Text(entry.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         text = {
-            // 双列宫格菜单：图标在左、名称在右，两列等宽；删除红显警示（喵~）
+            // 双列宫格菜单：图标在左、名称在右，两列等宽；分享/删除红显警示（喵~）
             Column {
                 Row(Modifier.fillMaxWidth()) {
                     MenuActionCell(
@@ -213,26 +216,32 @@ fun FileEntryMenuDialog(
                         onDismiss()
                         onToggleFavorite()
                     }
+                    MenuActionCell(label = "分享", icon = Icons.Filled.Share, modifier = Modifier.weight(1f)) {
+                        onDismiss()
+                        onShare()
+                    }
+                }
+                Row(Modifier.fillMaxWidth()) {
                     MenuActionCell(label = "复制", icon = Icons.Filled.ContentCopy, modifier = Modifier.weight(1f)) {
                         onDismiss()
                         onCopy()
                     }
-                }
-                Row(Modifier.fillMaxWidth()) {
                     MenuActionCell(label = "移动", icon = Icons.AutoMirrored.Filled.DriveFileMove, modifier = Modifier.weight(1f)) {
                         onDismiss()
                         onMove()
                     }
+                }
+                Row(Modifier.fillMaxWidth()) {
                     MenuActionCell(label = "多选", icon = Icons.Filled.Checklist, modifier = Modifier.weight(1f)) {
                         onDismiss()
                         onEnterMultiSelect()
                     }
-                }
-                Row(Modifier.fillMaxWidth()) {
                     MenuActionCell(label = "重命名", icon = Icons.Filled.Edit, modifier = Modifier.weight(1f)) {
                         onDismiss()
                         onRename()
                     }
+                }
+                Row(Modifier.fillMaxWidth()) {
                     MenuActionCell(
                         label = "删除",
                         icon = Icons.Filled.Delete,
@@ -242,6 +251,8 @@ fun FileEntryMenuDialog(
                         onDismiss()
                         onDelete()
                     }
+                    // 右侧留白，保持双列对齐（喵~）
+                    Spacer(Modifier.weight(1f))
                 }
             }
         },

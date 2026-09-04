@@ -4,8 +4,12 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.meow.academy.runtime.RuntimeExtractor
+import java.io.BufferedOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.security.MessageDigest
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -179,6 +183,68 @@ class FileRepository(private val context: Context) {
             }
             ImportResult(dest, duplicated = false)
         }.getOrNull()
+    }
+
+    /**
+     * 📤 导出/分享用打包：把 [paths]（文件或目录，可混合）压成一个 zip，落到
+     * `cacheDir/shares/`，返回产物文件；失败返回 null。
+     *
+     * - 目录按相对路径写入（zip 内保留层级），根目录名作为顶层目录；
+     * - 单个文件直接以原名入包；
+     * - 跳过 '.' 开头的隐藏项（与列表/搜索的隐藏策略一致）；
+     * - zip 名取首项名（多项时加时间戳避免撞名），已存在的产物加 " (n)" 序号。
+     *
+     * 产物落在 cacheDir：系统可随时回收，接收方拿到的是 FileProvider 临时授权的一次性文件。
+     */
+    suspend fun zipForShare(paths: List<String>): File? = withContext(Dispatchers.IO) {
+        if (paths.isEmpty()) return@withContext null
+        val sources = paths.map(::File).filter { it.exists() }
+        if (sources.isEmpty()) return@withContext null
+
+        val shareDir = File(context.cacheDir, SHARE_DIR_NAME).apply { mkdirs() }
+        val baseName = if (sources.size == 1) sources.first().name else "meow-export"
+        val zipName = if (sources.size == 1) "$baseName.zip" else "$baseName-${System.currentTimeMillis()}.zip"
+
+        runCatching {
+            val dest = uniqueDest(shareDir, zipName)
+            ZipOutputStream(BufferedOutputStream(FileOutputStream(dest))).use { zip ->
+                for (src in sources) {
+                    ensureActive()
+                    if (src.isDirectory) {
+                        // 目录：顶层带上自身目录名，内部保留完整层级
+                        addDirToZip(zip, src, src.name)
+                    } else {
+                        addFileToZip(zip, src, src.name)
+                    }
+                }
+            }
+            dest
+        }.getOrElse {
+            runCatching { it.printStackTrace() }
+            null
+        }
+    }
+
+    /** 递归把 [dir] 下内容写入 zip，条目路径以 [entryPrefix] 为前缀（保留目录结构，跳过隐藏项） */
+    private fun addDirToZip(zip: ZipOutputStream, dir: File, entryPrefix: String) {
+        val children = dir.listFiles() ?: return
+        for (child in children.sortedBy { it.name.lowercase() }) {
+            if (child.name.startsWith('.')) continue // 隐藏项与列表/搜索保持一致（喵~）
+            if (child.isDirectory) {
+                addDirToZip(zip, child, "$entryPrefix/${child.name}")
+            } else {
+                addFileToZip(zip, child, "$entryPrefix/${child.name}")
+            }
+        }
+    }
+
+    /** 把单个文件写入 zip（流式拷贝，不把内容整块读进内存） */
+    private fun addFileToZip(zip: ZipOutputStream, file: File, entryName: String) {
+        runCatching {
+            zip.putNextEntry(ZipEntry(entryName))
+            file.inputStream().use { input -> input.copyTo(zip) }
+            zip.closeEntry()
+        }
     }
 
     /**
@@ -443,5 +509,8 @@ class FileRepository(private val context: Context) {
 
         /** 搜索最多返回条数 */
         private const val MAX_SEARCH_RESULTS = 200
+
+        /** 📤 分享临时 zip 目录名（位于 context.cacheDir 下，系统可按需回收） */
+        private const val SHARE_DIR_NAME = "shares"
     }
 }

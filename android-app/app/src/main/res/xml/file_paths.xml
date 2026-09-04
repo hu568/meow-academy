@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  📤 文件分享（导出）用的 FileProvider 路径映射（喵~）
+
+  只声明文件管理页两个浏览根，范围收到最小：
+    files-path        = context.getFilesDir()          → INTERNAL 根（workspace 及其下全部内容）
+    external-files-path = context.getExternalFilesDir() → EXTERNAL 根
+  与 FileRepository.isWithinRoot 的可浏览范围一一对应，不给接收方越界读盘的机会。
+
+  cache-path 供「文件夹 / 多选打包的临时 zip」使用：打包产物落 cacheDir/shares，
+  系统可随时回收，不占用用户可见存储。
+-->
+<paths>
+    <files-path name="internal" path="." />
+    <external-files-path name="external" path="." />
+    <cache-path name="shares" path="shares" />
+</paths>
