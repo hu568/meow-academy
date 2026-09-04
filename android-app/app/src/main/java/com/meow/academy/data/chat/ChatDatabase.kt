@@ -45,7 +45,8 @@ abstract class ChatDatabase : RoomDatabase() {
 
         /**
          * v2 → v3：sessions 新增 presetId / workspacePath 两列（会话归属：Agent 预设 + 工作区，
-         * plan-standard-mode §5.2）。两列都在新会话 insert 时写定、此后不更新，无需 UPDATE DAO。
+         * plan-standard-mode §5.2）。两列都在新会话 insert 时写定；presetId 在空白会话
+         * 首条消息前可由 Agent 预设栏更新（见 ChatDao.updateSessionPreset），首条后不更新。
          * 回填：v3 前所有会话都在唯一工作区 filesDir/workspace → workspacePath 补绝对路径，
          * presetId 留空（视为默认预设）。
          */

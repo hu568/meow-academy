@@ -11,8 +11,9 @@ data class SessionEntity(
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
     /**
-     * 会话归属的 Agent 预设 id（新会话创建时写定，此后不更新；随首条消息携带给 DSH 定死归属，
-     * plan-standard-mode §3.4）。null = v3 前旧数据（视为默认预设）。
+     * 会话归属的 Agent 预设 id（新会话创建时写定；空白会话首条消息前可由 Agent 预设栏更新，
+     * 首条后锁定；随首条消息携带给 DSH 定死归属，plan-standard-mode §3.4）。
+     * null = v3 前旧数据（视为默认预设）。
      */
     val presetId: String? = null,
     /**

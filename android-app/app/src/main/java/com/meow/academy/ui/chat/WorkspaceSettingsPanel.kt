@@ -299,6 +299,9 @@ private fun WorkspaceSessionRow(session: SessionEntity, onOpen: () -> Unit) {
 private fun AgentPresetSection(vm: ChatViewModel, modifier: Modifier = Modifier) {
     val presetCatalog by vm.presetCatalog.collectAsState()
     val defaultPreset by vm.defaultPreset.collectAsState()
+    val currentSession by vm.currentSession.collectAsState()
+    val messages by vm.messages.collectAsState()
+    val streaming by vm.streaming.collectAsState()
 
     // 进面板刷新一次 presets/list（DSH 侧无推送事件，触发时机归 UI 层，喵~）
     LaunchedEffect(Unit) { vm.refreshPresets() }
@@ -308,20 +311,34 @@ private fun AgentPresetSection(vm: ChatViewModel, modifier: Modifier = Modifier)
     var expandedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var deletingPreset by remember { mutableStateOf<PresetEntry?>(null) }
 
+    // 会话已有消息（或在生成）→ 预设已锁定；空白会话首条消息前可自由切换（与角色设定同款判定）
+    val locked = currentSession != null && (messages.isNotEmpty() || streaming != null)
+    val blankSessionOpen = currentSession != null && !locked
+    // 当前会话实际归属的预设（优先会话行；未开会话回退新会话默认）
+    val currentPresetId = currentSession?.presetId?.takeIf { it.isNotBlank() } ?: defaultPreset
+
     Column(modifier.verticalScroll(rememberScrollState())) {
         AppSectionHeader("Agent 预设")
         Text(
-            text = "预设决定新会话的能力组合，仅对新会话生效喵",
+            text = when {
+                locked -> "当前会话已锁定预设，新会话可自由切换喵~"
+                blankSessionOpen -> "切换将应用到当前新会话，并设为新会话默认喵~"
+                else -> "预设决定新会话的能力组合，仅对新会话生效喵"
+            },
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 20.dp, top = 2.dp, bottom = 4.dp),
         )
         entries.forEach { entry ->
             val disabled = entry.broken != null
+            val isCurrent = entry.id == currentPresetId && !disabled
             val isDefault = entry.id == defaultPreset && !disabled
             PresetCard(
                 entry = entry,
+                isCurrent = isCurrent,
                 isDefault = isDefault,
+                locked = locked,
+                blankSessionOpen = blankSessionOpen,
                 disabled = disabled,
                 expanded = entry.id in expandedIds,
                 onToggleExpand = {
@@ -352,7 +369,7 @@ private fun AgentPresetSection(vm: ChatViewModel, modifier: Modifier = Modifier)
 
 /**
  * 单张预设卡片（同原版 DSH「名称 + 描述」展示风格，喵~）：
- * - 卡片头：名称（name 缺省回退 id）+ 右侧当前默认高亮 ✓（可选卡行尾为「设为默认」动作）；
+ * - 卡片头：名称（name 缺省回退 id）+ 右侧当前/默认高亮 ✓（可选卡行尾为「设为默认」动作）；
  * - 说明可折叠：默认一行 ellipsis，点卡片展开完整说明；
  * - broken 预设灰显 + 展开后显示原因，标注「不可用」不可选；
  * - trust == "user" 的自定义预设长按删除（确认框）。
@@ -361,7 +378,14 @@ private fun AgentPresetSection(vm: ChatViewModel, modifier: Modifier = Modifier)
 @Composable
 private fun PresetCard(
     entry: PresetEntry,
+    /** 当前会话（或当前空白新会话）实际归属的预设 */
+    isCurrent: Boolean,
+    /** 新会话默认预设（DataStore） */
     isDefault: Boolean,
+    /** 会话已有消息 → 预设已锁定，切换只影响新会话 */
+    locked: Boolean,
+    /** 当前打开的是空白新会话 → 切换会同步到该会话行 */
+    blankSessionOpen: Boolean,
     disabled: Boolean,
     expanded: Boolean,
     onToggleExpand: () -> Unit,
@@ -369,7 +393,7 @@ private fun PresetCard(
     onRequestDelete: () -> Unit,
 ) {
     val containerColor = when {
-        isDefault -> MaterialTheme.colorScheme.primaryContainer
+        isCurrent || isDefault -> MaterialTheme.colorScheme.primaryContainer
         disabled -> MaterialTheme.colorScheme.surfaceContainerLowest
         else -> MaterialTheme.colorScheme.surfaceContainerLow
     }
@@ -398,6 +422,45 @@ private fun PresetCard(
                     modifier = Modifier.weight(1f),
                 )
                 when {
+                    isCurrent && isDefault -> {
+                        Icon(
+                            Icons.Filled.CheckCircle,
+                            contentDescription = "当前·默认预设",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = "当前·默认",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    isCurrent -> {
+                        Icon(
+                            Icons.Filled.CheckCircle,
+                            contentDescription = "当前会话预设",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = "当前",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    isDefault && blankSessionOpen -> {
+                        Text(
+                            text = "应用到当前",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable(onClick = onSelect)
+                                .padding(horizontal = 6.dp, vertical = 4.dp),
+                        )
+                    }
                     isDefault -> {
                         Icon(
                             Icons.Filled.CheckCircle,
@@ -450,11 +513,15 @@ private fun PresetCard(
                     )
                 }
             }
-            // 行尾注明（真实可选预设）：只对新会话生效
-            if (!disabled && !isDefault) {
+            // 行尾注明：只有带「设为默认 / 应用到当前」动作的卡才显示（纯当前/纯默认卡无动作，不重复说明，喵~）
+            if (!disabled && !isCurrent && (!isDefault || blankSessionOpen)) {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "对新会话生效",
+                    text = when {
+                        locked -> "切换只影响新会话"
+                        blankSessionOpen -> "将应用到当前新会话"
+                        else -> "对新会话生效"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 )

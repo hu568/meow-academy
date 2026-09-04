@@ -55,7 +55,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val presetController = ChatPresetController(
         scope = viewModelScope, settingsRepository = settingsRepository,
         presetCatalogRepo = PresetCatalogRepository(app),
-        runtimeManager = runtimeManager, defaultWorkspaceAbsPath = defaultWorkspaceAbsPath,
+        runtimeManager = runtimeManager, dao = dao,
+        currentSessionId = { sessionController.currentSessionId.value },
+        defaultWorkspaceAbsPath = defaultWorkspaceAbsPath,
         toast = ::toast,
     )
     private val personaController = ChatPersonaController(

@@ -1,5 +1,6 @@
 package com.meow.academy.ui.chat
 
+import com.meow.academy.data.chat.ChatDao
 import com.meow.academy.data.model.PresetCatalogRepository
 import com.meow.academy.data.model.PresetEntry
 import com.meow.academy.data.settings.SettingsRepository
@@ -16,13 +17,16 @@ import kotlinx.coroutines.launch
  * 工作设置状态控制器——预设目录/默认预设/工作区/会话过滤/看板页（plan-chatviewmodel-refactor §2.1）。
  *
  * 状态所有权：sessionFilter / defaultPreset / defaultWorkspacePath / presetCatalog / dashboardFeature。
- * 全部转发 DataStore 或预设目录缓存，切换只写设置、不重启 DSH。
+ * 全部转发 DataStore 或预设目录缓存；切换只写设置（+ 空白会话行同步）、不重启 DSH。
  */
 class ChatPresetController(
     private val scope: CoroutineScope,
     private val settingsRepository: SettingsRepository,
     private val presetCatalogRepo: PresetCatalogRepository,
     private val runtimeManager: RuntimeManager,
+    private val dao: ChatDao,
+    /** 当前打开会话的 Room id（空白会话同步用；由 ChatViewModel 注入 sessionController 的值） */
+    private val currentSessionId: () -> Long?,
     private val defaultWorkspaceAbsPath: String,
     private val toast: (String) -> Unit,
 ) {
@@ -55,14 +59,32 @@ class ChatPresetController(
         scope.launch { presetCatalogRepo.refresh(runtimeManager.rpcClient) }
     }
 
-    /** 设为默认 Agent 预设（只对新会话生效；DataStore） */
+    /**
+     * 设为默认 Agent 预设（DataStore；只对新会话生效）。
+     * 若当前会话为空（无消息），同步更新其 Room 行（首条前可自由切换，plan-standard-mode §3.4）。
+     */
     fun selectDefaultPreset(id: String) {
-        scope.launch { settingsRepository.setDefaultPreset(id) }
+        scope.launch {
+            settingsRepository.setDefaultPreset(id)
+            maybeSyncBlankSession(id)
+        }
+    }
+
+    /**
+     * 若当前会话仍为空（零消息），把新配置同步写回它的 Room 行（与角色设定同款，
+     * plan-memory-execution §3.2 约定：空会话首条消息前可自由切换；已有消息的会话预设锁定，
+     * 改了也不生效——DSH 侧首条定死）。
+     */
+    private suspend fun maybeSyncBlankSession(presetId: String) {
+        val sessionId = currentSessionId() ?: return
+        if (dao.countMessages(sessionId) > 0) return
+        dao.updateSessionPreset(sessionId, presetId)
     }
 
     /**
      * 删除自定义预设（presets/delete，仅 trust=user 服务端放行）。
-     * 若删除的是当前默认预设 → 自动回退 meow-standard，避免新会话无预设可用。
+     * 若删除的是当前默认预设 → 自动回退 meow-standard，避免新会话无预设可用；
+     * 若当前空白会话正使用被删预设 → 同步回退 meow-standard，避免首条消息挂到已删预设。
      */
     fun deletePreset(id: String) {
         scope.launch {
@@ -79,6 +101,20 @@ class ChatPresetController(
             } else {
                 toast("已删除预设「$id」喵~")
             }
+            maybeResetBlankSessionIfUsing(id, "meow-standard")
+        }
+    }
+
+    /**
+     * 若当前空白会话的 Room 行正使用被删预设，回退到兜底预设（与 [maybeSyncBlankSession]
+     * 同一「首条消息前可改」窗口；已有消息的会话由 UI 层拦住不调用，这里也再查一次兜底）。
+     */
+    private suspend fun maybeResetBlankSessionIfUsing(deletedId: String, fallbackPresetId: String) {
+        val sessionId = currentSessionId() ?: return
+        if (dao.countMessages(sessionId) > 0) return
+        val session = dao.getSession(sessionId) ?: return
+        if (session.presetId == deletedId) {
+            dao.updateSessionPreset(sessionId, fallbackPresetId)
         }
     }
 

@@ -29,6 +29,14 @@ interface ChatDao {
     suspend fun updateSessionTitle(id: Long, title: String, updatedAt: Long = System.currentTimeMillis())
 
     /**
+     * 更新会话的 Agent 预设归属（plan-standard-mode §3.4）。
+     * 仅用于「空会话首条消息前可自由切换」：有消息的会话由 UI 层拦住不调用，
+     * 且 DSH 侧首条定死，真发出去了改了也不生效。
+     */
+    @Query("UPDATE sessions SET presetId = :presetId WHERE id = :id")
+    suspend fun updateSessionPreset(id: Long, presetId: String?)
+
+    /**
      * 更新会话的角色绑定与两个开关（plan-memory-execution §3.2）。
      * 仅用于「空会话首条消息前可自由切换」：有消息的会话由 UI 层拦住不调用，
      * 且 DSH 侧首条定死，真发出去了改了也不生效（只 warn 忽略）。
