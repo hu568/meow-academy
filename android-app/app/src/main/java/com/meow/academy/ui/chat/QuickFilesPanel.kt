@@ -1,13 +1,18 @@
 package com.meow.academy.ui.chat
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.FolderOpen
@@ -26,8 +31,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -71,6 +78,82 @@ private fun shortcutSubtitle(path: String, workspace: String): String {
     val name = path.substringAfterLast('/')
     val parentName = path.substringBeforeLast('/').substringAfterLast('/')
     return if (parentName.isEmpty()) name else "$parentName/$name"
+}
+
+/**
+ * 快捷文件面板专用**紧凑面包屑**（喵~）：只展示 [base] 工作区内的相对层级
+ * （工作区 / a / b），每段可点击跳转（累积绝对路径经 [onNavigate] 交给
+ * FilesViewModel.navigateToPath），当前所在末段弱化不可点。
+ * 与文件管理页 EditableBreadcrumb 的区别：无编辑按钮、无系统前缀段、
+ * 内边距收窄——专为面板单行布局设计，长路径由横向滚动兜底。
+ */
+@Composable
+private fun QuickBreadcrumb(
+    path: String,
+    base: String,
+    onNavigate: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val relative = path.removePrefix(base).trim('/')
+    val parts = if (relative.isEmpty()) emptyList() else relative.split('/')
+    val scrollState = rememberScrollState()
+
+    // 路径变化后自动滚到最右端，保证当前目录段可见（与文件管理页面包屑同款，喵~）
+    LaunchedEffect(path) {
+        withFrameNanos { } // 等一帧让内容宽度布局完成，scrollTo(maxValue) 才有效
+        scrollState.scrollTo(scrollState.maxValue)
+    }
+
+    Row(
+        modifier = modifier.horizontalScroll(scrollState),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        BreadcrumbCrumb(
+            text = "工作区",
+            clickable = path != base,
+            onClick = { onNavigate(base) },
+        )
+        // 每段目标 = 该段的不可变累积前缀（val 捕获）；若捕获循环里的可变累加器，
+        // 点击时求值到的是循环结束后的完整路径，中间段全部「点了没反应」——踩过喵
+        parts.forEachIndexed { index, part ->
+            val target = parts.take(index + 1).joinToString("/")
+            Text(
+                text = "/",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 1.dp),
+            )
+            BreadcrumbCrumb(
+                text = part,
+                clickable = index != parts.lastIndex,
+                onClick = { onNavigate(if (base.endsWith('/')) "$base$target" else "$base/$target") },
+            )
+        }
+    }
+}
+
+/** 面包屑单个分段：可点时主色高亮，不可点时弱色展示 */
+@Composable
+private fun BreadcrumbCrumb(
+    text: String,
+    clickable: Boolean,
+    onClick: () -> Unit,
+) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelMedium,
+        color = if (clickable) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.onSurface
+        },
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .then(if (clickable) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 4.dp, vertical = 2.dp),
+    )
 }
 
 /**
@@ -120,7 +203,6 @@ fun QuickFilesPanel(
 
     Column(Modifier.fillMaxSize()) {
         // 顶部：返回上级（或回浏览） + 标题（路径/模式名） + 已附加计数 + 模式切换按钮
-        val relative = state.currentPath.removePrefix(workspace).trim('/')
         Row(
             Modifier
                 .fillMaxWidth()
@@ -133,27 +215,43 @@ fun QuickFilesPanel(
                     else switchMode(QuickFilesMode.BROWSE)
                 },
                 enabled = mode != QuickFilesMode.BROWSE || state.currentPath != workspace,
+                modifier = Modifier.size(32.dp),
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
             }
-            Text(
-                text = when (mode) {
-                    QuickFilesMode.BROWSE -> if (relative.isEmpty()) "工作区" else "工作区 / $relative"
-                    QuickFilesMode.RECENT -> "最近使用"
-                    QuickFilesMode.FAVORITES -> "收藏"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
+            // 浏览模式：紧凑面包屑（工作区内相对段，可点跳转；长路径横向滚动，喵~）
+            if (mode == QuickFilesMode.BROWSE) {
+                QuickBreadcrumb(
+                    path = state.currentPath,
+                    base = workspace,
+                    onNavigate = vm::navigateToPath,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 2.dp),
+                )
+            } else {
+                Text(
+                    text = when (mode) {
+                        QuickFilesMode.BROWSE -> ""
+                        QuickFilesMode.RECENT -> "最近使用"
+                        QuickFilesMode.FAVORITES -> "收藏"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
             Text(
                 "已附加 ${attachedPaths.size}",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
             )
-            IconButton(onClick = { switchMode(nextMode(mode)) }) {
+            IconButton(
+                onClick = { switchMode(nextMode(mode)) },
+                modifier = Modifier.size(32.dp),
+            ) {
                 Icon(
                     imageVector = modeIcon(mode),
                     contentDescription = "切换到${modeTargetLabel(mode)}",
