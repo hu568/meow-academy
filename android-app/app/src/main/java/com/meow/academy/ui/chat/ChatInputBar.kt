@@ -97,7 +97,7 @@ fun ChatInputArea(
                 OutlinedTextField(
                     value = input,
                     onValueChange = onInputChange,
-                    placeholder = { Text("和喵喵老师聊聊…") },
+                    placeholder = { Text("聊点什么…") },
                     modifier = Modifier.weight(1f),
                     maxLines = 4,
                     shape = RoundedCornerShape(24.dp),

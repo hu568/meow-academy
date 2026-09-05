@@ -129,7 +129,7 @@ fun ChatMessageList(
                 ) {
                     EmptyState(
                         icon = Icons.Outlined.AutoAwesome,
-                        title = "和喵喵老师聊聊吧～",
+                        title = "聊点什么吧～",
                         description = "左上角管理会话 · 右上角新建",
                     )
                 }

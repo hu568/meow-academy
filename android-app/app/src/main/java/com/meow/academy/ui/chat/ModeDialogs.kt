@@ -39,7 +39,7 @@ internal fun ModeDialogs(
             text = {
                 Column {
                     Text(
-                        "告诉喵喵老师要朝哪个目标推进喵~",
+                        "说说要朝哪个目标推进喵~",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

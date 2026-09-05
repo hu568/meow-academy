@@ -464,7 +464,7 @@ private fun QuestionBlock(
                     onValueChange = onCustomChange,
                     enabled = interactive,
                     singleLine = true,
-                    placeholder = { Text("想说的直接告诉喵喵老师…", style = MaterialTheme.typography.bodySmall) },
+                    placeholder = { Text("想说的直接写在这里…", style = MaterialTheme.typography.bodySmall) },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 2.dp),
