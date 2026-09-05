@@ -3,10 +3,12 @@ package com.meow.academy.data.files
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Log
 import com.meow.academy.runtime.RuntimeExtractor
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.security.MessageDigest
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -50,7 +52,9 @@ class FileRepository(private val context: Context) {
     suspend fun readText(path: String): String = withContext(Dispatchers.IO) {
         val file = File(path)
         if (!file.isFile) return@withContext ""
-        runCatching { file.readText() }.getOrDefault("")
+        runCatching { file.readText() }
+            .onFailure { Log.d(TAG, "readText 读取文件失败: $path", it) }
+            .getOrDefault("")
     }
 
     /** 写 UTF-8 文本（父目录须已存在，否则异常向上抛给调用方） */
@@ -60,32 +64,40 @@ class FileRepository(private val context: Context) {
 
     /** 新建文件；名字非法或文件已存在返回 false（不覆盖） */
     suspend fun createFile(parentPath: String, name: String): Boolean = withContext(Dispatchers.IO) {
-        if (!isValidName(name)) return@withContext false
-        runCatching { File(parentPath, name).createNewFile() }.getOrDefault(false)
+        if (!com.meow.academy.data.files.isValidName(name)) return@withContext false
+        runCatching { File(parentPath, name).createNewFile() }
+            .onFailure { Log.w(TAG, "createFile 创建文件失败: $parentPath/$name", it) }
+            .getOrDefault(false)
     }
 
     /** 新建单层目录；名字非法、目录已存在或父目录缺失返回 false */
     suspend fun createDirectory(parentPath: String, name: String): Boolean = withContext(Dispatchers.IO) {
-        if (!isValidName(name)) return@withContext false
-        runCatching { File(parentPath, name).mkdir() }.getOrDefault(false)
+        if (!com.meow.academy.data.files.isValidName(name)) return@withContext false
+        runCatching { File(parentPath, name).mkdir() }
+            .onFailure { Log.w(TAG, "createDirectory 创建目录失败: $parentPath/$name", it) }
+            .getOrDefault(false)
     }
 
     /** 同目录重命名；名字非法、源不存在或目标已存在返回 false */
     suspend fun rename(path: String, newName: String): Boolean = withContext(Dispatchers.IO) {
-        if (!isValidName(newName)) return@withContext false
+        if (!com.meow.academy.data.files.isValidName(newName)) return@withContext false
         val file = File(path)
         val parent = file.parentFile ?: return@withContext false
         if (!file.exists()) return@withContext false
         val dest = File(parent, newName)
         if (dest.exists()) return@withContext false
-        runCatching { file.renameTo(dest) }.getOrDefault(false)
+        runCatching { file.renameTo(dest) }
+            .onFailure { Log.w(TAG, "rename 重命名失败: $path → $newName", it) }
+            .getOrDefault(false)
     }
 
     /** 删除文件，或递归删除目录 */
     suspend fun delete(path: String): Boolean = withContext(Dispatchers.IO) {
         val file = File(path)
         if (!file.exists()) return@withContext false
-        runCatching { file.deleteRecursively() }.getOrDefault(false)
+        runCatching { file.deleteRecursively() }
+            .onFailure { Log.w(TAG, "delete 删除失败: $path", it) }
+            .getOrDefault(false)
     }
 
     /**
@@ -143,7 +155,7 @@ class FileRepository(private val context: Context) {
         uris.map { uri ->
             runCatching {
                 val name = queryDisplayName(uri) ?: uri.lastPathSegment ?: return@runCatching false
-                if (!isValidName(name)) return@runCatching false
+                if (!com.meow.academy.data.files.isValidName(name)) return@runCatching false
                 val dest = File(dir, name)
                 if (dest.exists()) return@runCatching false // 不覆盖
                 val input = context.contentResolver.openInputStream(uri) ?: return@runCatching false
@@ -151,7 +163,8 @@ class FileRepository(private val context: Context) {
                     dest.outputStream().use { output -> source.copyTo(output) }
                 }
                 true
-            }.getOrDefault(false)
+            }.onFailure { Log.w(TAG, "importFromUris 导入失败: $uri -> $targetDir", it) }
+                .getOrDefault(false)
         }
     }
 
@@ -175,14 +188,15 @@ class FileRepository(private val context: Context) {
             if (existing != null) return@withContext ImportResult(existing, duplicated = true)
 
             val baseName = queryDisplayName(uri) ?: uri.lastPathSegment ?: return@withContext null
-            if (!isValidName(baseName)) return@withContext null
+            if (!com.meow.academy.data.files.isValidName(baseName)) return@withContext null
             val dest = uniqueDest(dir, baseName)
             val input = context.contentResolver.openInputStream(uri) ?: return@withContext null
             input.use { source ->
                 dest.outputStream().use { output -> source.copyTo(output) }
             }
             ImportResult(dest, duplicated = false)
-        }.getOrNull()
+        }.onFailure { Log.w(TAG, "importDeduplicated 聊天上传去重失败: $uri -> $targetDir", it) }
+            .getOrNull()
     }
 
     /**
@@ -207,45 +221,54 @@ class FileRepository(private val context: Context) {
 
         runCatching {
             val dest = uniqueDest(shareDir, zipName)
-            ZipOutputStream(BufferedOutputStream(FileOutputStream(dest))).use { zip ->
-                for (src in sources) {
-                    ensureActive()
-                    if (src.isDirectory) {
-                        // 目录：顶层带上自身目录名，内部保留完整层级
-                        addDirToZip(zip, src, src.name)
-                    } else {
-                        addFileToZip(zip, src, src.name)
+            // 先写到临时名，成功后再原子 rename 到最终名：失败绝不把残缺 zip 交给分享流程（喵~）
+            val tmp = File(shareDir, "${dest.name}.tmp-${System.currentTimeMillis()}")
+            try {
+                ZipOutputStream(BufferedOutputStream(FileOutputStream(tmp))).use { zip ->
+                    for (src in sources) {
+                        ensureActive()
+                        val ok = if (src.isDirectory) {
+                            // 目录：顶层带上自身目录名，内部保留完整层级
+                            addDirToZip(zip, src, src.name)
+                        } else {
+                            addFileToZip(zip, src, src.name)
+                        }
+                        if (!ok) throw IOException("打包文件失败: ${src.name}")
                     }
                 }
+                if (!tmp.renameTo(dest)) throw IOException("临时 zip 重命名到最终名失败")
+                dest
+            } catch (e: Exception) {
+                tmp.delete() // 清理半截产物
+                throw e
             }
-            dest
-        }.getOrElse {
-            runCatching { it.printStackTrace() }
-            null
-        }
+        }.onFailure { Log.w(TAG, "zipForShare 打包失败", it) }
+            .getOrNull()
     }
 
-    /** 递归把 [dir] 下内容写入 zip，条目路径以 [entryPrefix] 为前缀（保留目录结构，跳过隐藏项） */
-    private fun addDirToZip(zip: ZipOutputStream, dir: File, entryPrefix: String) {
-        val children = dir.listFiles() ?: return
+    /** 递归把 [dir] 下内容写入 zip，条目路径以 [entryPrefix] 为前缀（保留目录结构，跳过隐藏项）；任一子项失败返回 false 中止 */
+    private fun addDirToZip(zip: ZipOutputStream, dir: File, entryPrefix: String): Boolean {
+        val children = dir.listFiles() ?: return true // 目录不可读时跳过子项（可预期失败，保持静默）
         for (child in children.sortedBy { it.name.lowercase() }) {
             if (child.name.startsWith('.')) continue // 隐藏项与列表/搜索保持一致（喵~）
-            if (child.isDirectory) {
+            val ok = if (child.isDirectory) {
                 addDirToZip(zip, child, "$entryPrefix/${child.name}")
             } else {
                 addFileToZip(zip, child, "$entryPrefix/${child.name}")
             }
+            if (!ok) return false
         }
+        return true
     }
 
-    /** 把单个文件写入 zip（流式拷贝，不把内容整块读进内存） */
-    private fun addFileToZip(zip: ZipOutputStream, file: File, entryName: String) {
+    /** 把单个文件写入 zip（流式拷贝，不把内容整块读进内存）；失败记日志并返回 false */
+    private fun addFileToZip(zip: ZipOutputStream, file: File, entryName: String): Boolean =
         runCatching {
             zip.putNextEntry(ZipEntry(entryName))
             file.inputStream().use { input -> input.copyTo(zip) }
             zip.closeEntry()
-        }
-    }
+        }.onFailure { Log.w(TAG, "addFileToZip 写入失败: $entryName", it) }
+            .isSuccess
 
     /**
      * 递归搜索 [root] 下的文件/目录树：跳过以 '.' 开头的隐藏目录（不收录、不深入），
@@ -365,48 +388,32 @@ class FileRepository(private val context: Context) {
         }
     }
 
-    /** 名字合法性：非空、不含 '/'、不含 NUL 字符 */
-    fun isValidName(name: String): Boolean =
-        name.isNotEmpty() && '/' !in name && '\u0000' !in name
+    /**
+     * 名字合法性（纯判断，实现已迁往 [com.meow.academy.data.files.isValidName]）。
+     * 保留为公开转发方法：内部 6 处调用与外部调用方签名零改动（喵~）。
+     */
+    fun isValidName(name: String): Boolean = com.meow.academy.data.files.isValidName(name)
 
     /**
-     * 文本文件判定：扩展名白名单命中即真；
-     * 否则小文件（< 64KB）读前 8KB 嗅探，无 NUL 字节视为文本。
+     * 文本文件判定（纯判断，实现已迁往 [com.meow.academy.data.files.isTextFile]）。
+     * 保留为公开转发方法：外部调用方（如 FileKindUtils.openKind）签名零改动（喵~）。
      */
-    fun isTextFile(file: File): Boolean {
-        if (file.extension.lowercase() in TEXT_EXTENSIONS) return true
-        if (file.length() >= TEXT_SNIFF_SMALL_FILE_LIMIT) return false
-        return runCatching {
-            file.inputStream().use { input ->
-                val buffer = ByteArray(TEXT_SNIFF_BYTES)
-                var total = 0
-                while (total < TEXT_SNIFF_BYTES) {
-                    val read = input.read(buffer, total, TEXT_SNIFF_BYTES - total)
-                    if (read <= 0) break
-                    total += read
-                }
-                (0 until total).none { buffer[it] == 0.toByte() }
-            }
-        }.getOrDefault(false)
-    }
+    fun isTextFile(file: File): Boolean = com.meow.academy.data.files.isTextFile(file)
 
-    /** Markdown 判断（.md / .markdown，不区分大小写） */
-    fun isMarkdown(name: String): Boolean =
-        name.endsWith(".md", ignoreCase = true) || name.endsWith(".markdown", ignoreCase = true)
+    /** Markdown 判断（实现已迁往 [com.meow.academy.data.files.isMarkdown]），公开转发方法 */
+    fun isMarkdown(name: String): Boolean = com.meow.academy.data.files.isMarkdown(name)
 
-    /** HTML 判断（.html / .htm / .xhtml，不区分大小写；xml 不算，仍走文本编辑） */
-    fun isHtmlFile(name: String): Boolean =
-        name.endsWith(".html", ignoreCase = true) ||
-            name.endsWith(".htm", ignoreCase = true) ||
-            name.endsWith(".xhtml", ignoreCase = true)
+    /** HTML 判断（实现已迁往 [com.meow.academy.data.files.isHtmlFile]），公开转发方法 */
+    fun isHtmlFile(name: String): Boolean = com.meow.academy.data.files.isHtmlFile(name)
 
-    /** 图片判断：扩展名白名单命中即真（用于点击打开浮窗预览，喵~） */
-    fun isImageFile(name: String): Boolean =
-        name.substringAfterLast('.', "").lowercase() in IMAGE_EXTENSIONS
+    /** 图片判断（实现已迁往 [com.meow.academy.data.files.isImageFile]），公开转发方法 */
+    fun isImageFile(name: String): Boolean = com.meow.academy.data.files.isImageFile(name)
 
     /** 递归复制单个文件或目录（不覆盖已存在的目标） */
     private fun copyRecursive(src: File, dest: File): Boolean =
-        runCatching { src.copyRecursively(dest, overwrite = false) }.isSuccess
+        runCatching { src.copyRecursively(dest, overwrite = false) }
+            .onFailure { Log.w(TAG, "copyRecursive 递归复制失败: $src -> $dest", it) }
+            .isSuccess
 
     /** SAF Uri 内容 SHA-256（流式计算，不会把整个文件读进内存） */
     private fun sha256Uri(uri: Uri): String? = runCatching {
@@ -421,7 +428,8 @@ class FileRepository(private val context: Context) {
             }
         }
         digest.digest().joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
-    }.getOrNull()
+    }.onFailure { Log.w(TAG, "sha256Uri 计算 Uri 哈希失败: $uri", it) }
+        .getOrNull()
 
     /** 本地文件内容 SHA-256（流式计算） */
     private fun sha256File(file: File): String? = runCatching {
@@ -435,7 +443,8 @@ class FileRepository(private val context: Context) {
             }
         }
         digest.digest().joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
-    }.getOrNull()
+    }.onFailure { Log.w(TAG, "sha256File 计算文件哈希失败: ${file.path}", it) }
+        .getOrNull()
 
     /** 目标目录内不冲突的文件；冲突时按 "原名 (n).ext" 追加序号（喵~） */
     private fun uniqueDest(dir: File, baseName: String): File {
@@ -485,27 +494,14 @@ class FileRepository(private val context: Context) {
     }
 
     companion object {
+        /** 日志 TAG（吞错治理用，喵~） */
+        private const val TAG = "FileRepository"
+
         /** 文本预览/编辑读入内存的上限（1MB） */
         const val TEXT_PREVIEW_LIMIT = 1L * 1024 * 1024
 
-        /** 文本文件扩展名白名单（统一小写比较；与文件列表图标分类对齐） */
-        private val TEXT_EXTENSIONS = setOf(
-            "txt", "md", "markdown", "json", "yaml", "yml", "log", "kt",
-            "ts", "js", "xml", "html", "css", "env", "properties", "csv", "toml",
-            // 代码 / 网页 / 数据类扩展名：图标显示为文本类，点击也应能编辑
-            "tsx", "jsx", "py", "go", "rs", "c", "cpp", "h", "hpp", "swift", "sql",
-            "sh", "bat", "ps1", "rb", "php", "scala", "dart", "lua", "vim",
-            "jsonl", "jsonc", "htm", "xhtml", "ini", "conf",
-        )
-
-        /** 文本嗅探读取字节数（8KB） */
-        private const val TEXT_SNIFF_BYTES = 8 * 1024
-
         /** SHA-256 分块读取缓冲区（64KB，平衡大文件哈希速度与内存占用） */
         private const val HASH_BUFFER_SIZE = 64 * 1024
-
-        /** 超过该大小的无扩展名/未知扩展名文件不再嗅探（视为二进制） */
-        private const val TEXT_SNIFF_SMALL_FILE_LIMIT = 64L * 1024
 
         /** 搜索最多返回条数 */
         private const val MAX_SEARCH_RESULTS = 200
