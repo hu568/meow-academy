@@ -46,8 +46,12 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { isTokenDelta } from '@deepseek-ai/dsh-llm/message'
 import { admitEncodedImages } from '@deepseek-ai/dsh-attachment'
-import { resolveSessionPreset, UnknownPresetError, PresetMountError } from '@deepseek-ai/dsh-agent-presets'
+import { resolveSessionPreset } from '@deepseek-ai/dsh-agent-presets'
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
+import { setLogger, warn, warnOnce } from './log.js'
+import { clampReasoningEffort } from './model.js'
+import { RPC_ERROR, meowRpcError, throwMappedPresetError } from './errors.js'
+import { foldSessionStats } from './stats.js'
 import z from '@deepseek-ai/schemastery'
 
 export const name = 'meow-jsonrpc'
@@ -65,6 +69,14 @@ export const Config = z.object({
 
 /** 终端输出流式转发的轮询间隔上限检查由调用处兜底；这里只做安全下限 */
 const MIN_STREAM_INTERVAL_MS = 20
+/** streamIntervalMs 缺省值（与 Config.bashStreamIntervalMs 默认一致） */
+const STREAM_INTERVAL_DEFAULT_MS = 80
+/** memory 工具 search 的单次返回上限（防一次性捞爆 JOURNAL） */
+const JOURNAL_SEARCH_MAX = 200
+/** session/command 的超时：只放弃等待、不 abort（queued 命令可能已生效） */
+const COMMAND_TIMEOUT_MS = 5000
+/** meow:memory section 的 order（排在基座 persona 之后、工具指引之前） */
+const MEMORY_SECTION_ORDER = 50
 
 // ════════════════════════════════════════════════════════════════════════
 // 记忆系统（plan-memory-execution，2026-09-02）
@@ -83,6 +95,33 @@ const DEFAULT_PERSONA_ID = 'default'
 /** .agents 根（DSH_FILES_DIR 注入的是 filesDir，.agents 在其下） */
 function agentsRoot() {
   return (process.env.DSH_FILES_DIR ?? process.cwd()) + '/.agents'
+}
+
+// ── 记忆系统路径模板收编（③）：以下 5 个 helper 是全部路径拼写的唯一出口 ──
+
+/** 角色库根：.agents/personas */
+function personaRoot() {
+  return `${agentsRoot()}/personas`
+}
+
+/** 某角色目录：.agents/personas/<id> */
+function personaDir(personaId) {
+  return `${personaRoot()}/${personaId}`
+}
+
+/** 记忆目录：.agents/memory */
+function memoryDir() {
+  return `${agentsRoot()}/memory`
+}
+
+/** 全局长期事实文件：.agents/memory/FACT.md */
+function factsPath() {
+  return `${memoryDir()}/FACT.md`
+}
+
+/** 会话快照目录：.agents/memory/snapshots */
+function snapshotsDir() {
+  return `${memoryDir()}/snapshots`
 }
 
 /** 记忆系统常驻配置 Map：sessionId → {personaId?, personaEnabled, memoryEnabled} */
@@ -129,7 +168,7 @@ function parsePersonaYaml(raw) {
  * @returns {string|null}
  */
 function resolvePersonaId(requested) {
-  const root = `${agentsRoot()}/personas`
+  const root = personaRoot()
   if (requested !== undefined && requested !== null && requested !== '') {
     try {
       if (readFileSync(`${root}/${requested}/persona.yml`, 'utf8')) return requested
@@ -150,25 +189,41 @@ function readPersonaFiles(personaId) {
   if (personaId === null || personaId === undefined || personaId === '') {
     return { soul: '', user: '' }
   }
-  const root = `${agentsRoot()}/personas/${personaId}`
+  const root = personaDir(personaId)
   let soul = ''
   let user = ''
-  try { soul = readFileSync(`${root}/SOUL.md`, 'utf8') } catch {}
-  try { user = readFileSync(`${root}/USER.md`, 'utf8') } catch {}
+  // ENOENT（未配置该文件）属正常形态，静默；其它 errno（权限/目录异常等）留痕——
+  // 角色人格整块丢失曾在真机上无痕发生（deny 空转事故），必须可追查
+  try { soul = readFileSync(`${root}/SOUL.md`, 'utf8') } catch (error) {
+    if (error?.code !== 'ENOENT') warnOnce(`soul:${personaId}`, `读角色 SOUL.md 失败（人格将整块丢失）`, error)
+  }
+  try { user = readFileSync(`${root}/USER.md`, 'utf8') } catch (error) {
+    if (error?.code !== 'ENOENT') warnOnce(`user:${personaId}`, `读角色 USER.md 失败（用户档案将整块丢失）`, error)
+  }
   return { soul, user }
 }
 
 /** 读全局共享 FACT.md（长期事实）；缺文件返回空串 */
 function readFactsFile() {
   try {
-    return readFileSync(`${agentsRoot()}/memory/FACT.md`, 'utf8')
-  } catch {
+    return readFileSync(factsPath(), 'utf8')
+  } catch (error) {
+    // ENOENT（首启未创建）静默；其它 errno 留痕——长期记忆层静默消失是 0.2.8 同型风险
+    if (error?.code !== 'ENOENT') warnOnce('facts', '读长期记忆 FACT.md 失败（记忆层将消失）', error)
     return ''
   }
 }
 
-/** 规范化为快照对象（容错：坏 JSON / 缺字段补默认） */
-function normalizeSnapshot(parsed) {
+/**
+ * coordinator.load 对不存在会话抛 `session "x" not found`（普通 Error 无 code 可判）。
+ * 这是 API 合同内的正常失败（新会话创建前查询 / App 查无此会话 → 空响应），
+ * 留痕时按 ENOENT 同型语义静默；匹配失败的方向是「多 warn 不漏 warn」（fail-open）。
+ */
+function isSessionNotFoundError(error) {
+  return /session "\S+" not found$/.test(String(error?.message ?? error))
+}
+
+/** 规范化为快照对象（容错：坏 JSON / 缺字段补默认） */function normalizeSnapshot(parsed) {
   if (parsed === null || typeof parsed !== 'object') return null
   const persona = parsed.persona
   if (persona === null || typeof persona !== 'object') return null
@@ -202,8 +257,7 @@ function normalizeSnapshot(parsed) {
  */
 function ensureSnapshot(sessionId, persist = true) {
   if (memorySnapshots.has(sessionId)) return memorySnapshots.get(sessionId)
-  const snapshotsDir = `${agentsRoot()}/memory/snapshots`
-  const snapshotPath = `${snapshotsDir}/${sessionId}.json`
+  const snapshotPath = `${snapshotsDir()}/${sessionId}.json`
   // 2. 读快照文件（冷 resume / 进程重启后恢复）
   try {
     const normalized = normalizeSnapshot(JSON.parse(readFileSync(snapshotPath, 'utf8')))
@@ -211,8 +265,12 @@ function ensureSnapshot(sessionId, persist = true) {
       memorySnapshots.set(sessionId, normalized)
       return normalized
     }
-  } catch {
-    // 无快照 / 坏快照 → 走重建
+  } catch (error) {
+    // 文件不存在（ENOENT）= 无快照，正常首启走重建，静默；
+    // 解析失败（SyntaxError）= 快照格式漂移被当成无快照，KV 缓存前缀口径已变，必须留痕
+    if (error instanceof SyntaxError) {
+      warnOnce(`snapshot:${sessionId}`, `快照文件解析失败（按无快照重建，KV 缓存前缀口径将变）`, error)
+    }
   }
   // 3. 从当前角色文件 + FACT.md 构建
   const config = memoryConfigs.get(sessionId)
@@ -227,7 +285,7 @@ function ensureSnapshot(sessionId, persist = true) {
   // 一次写齐快照文件（失败静默，下次组装重试）
   if (!persist) return snapshot
   try {
-    mkdirSync(snapshotsDir, { recursive: true })
+    mkdirSync(snapshotsDir(), { recursive: true })
     const tmp = `${snapshotPath}.tmp-${process.pid}-${Date.now()}`
     writeFileSync(tmp, JSON.stringify(snapshot, null, 2))
     renameSync(tmp, snapshotPath)
@@ -244,7 +302,7 @@ function ensureSnapshot(sessionId, persist = true) {
  */
 function roleEditingGuidance(personaId) {
   if (personaId === null || personaId === undefined || personaId === '') return ''
-  return `你的角色设定文件在 ${agentsRoot()}/personas/${personaId}/ 下的 SOUL.md（人格）与 USER.md（用户档案），可用文件工具按该绝对路径编辑；改动只影响新会话——当前会话已在首条消息时固化快照。`
+  return `你的角色设定文件在 ${personaDir(personaId)}/ 下的 SOUL.md（人格）与 USER.md（用户档案），可用文件工具按该绝对路径编辑；改动只影响新会话——当前会话已在首条消息时固化快照。`
 }
 
 /**
@@ -253,7 +311,7 @@ function roleEditingGuidance(personaId) {
  * 避免模型拿相对路径去 read/bash 探路而绕开工具。
  */
 function memoryContractText() {
-  const mem = `${agentsRoot()}/memory`
+  const mem = memoryDir()
   return `【长期记忆】
 记忆目录在 ${mem}（**不在会话工作区内**，要用绝对路径）。以下两个文件的路径都不必自己拼——memory 工具没有路径参数，直接用它：
 - ${mem}/FACT.md：长期事实知识（跨会话，6 个月+）。用 memory 工具 action="update"、content=整份新内容 覆盖；也可用文件工具按上述绝对路径读写。
@@ -306,240 +364,8 @@ function memorySectionText(context) {
   return parts.join('\n\n')
 }
 
-/**
 
- * 把思考强度钳制到目标模型的能力范围内（防止 DeepSeek 的 'high' 被原样带到
- * 不支持思考的 OpenAI 兼容模型上，导致请求以 UNSUPPORTED_REASONING_EFFORT 失败）。
- *
- * 关键：核心 llm 服务（resolveCallFor）对「无思考能力」的模型（reasoning 元数据
- * 缺失，如自定义 provider 的模型）会拒绝**任何**显式强度——包括 'off'。所以：
- *   - 模型支持该强度 → 原样保留；
- *   - 模型无思考能力或不支持该强度 → **不传**（undefined，交 provider 默认/不思考），
- *     而不是退回 'off'（那同样会被核心校验拒绝）；
- *   - 模型支持思考且有无默认强度 → 用模型默认（前提是默认也在支持列表里）。
- * 查询失败（provider 未注册/模型不存在等）→ 原样保留，把真实错误留给上游，不掩盖。
- * @param llm - llm 服务（可能 undefined）
- * @param provider - 目标 provider 路由
- * @param model - 目标模型 id
- * @param effort - 期望思考强度（undefined = 不指定，交给 provider 默认）
- * @returns {{ effort?: string, modelReasoning?: { efforts: string[], defaultEffort?: string } }}
- */
-async function clampReasoningEffort(llm, provider, model, effort) {
-  if (effort === undefined) return { effort: undefined, modelReasoning: undefined }
-  let info
-  try {
-    if (llm === undefined) return { effort, modelReasoning: undefined }
-    info = await llm.resolveModelInfo(provider, model)
-  } catch {
-    return { effort, modelReasoning: undefined }
-  }
-  const reasoning = info?.reasoning
-  if (reasoning === undefined) {
-    // 模型无思考能力：任何显式强度（含 off）都会被核心校验拒绝 → 不传
-    return { effort: undefined, modelReasoning: undefined }
-  }
-  const efforts = reasoning.efforts.map((entry) => String(entry.id))
-  const modelReasoning = {
-    efforts,
-    ...(reasoning.defaultEffort === undefined ? {} : { defaultEffort: String(reasoning.defaultEffort) }),
-  }
-  if (efforts.includes(effort)) return { effort, modelReasoning }
-  // 不支持当前强度 → 模型默认强度（且必须在支持列表里），否则不传
-  const fallback = reasoning.defaultEffort === undefined ? undefined : String(reasoning.defaultEffort)
-  if (fallback !== undefined && efforts.includes(fallback)) return { effort: fallback, modelReasoning }
-  return { effort: undefined, modelReasoning }
-}
 
-/**
- * 会话调用量折叠（port `dsh-session-stats/projection.ts` 状态机 + web StatsLine 口径）。
- * 逐事件折叠持久化日志，产出 App 侧「功能看板」需要的全部原始分母。
- *
- * 关键口径：
- *  - turns/steps 以 step/end 为权威（finally 语义；turn 变化才 +1）；
- *  - LLM 时长 = assistant/message 时间 - step/start 时间；
- *  - 首 token = isTokenDelta 到的最早 chunk；decode = message - 首 token；
- *  - tool 时长 = tool/result 时间 - tool/call 时间（按 callId 配对）；
- *  - token 桶：inputTokens/outputTokens/cacheRead/cacheWrite 均为累计总和；
- *  - 上下文 = 最近一次 usage 样本的 prompt 侧 billed input / 最近 request/context.contextWindow。
- *
- * @param {Array<{seq:number,time:number,type:string,data:any}>} events 持久化会话日志
- * @returns {object} session/stats 的 stats 对象
- */
-function foldSessionStats(events) {
-  let state = {
-    turns: 0, steps: 0, llmMs: 0, toolMs: 0,
-    ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0,
-    inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0,
-    lastTurn: null,
-    openStep: null,          // { turn, step, startTime, firstTokenTime }
-    pendingCalls: {},        // callId -> dispatch time
-    lastStep: null,          // { llmMs, ttftMs, decodeMs, decodeTokens }
-    lastPressureTokens: null, // number | null
-    contextWindow: null,      // number | null
-  }
-  const usageTokensOf = (usage) => {
-    if (typeof usage !== 'object' || usage === null) return null
-    const input = usage.inputTokens
-    const output = usage.outputTokens
-    const cacheRead = usage.cacheReadTokens ?? 0
-    const cacheWrite = usage.cacheWriteTokens ?? 0
-    if (typeof input !== 'number' || !Number.isFinite(input) || input < 0) return null
-    if (typeof output !== 'number' || !Number.isFinite(output) || output < 0) return null
-    return { input, output, cacheRead, cacheWrite }
-  }
-  for (const event of events) {
-    const d = event.data
-    switch (event.type) {
-      case 'step/start':
-        state.openStep = { turn: d.turn, step: d.step, startTime: event.time, firstTokenTime: null }
-        break
-      case 'assistant/chunk': {
-        const open = state.openStep
-        if (open === null || open.turn !== d.turn || open.step !== d.step) break
-        if (open.firstTokenTime === null && isTokenDelta(d.chunk)) {
-          state.openStep = { ...open, firstTokenTime: event.time }
-        }
-        if (d.chunk?.type === 'usage') {
-          const u = usageTokensOf(d.chunk.usage)
-          if (u !== null) {
-            state.lastPressureTokens = u.input + u.cacheRead + u.cacheWrite
-          }
-        }
-        break
-      }
-      case 'assistant/message': {
-        const open = state.openStep
-        if (open !== null && open.turn === d.turn && open.step === d.step) {
-          const llmMs = Math.max(0, event.time - open.startTime)
-          state.llmMs += llmMs
-          let ttftMs = null, decodeMs = null, decodeTokens = null
-          if (open.firstTokenTime !== null) {
-            ttftMs = Math.max(0, open.firstTokenTime - open.startTime)
-            state.ttftMs += ttftMs
-            state.ttftSteps += 1
-            const outputTokens = typeof d.usage?.outputTokens === 'number'
-              && Number.isFinite(d.usage.outputTokens) && d.usage.outputTokens >= 0
-              ? d.usage.outputTokens : null
-            if (outputTokens !== null) {
-              decodeMs = Math.max(0, event.time - open.firstTokenTime)
-              decodeTokens = outputTokens
-              state.decodeMs += decodeMs
-              state.decodeTokens += decodeTokens
-            }
-          }
-          state.lastStep = { llmMs, ttftMs, decodeMs, decodeTokens }
-          state.openStep = null
-        }
-        const u = usageTokensOf(d.usage)
-        if (u !== null) {
-          state.lastPressureTokens = u.input + u.cacheRead + u.cacheWrite
-          state.inputTokens += u.input
-          state.outputTokens += u.output
-          state.cacheReadTokens += u.cacheRead
-          state.cacheWriteTokens += u.cacheWrite
-        }
-        break
-      }
-      case 'tool/call':
-        state.pendingCalls = { ...state.pendingCalls, [d.callId]: event.time }
-        break
-      case 'tool/result': {
-        const callId = d.message?.source?.callId
-        const dispatched = Object.hasOwn(state.pendingCalls, callId)
-          ? state.pendingCalls[callId] : undefined
-        if (dispatched !== undefined) {
-          state.toolMs += Math.max(0, event.time - dispatched)
-          const next = { ...state.pendingCalls }
-          delete next[callId]
-          state.pendingCalls = next
-        }
-        break
-      }
-      case 'step/end':
-        state.turns = state.lastTurn === d.turn ? state.turns : state.turns + 1
-        state.steps += 1
-        state.lastTurn = d.turn
-        state.openStep = null
-        break
-      case 'turn/end':
-        if (Object.keys(state.pendingCalls).length > 0) state.pendingCalls = {}
-        break
-      case 'request/context':
-        if (typeof d.contextWindow === 'number' && Number.isFinite(d.contextWindow) && d.contextWindow > 0) {
-          state.contextWindow = d.contextWindow
-        }
-        break
-      default:
-        break
-    }
-  }
-  const context = state.lastPressureTokens !== null && state.contextWindow !== null
-    ? { usedTokens: state.lastPressureTokens, contextWindow: state.contextWindow }
-    : null
-  return {
-    turns: state.turns, steps: state.steps,
-    llmMs: state.llmMs, toolMs: state.toolMs,
-    ttftMs: state.ttftMs, ttftSteps: state.ttftSteps,
-    decodeMs: state.decodeMs, decodeTokens: state.decodeTokens,
-    inputTokens: state.inputTokens, cacheReadTokens: state.cacheReadTokens,
-    cacheWriteTokens: state.cacheWriteTokens, outputTokens: state.outputTokens,
-    lastStep: state.lastStep,
-    context,
-  }
-}
-
-/**
- * 结构化 RPC 错误（plan-standard-mode §三.8 错误映射约定）。
- *
- * 官方 JsonRpcLineTransport 对 handler 抛错只回 `-32603 + message`；预设/命令类
- * 错误需要把稳定 code 与结构化 data（可用预设列表、挂载失败逐行原因等）送到 App，
- * 所以本插件用 MeowJsonRpcTransport（下方子类）识别 MeowRpcError 并序列化
- * `error.code`（-32001..-32005 服务器自定义区段）与 `error.data`。
- */
-const RPC_ERROR = {
-  /** 请求的 Agent 预设不存在；data.available = 名单里实际可用的 id 列表 */
-  PRESET_UNKNOWN: -32001,
-  /** 预设存在但组合挂载失败；data.detail = 逐行原因（PresetMountError.reason） */
-  PRESET_MOUNT_FAILED: -32002,
-  /** commands 服务未挂载（斜杠命令通道不可用） */
-  COMMAND_UNAVAILABLE: -32003,
-  /** 命令行解析不到已注册命令（含旧会话未 join 预设、没有 /plan 的场景） */
-  COMMAND_UNKNOWN: -32004,
-  /** 内置（trust=system）预设不可删除 */
-  PRESET_IMMUTABLE: -32005,
-}
-
-/** 构造一个带稳定 code/data 的 RPC 错误；由 MeowJsonRpcTransport 识别并结构化回传 */
-function meowRpcError(code, message, data) {
-  const error = new Error(message)
-  error.meowRpc = true
-  error.rpcCode = code
-  error.rpcData = data
-  return error
-}
-
-/**
- * 把 agent-presets 域的异常映射为结构化 RPC 错误；非预设异常原样重抛。
- * UnknownPresetError.message 已含 available 列表，data 里再给结构化一份。
- * @returns {never} 总是以 throw 结束
- */
-function throwMappedPresetError(error) {
-  if (error instanceof UnknownPresetError) {
-    throw meowRpcError(RPC_ERROR.PRESET_UNKNOWN, error.message, {
-      code: 'PRESET_UNKNOWN',
-      presetId: error.presetId,
-      available: [...error.available],
-    })
-  }
-  if (error instanceof PresetMountError) {
-    throw meowRpcError(RPC_ERROR.PRESET_MOUNT_FAILED, error.message, {
-      code: 'PRESET_MOUNT_FAILED',
-      presetId: error.presetId,
-      detail: error.reason,
-    })
-  }
-  throw error
-}
 
 /**
  * 喵仓版行传输：父类的 handler 异常路径只写 `-32603 + message`，这里识别
@@ -584,7 +410,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     super(ctx, transport, options)
     this.ctx = ctx
     this.transport = transport
-    this.streamIntervalMs = Math.max(MIN_STREAM_INTERVAL_MS, options.streamIntervalMs ?? 80)
+    this.streamIntervalMs = Math.max(MIN_STREAM_INTERVAL_MS, options.streamIntervalMs ?? STREAM_INTERVAL_DEFAULT_MS)
     /** requestId → 正在运行的终端命令句柄 */
     this.runningBash = new Map()
     /** sessionId → 进行中的 resume（与官方 sessionCreations 同理的去重） */
@@ -732,9 +558,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
    * append O_APPEND 追加 JOURNAL.jsonl；search 子串+tag+limit，坏行 skip 而非 throw。
    */
   installMemoryTool(agentCtx) {
-    const memoryDir = `${agentsRoot()}/memory`
-    const factsPath = `${memoryDir}/FACT.md`
-    const journalPath = `${memoryDir}/JOURNAL.jsonl`
+    const journalPath = `${memoryDir()}/JOURNAL.jsonl`
     agentCtx.tools.register(defineTool({
       name: 'memory',
       description: '读写长期记忆：update 整份覆盖 FACT.md、append 追加一条到 JOURNAL 日志、search 检索日志。'
@@ -780,10 +604,10 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
         switch (args.action) {
           case 'update': {
             if (typeof args.content !== 'string') throw new Error('memory: content is required for update')
-            mkdirSync(memoryDir, { recursive: true })
-            const tmp = `${factsPath}.tmp-${process.pid}-${Date.now()}`
+            mkdirSync(memoryDir(), { recursive: true })
+            const tmp = `${factsPath()}.tmp-${process.pid}-${Date.now()}`
             writeFileSync(tmp, args.content)
-            renameSync(tmp, factsPath)
+            renameSync(tmp, factsPath())
             return {
               ok: true,
               message: 'FACT.md 已更新（下个新会话的 <facts> 快照会包含新内容；当前会话快照不变）',
@@ -793,7 +617,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
             if (typeof args.text !== 'string' || args.text.length === 0) {
               throw new Error('memory: text is required for append')
             }
-            mkdirSync(memoryDir, { recursive: true })
+            mkdirSync(memoryDir(), { recursive: true })
             const tags = Array.isArray(args.tags) ? args.tags.map(String) : []
             const entry = { ts: new Date().toISOString(), tags, text: args.text }
             const fd = openSync(journalPath, 'a')
@@ -807,7 +631,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
           case 'search': {
             const query = typeof args.query === 'string' ? args.query.toLowerCase() : ''
             const tag = typeof args.tag === 'string' ? args.tag : undefined
-            const limit = Number.isInteger(args.limit) && args.limit > 0 ? Math.min(args.limit, 200) : 20
+            const limit = Number.isInteger(args.limit) && args.limit > 0 ? Math.min(args.limit, JOURNAL_SEARCH_MAX) : 20
             const matches = []
             try {
               const content = readFileSync(journalPath, 'utf8')
@@ -848,7 +672,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
    * 按 .personas-order 排序，未列出角色按字母序排最后；isDefault = id === 'default'。
    */
   async personasList() {
-    const root = `${agentsRoot()}/personas`
+    const root = personaRoot()
     let entries
     try {
       entries = readdirSync(root, { withFileTypes: true })
@@ -901,7 +725,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     const requested = Array.isArray(params?.order) ? params.order.map(String) : []
     const valid = new Set((await this.personasList()).personas.map((p) => p.id))
     const filtered = [...new Set(requested.filter((id) => valid.has(id)))]
-    const root = `${agentsRoot()}/personas`
+    const root = personaRoot()
     try {
       mkdirSync(root, { recursive: true })
       writeFileSync(`${root}/.personas-order`, JSON.stringify(filtered))
@@ -923,7 +747,12 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     try {
       const inspection = await persistence.load(SessionId(sessionId))
       return resolveSessionPreset({ header: inspection.meta, events: inspection.events })
-    } catch {
+    } catch (error) {
+      // 「not found」= 新会话创建前的正常查询路径（尚无日志），静默；其它失败（库损坏/权限）
+      // = 恢复出的工具面凭空变少（「AI 突然不会用某工具」类问题将无线索），留痕
+      if (!isSessionNotFoundError(error)) {
+        warnOnce(`loggedPreset:${sessionId}`, `会话预设解析失败（工具面将回退默认）`, error)
+      }
       return undefined
     }
   }
@@ -1173,9 +1002,10 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     const llm = this.ctx.get('llm')
     if (llm === undefined) throw new Error('llm service unavailable')
     const models = await llm.listModels(provider)
-    return {
-      models: await Promise.all(models.map(async (m) => {
-        // resolveModelInfo 是适配器本地查表；个别模型解析失败（目录与路由不同步等）只丢 reasoning 不影响条目
+    // resolveModelInfo 是适配器本地查表；个别模型解析失败（目录与路由不同步等）只丢
+    // reasoning 不影响条目，但失败数非零必须留痕一次（思考档位钮变灰将无原因可查）
+    const reasoningFailures = []
+    const entries = await Promise.all(models.map(async (m) => {
         let reasoning
         try {
           const resolved = await llm.resolveModelInfo(provider, m.id)
@@ -1187,7 +1017,9 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
                 : { defaultEffort: String(resolved.reasoning.defaultEffort) }),
             }
           }
-        } catch {}
+        } catch (error) {
+          reasoningFailures.push(`${m.id}：${error instanceof Error ? error.message : String(error)}`)
+        }
         return {
           id: m.id,
           name: m.name,
@@ -1195,8 +1027,12 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
           ...(m.inputModalities === undefined ? {} : { inputModalities: [...m.inputModalities] }),
           ...(reasoning === undefined ? {} : { reasoning }),
         }
-      })),
+    }))
+    if (reasoningFailures.length > 0) {
+      warn(`llm/models ${provider}：${reasoningFailures.length} 个模型 reasoning 元数据解析失败`
+        + `（${reasoningFailures.slice(0, 3).join('；')}${reasoningFailures.length > 3 ? '；…' : ''}）`)
     }
+    return { models: entries }
   }
 
   /** llm/discoverModels：测试连接 / 获取远端模型列表（llm-pi-ai 命名空间） */
@@ -1460,10 +1296,15 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     let inspection
     try {
       inspection = await persistence.load(SessionId(sessionId))
-    } catch {
+    } catch (error) {
+      // 「not found」= App 查询了不存在的会话（响应合同内的 null），静默；
+      // 其它失败（库损坏/权限）会让看板调用量整个空掉，必须留痕
+      if (!isSessionNotFoundError(error)) {
+        warn(`session/stats 读会话日志失败（调用量统计将为空）sessionId=${sessionId}`, error)
+      }
       return { stats: null }
     }
-    return { stats: foldSessionStats(inspection.events) }
+    return { stats: foldSessionStats(inspection.events, { isTokenDelta }) }
   }
 
   /**
@@ -1512,9 +1353,14 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
         (value) => ({ done: true, value }),
         (error) => ({ done: true, error }),
       ),
-      new Promise((resolve) => { setTimeout(() => resolve({ done: false }), 5000) }),
+      new Promise((resolve) => { setTimeout(() => resolve({ done: false }), COMMAND_TIMEOUT_MS) }),
     ])
     if (!settled.done) {
+      // 5s 只放弃等待、不 abort：命令可能已 queued 生效，仍按已受理上报；
+      // 此后迟到的 rejection 经第二个 catch 观察者落日志（第一个 catch 只防 unhandledRejection）
+      void execution.catch((error) => {
+        warn(`session/command 迟到失败（已按「已受理」上报，是否生效以会话事件为准）sessionId=${sessionId} line=${line}`, error)
+      })
       return {
         sessionId,
         kind: 'success',
@@ -1561,7 +1407,11 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     let inspection
     try {
       inspection = await persistence.load(SessionId(sessionId))
-    } catch {
+    } catch (error) {
+      // 「not found」= 合同内空响应，静默；其它失败（库损坏/权限）→ 水合全空（todo/plan/goal 丢），留痕
+      if (!isSessionNotFoundError(error)) {
+        warn(`session/query 读会话日志失败（状态水合将为空）sessionId=${sessionId}`, error)
+      }
       return empty
     }
     const events = inspection.events
@@ -1583,7 +1433,9 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     let preset = null
     try {
       preset = resolveSessionPreset({ header: inspection.meta, events }) ?? null
-    } catch {
+    } catch (error) {
+      // 同 loggedPresetId 型：query 通道的预设解析失败会让 App 恢复出错误的面
+      warnOnce(`queryPreset:${sessionId}`, `会话预设解析失败（恢复的预设信息将缺失）`, error)
       preset = null
     }
     return { sessionId, preset, blank, todos, plan, goal }
@@ -1601,7 +1453,9 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     let defaultId
     try {
       defaultId = (await presets.resolve()).id
-    } catch {
+    } catch (error) {
+      // 默认预设解析失败 = 名单不标注 isDefault（App 端「默认」徽标消失），留痕
+      warn('presets/list 默认预设解析失败（isDefault 将不标注）', error)
       defaultId = undefined
     }
     return {
@@ -1702,7 +1556,9 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
       this.questionProviderDisposer = userQuestions.registerProvider({
         ask: (request) => this.askUser(request),
       })
-    } catch {
+    } catch (error) {
+      // 最高危的静默：provider 没建成 → ask_user 永久挂起（AGENTS 记录过探针挂死事故），必须留痕
+      warn('问答通道 provider 注册失败（ask_user 将永久挂起）', error)
       this.questionProviderDisposer = undefined
     }
   }
@@ -1797,6 +1653,8 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
  *   - stdio 模式（未设 DSH_JSONRPC_SOCKET）：沿用 process.stdin/stdout（PC 调试）。
  */
 export function apply(ctx, config) {
+  // 日志通道一次性接线（log.js）：① 的留痕全部经这里落 ctx.logger，不碰 stdout 帧
+  setLogger(ctx.logger)
   const resolved = config
   const exit = (code) => process.exit(code)
 
@@ -1807,7 +1665,7 @@ export function apply(ctx, config) {
   // system prompt 前缀恒定（KV 缓存可命中）。两开关均 OFF 时返回空串（renderPrompt 丢弃空 section）。
   ctx.systemPrompt.section({
     name: 'meow:memory',
-    order: 50,
+    order: MEMORY_SECTION_ORDER,
     text: (context) => {
       try {
         return memorySectionText(context)
@@ -1830,14 +1688,14 @@ export function apply(ctx, config) {
     const personaId = id !== undefined
       ? (memorySnapshots.get(String(id))?.persona?.id ?? resolvePersonaId(memoryConfigs.get(String(id))?.personaId))
       : resolvePersonaId(undefined)
-    return personaId === null ? '' : `${agentsRoot()}/personas/${personaId}/SOUL.md`
+    return personaId === null ? '' : `${personaDir(personaId)}/SOUL.md`
   })
   ctx.systemPrompt.variable('user_path', (context) => {
     const id = context?.agent?.id
     const personaId = id !== undefined
       ? (memorySnapshots.get(String(id))?.persona?.id ?? resolvePersonaId(memoryConfigs.get(String(id))?.personaId))
       : resolvePersonaId(undefined)
-    return personaId === null ? '' : `${agentsRoot()}/personas/${personaId}/USER.md`
+    return personaId === null ? '' : `${personaDir(personaId)}/USER.md`
   })
   // 角色开关 OFF → 两个内容变量都返回空串（design-memory-system §五.2）
   ctx.systemPrompt.variable('soul', (context) => {
@@ -1906,9 +1764,16 @@ export function apply(ctx, config) {
     const server = createServer((socket) => {
       const cleanup = serve(new MeowJsonRpcTransport(socket, socket))
       socket.on('close', () => { void cleanup() })
-      socket.on('error', () => {})
+      socket.on('error', (error) => {
+        // 单连接异常（客户端强断等）不致命，但此前完全无痕；消息截断 200 防刷屏
+        warn(`socket 连接异常：${String(error?.message ?? error).slice(0, 200)}`)
+      })
     })
-    server.on('error', () => {})
+    server.on('error', (error) => {
+      // listen 失败（EADDRINUSE/ENOENT 等）静默 = 「多实例抢 socket → RPC 随机被重置」
+      // 那次事故零线索（AGENTS 记录），最高优先留痕；消息截断 200
+      warn(`jsonrpc socket server 错误：${String(error?.message ?? error).slice(0, 200)}`)
+    })
     server.listen(socketPath)
     ctx.effect(() => {
       return () => { server.close() }
