@@ -141,7 +141,7 @@ fun SettingsScreen(
                 SettingsRow(
                     icon = Icons.Filled.Terminal,
                     title = stringResource(R.string.settings_terminal),
-                    subtitle = "默认 home 路径 · pi RPC bash",
+                    subtitle = "默认 home 路径 · DSH bash",
                     onClick = onOpenTerminal,
                 )
             }

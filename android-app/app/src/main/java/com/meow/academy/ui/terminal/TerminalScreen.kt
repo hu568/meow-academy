@@ -161,7 +161,11 @@ fun TerminalScreen(
             QUICK_COMMANDS.forEach { cmd ->
                 androidx.compose.material3.AssistChip(
                     onClick = { vm.sendInput(cmd) },
-                    label = { Text(cmd, fontSize = 12.sp) },
+                    label = { Text(cmd, fontSize = 12.sp, color = Color(0xFFE6EDF3)) },
+                    colors = androidx.compose.material3.AssistChipDefaults.assistChipColors(
+                        containerColor = Color(0xFF161B22),
+                        labelColor = Color(0xFFE6EDF3),
+                    ),
                 )
             }
         }
