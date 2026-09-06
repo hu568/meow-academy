@@ -113,6 +113,21 @@
 4. `LD_PRELOAD=libtermux-exec.so` + `PREFIX` 环境变量，验证 `apt update` 是否跑通；
 5. 跑通后决定是否集成进 `runtime.bin` 与 `DshProcessLauncher` 的 env。
 
+## 6. 落地记录（2026-09-06 真机验收）
+
+- **结论：主线方案 A 全部落地并真机通过**。`plan/plan-apt-package-manager.md` 阶段 2/3 完成，探针 `.tmp/apt-probe.mjs` 五步全 PASS。
+- 最终执行链不是 termux-exec，而是自写 **`meow-exec.so`（LD_PRELOAD execve 转发）**：App 私有目录 ELF → `/system/bin/linker64`，脚本 → `/system/bin/sh`。
+- 物理前缀 = `<filesDir>/data/data/com.termux/files/usr`，`dpkg --instdir=<filesDir>` 拼出真实可写路径，无需 proot。
+- 真机踩坑与修复（按出现顺序）：
+  1. `PATH` 必须含 `runtime/usr/bin`，否则 bash/session 里找不到 apt 本体；
+  2. TLS/CA：`SSL_CERT_FILE` 不够，apt（libcurl）还要 `CURL_CA_BUNDLE` + apt.conf `Acquire::https::CAInfo`；
+  3. apt 2.8.1 验签仍走 `apt-key`，必须把 Termux 的 `apt-key` 脚本拷进 runtime 并把硬编码 `/data/data/com.termux/files/usr/etc/apt/trusted.gpg.d` patch 成 `$MEOW_RUNTIME_DIR/...`；
+  4. apt 给 dpkg 子进程设 `DPkg::Path`（Termux 硬编码），dpkg 因此在 App 域找不到 sh/rm/tar/diff/dpkg-split/start-stop-daemon → apt.conf 覆盖为 `$rt/usr/bin:/system/bin`；
+  5. dpkg 解包需要 `tar`（GNU，toybox 不支持 `--warning=no-timestamp`）、`diff`、`start-stop-daemon`、`dpkg-split`、`dpkg-divert`，全部随 runtime 拷贝并带依赖（如 libacl.so）；
+  6. RuntimeExtractor 解压后会把非 node/bash 的可执行位丢光，需对 `usr/bin/*`、`usr/lib/apt/methods/*`、`meow-exec.so` 补 `setExecutable`；
+  7. 装出的 `file` 硬编码 Termux magic 路径 → launcher 注入 `MAGIC=$PREFIX/share/misc/magic` 指向物理前缀内真实文件。
+- 遗留：版本号仍 0.2.9/versionCode 11，0.2.10/versionCode 12 待主人拍板；`RELEASE_NOTES_0.2.10.md` 与 AGENTS.md 版本状态行待正式发行时补。
+
 ---
 
-*关联：`android-app/runtime-assets/build-runtime.sh`、`DshProcessLauncher.kt`、`terminal-host.js`*
+*关联：`android-app/runtime-assets/build-runtime.sh`、`android-app/runtime-assets/meow-exec.c`、`DshProcessLauncher.kt`、`RuntimeExtractor.kt`、`terminal-host.js`*

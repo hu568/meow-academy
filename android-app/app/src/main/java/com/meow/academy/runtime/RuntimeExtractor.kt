@@ -167,6 +167,13 @@ object RuntimeExtractor {
             val f = File(tmpDir, wrapper)
             if (f.exists()) f.setExecutable(true, false)
         }
+        // 内置 apt 包管理器（0.2.10）：usr/bin 下 apt/dpkg/gpgv/apt-key 与 methods 都要可执行位。
+        // 虽然 meow-exec 会把 exec 转发到 linker64/sh，但 apt-key 这类 sh 脚本内部用
+        // `command -v gpgv` 判断可用性，非可执行文件会被跳过 → 验签失败。
+        File(tmpDir, "usr/bin").listFiles()?.forEach { if (it.isFile) it.setExecutable(true, false) }
+        File(tmpDir, "usr/lib/apt/methods").listFiles()?.forEach { if (it.isFile) it.setExecutable(true, false) }
+        val meowExec = File(tmpDir, "lib/meow-exec.so")
+        if (meowExec.exists()) meowExec.setExecutable(true, false)
 
         // 原子替换
         if (targetDir.exists()) targetDir.deleteRecursively()

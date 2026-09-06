@@ -26,6 +26,84 @@ object DshProcessLauncher {
     /** 真终端宿主入口（相对 runtime 根目录） */
     private const val ENTRY_REL = "bin/terminal-host.js"
 
+    /** 内置 apt 前缀（相对 filesDir）：复刻 Termux 前缀形状，deb 内硬编码路径经 dpkg --instdir 拼接落此
+     *  （plan-apt-package-manager.md §3.2：物理 $PREFIX = <filesDir>/data/data/com.termux/files/usr） */
+    private const val APT_PREFIX_REL = "data/data/com.termux/files/usr"
+
+    /** apt 镜像（沿用主人现用镜像；备选官方 packages.termux.dev，风险 #10） */
+    private const val APT_MIRROR = "https://termux.3san.dev/termux/termux-main"
+
+    /**
+     * 确保内置 apt 包管理器的运行环境（0.2.10，plan-apt-package-manager.md §4.2）。
+     *
+     * 幂等播种 App 可变区的 apt 骨架（升级/重启不洗已装包）：
+     *  - 目录树 + dpkg 空库 status（仅在缺失时创建，禁覆盖已装包数据库）；
+     *  - apt.conf（模板即代码，每次启动重写——升级即生效；镜像定制后续从设置读）；
+     *  - sources.list。
+     *
+     * keyring 与 CA 不进可变区：trustedparts / SSL_CERT_FILE 直接指 runtime 只读区
+     * （build-runtime.sh 打包时拷入），App 升级随 runtime 一起换新。
+     *
+     * @return 物理 $PREFIX（供 env 注入）
+     */
+    private fun ensureAptEnv(context: Context, runtimeDir: File): File {
+        val prefix = File(context.filesDir, APT_PREFIX_REL)
+        val p = prefix.absolutePath
+        val rt = runtimeDir.absolutePath
+
+        // 目录骨架（mkdirs 幂等）
+        listOf(
+            "bin", "lib", "tmp",
+            "etc/apt/apt.conf.d", "etc/apt/sources.list.d", "etc/apt/preferences.d", "etc/apt/trusted.gpg.d",
+            "var/lib/dpkg/info", "var/lib/dpkg/updates", "var/lib/dpkg/parts",
+            "var/lib/dpkg/alternatives", "var/lib/apt/lists/partial",
+            "var/cache/apt/archives/partial", "var/log/apt",
+        ).forEach { File(prefix, it).mkdirs() }
+
+        // dpkg 空库 status：只在缺失时创建（禁覆盖已装包数据库，风险 #5）
+        val status = File(prefix, "var/lib/dpkg/status")
+        if (!status.exists()) status.writeText("")
+
+        // apt.conf：绝对路径全覆盖，防编译期 Termux 前缀漏网（apt/keyring/CA 路径全是编译期硬编码）
+        File(prefix, "etc/apt/apt.conf").writeText(
+            """
+            Dir "$p/";
+            Dir::State "$p/var/lib/apt/";
+            Dir::State::status "$p/var/lib/dpkg/status";
+            Dir::State::lists "$p/var/lib/apt/lists/";
+            Dir::Cache "$p/var/cache/apt/";
+            Dir::Cache::archives "$p/var/cache/apt/archives/";
+            Dir::Etc "$p/etc/apt/";
+            Dir::Etc::sourcelist "$p/etc/apt/sources.list";
+            Dir::Etc::sourceparts "$p/etc/apt/sources.list.d/";
+            Dir::Etc::trustedparts "$rt/usr/etc/apt/trusted.gpg.d/";
+            Dir::Etc::main "$p/etc/apt/apt.conf";
+            Dir::Etc::parts "$p/etc/apt/apt.conf.d/";
+            Dir::Log "$p/var/log/apt";
+            Dir::Bin::methods "$rt/usr/lib/apt/methods";
+            Dir::Bin::dpkg "$rt/usr/bin/dpkg";
+            Dir::Bin::gpg "$rt/usr/bin/gpgv";
+            Dir::Bin::gpgv "$rt/usr/bin/gpgv";
+            Dir::Bin::apt-key "$rt/usr/bin/apt-key";
+            // apt 会给 dpkg 子进程设置硬编码 Termux PATH（DPkg::Path），必须改指喵仓 runtime；
+            // 冒号分隔多个目录，dpkg 的 sh/rm 用 /system/bin，tar/diff/dpkg-* 用 runtime/usr/bin
+            DPkg::Path "$rt/usr/bin:/system/bin";
+            DPkg::Options {
+              "--admindir=$p/var/lib/dpkg";
+              "--instdir=${context.filesDir.absolutePath}";
+            };
+            Acquire::https::CAInfo "$rt/etc/tls/cert.pem";
+            Acquire::Languages "none";
+            """.trimIndent() + "\n",
+        )
+
+        // sources.list：镜像沿用（模板即代码，每次重写）
+        File(prefix, "etc/apt/sources.list").writeText("deb $APT_MIRROR stable main\n")
+
+        return prefix
+    }
+
+
     /**
      * 拉起真终端宿主（terminal-host）：通过 `/system/bin/linker64` 加载内置 node。
      *
@@ -70,11 +148,28 @@ object DshProcessLauncher {
         val pb = ProcessBuilder(command)
         pb.directory(workspaceDirFile)
         pb.environment().apply {
-            // PATH：runtime/bin 里有 node/bash；/system/bin 提供 sh 等系统命令
-            put("PATH", runtimeDir.absolutePath + "/bin:/system/bin:/system/xbin")
+            // ── 内置 apt 包管理器环境（0.2.10 包管理器，plan-apt-package-manager.md §4.3）──
+            // 物理 $PREFIX（可变区，装包落点）+ meow-exec exec 转发 + APT_CONFIG/TMPDIR/SSL_CERT_FILE。
+            // PATH 前置 $PREFIX/bin：装出的命令优先命中（ELF 经 meow-exec 转 linker64，脚本转 sh）。
+            // LD_PRELOAD 全链继承：apt→dpkg→postinst→装出的命令（childEnv 只滤 KEY/PASSWORD/SECRET/
+            // TOKEN 与 DSH_ 前缀，不滤 LD_PRELOAD，DSH bash 工具链自动继承 ✓）。
+            val aptPrefix = ensureAptEnv(context, runtimeDir)
+            put("MEOW_PREFIX", aptPrefix.absolutePath)
+            put("PREFIX", aptPrefix.absolutePath) // 供脚本里 $PREFIX 语义一致
+            // file 等装出的工具编译期硬编码 Termux 前缀（/data/data/com.termux/files/usr/...），
+            // App 域读不到；用 MAGIC 环境变量把 magic 数据库指到物理 $PREFIX 内（plan §七/阶段1已知坑）
+            put("MAGIC", aptPrefix.absolutePath + "/share/misc/magic")
+            put("APT_CONFIG", aptPrefix.absolutePath + "/etc/apt/apt.conf")
+            put("TMPDIR", aptPrefix.absolutePath + "/tmp")
+            put("SSL_CERT_FILE", runtimeDir.absolutePath + "/etc/tls/cert.pem") // openssl 编译期 CA 指 Termux，App 域环境变量接管
+            put("CURL_CA_BUNDLE", runtimeDir.absolutePath + "/etc/tls/cert.pem") // libcurl 走 CURL_CA_BUNDLE，apt 的 https 方法才认
+            put("LD_PRELOAD", runtimeDir.absolutePath + "/lib/meow-exec.so")
+            // PATH：$PREFIX/bin（装出的命令）+ runtime/usr/bin（apt/dpkg/gpgv 本体）
+            //        + runtime/bin（node/bash wrapper）+ 系统
+            put("PATH", aptPrefix.absolutePath + "/bin:" + runtimeDir.absolutePath + "/usr/bin:" + runtimeDir.absolutePath + "/bin:/system/bin:/system/xbin")
+            // LD_LIBRARY_PATH：装出包的新依赖优先，runtime 内置 .so 兜底
+            put("LD_LIBRARY_PATH", aptPrefix.absolutePath + "/lib:" + runtimeDir.absolutePath + "/lib")
             put("HOME", workspaceDir)
-            // node/bash 是动态链接 Termux 库，需指向 runtime 内置的 .so
-            put("LD_LIBRARY_PATH", runtimeDir.absolutePath + "/lib")
             // Termux 版 node 的 OpenSSL 默认 CA 路径在 App 沙箱不可读，重定向到 runtime 内置 CA 束
             put("OPENSSL_CONF", runtimeDir.absolutePath + "/etc/tls/openssl.cnf")
             put("NODE_EXTRA_CA_CERTS", runtimeDir.absolutePath + "/etc/tls/cert.pem")

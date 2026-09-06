@@ -4,8 +4,9 @@
 #
 # 在真机 Termux 上运行（需 nodejs-lts + binutils + bash）：
 #   1. 拷贝 node + bash 二进制及其 Termux 动态库（cp -L 解引用 symlink）
+#   1.5 内置 apt 包管理器：apt/dpkg/gpgv/methods/keyring + 编译 meow-exec.so（0.2.10）
 #   2. 解包 PC 端 build-dsh-closure.sh 生成的 DSH 闭包（node_modules + dsh/）
-#   3. 拷贝 CA 束 + DNS shim（旧坑原样保留）
+#   3. 真终端 node-pty + CA 束 + DNS shim（旧坑原样保留）
 #   4. tar czf 打包为 meow-runtime/ 顶层目录的 gzip 流 → runtime.bin
 #
 # 产物拷回 PC 后放到 app/src/main/assets/runtime.bin（gitignore 已排除）。
@@ -48,9 +49,15 @@ READELF="$(command -v greadelf || command -v readelf || true)"
 
 copy_elf_with_deps() {
   local src="$1" dst="$2" need_file="$STAGE/need-$3.txt"
-  echo "» 拷贝 $3 二进制…"
+  echo "» 拷贝 $3…"
   cp -L "$src" "$dst"
-  "$READELF" -d "$dst" | sed -n 's/.*NEEDED.*\[\([^]]*\)\].*/\1/p' > "$need_file"
+  # readelf -d 只对 ELF 有意义；脚本（如 dpkg-maintscript-helper）直接拷入即可，
+  # 不需要（也没法）枚举 NEEDED。set -e 下必须用 if 接住失败，否则脚本文件会中断打包。
+  if "$READELF" -d "$dst" >/dev/null 2>&1; then
+    "$READELF" -d "$dst" | sed -n 's/.*NEEDED.*\[\([^]]*\)\].*/\1/p' > "$need_file"
+  else
+    : > "$need_file"
+  fi
   while :; do
     local added=0
     while read -r lib; do
@@ -85,6 +92,77 @@ exec /system/bin/linker64 "${MEOW_RUNTIME_DIR:-$HOME/meow-runtime}/lib/node.bin"
 EOF
 chmod +x "$RUNTIME/bin/bash" "$RUNTIME/bin/node"
 echo "  lib/ 现有 $(ls "$RUNTIME/lib" | grep -c '\.so' || true) 个 .so"
+
+# ── 2.5 内置 apt 包管理器（0.2.10，plan-apt-package-manager.md §4.5/阶段3）──
+# Termux 的 apt/dpkg/gpgv 家族搬进 runtime 只读区（usr/bin/），下载 methods 进
+# usr/lib/apt/methods/，keyring 进 usr/etc/apt/trusted.gpg.d/；依赖 .so 统一并入
+# lib/（LD_LIBRARY_PATH 兜底，copy_elf_with_deps 自动去重）。装出的包走 filesDir
+# 可变区（<filesDir>/data/data/com.termux/files/usr），由 DshProcessLauncher
+# .ensureAptEnv() 启动期幂等播种 apt.conf / sources.list / dpkg 数据库。
+echo "» 拷贝 apt/dpkg/gpgv 家族（apt 包管理器）…"
+mkdir -p "$RUNTIME/usr/bin" "$RUNTIME/usr/lib/apt/methods" "$RUNTIME/usr/etc/apt/trusted.gpg.d"
+for b in apt apt-get apt-cache apt-config apt-mark dpkg dpkg-query dpkg-deb dpkg-trigger \
+         dpkg-split dpkg-divert update-alternatives gpgv dpkg-maintscript-helper \
+         tar diff start-stop-daemon; do
+  if [ -x "$PREFIX/bin/$b" ]; then
+    copy_elf_with_deps "$PREFIX/bin/$b" "$RUNTIME/usr/bin/$b" "apt-$b"
+  else
+    echo "  ⚠ 缺 $PREFIX/bin/$b，跳过（不影响主链）" >&2
+  fi
+done
+# apt-key 是 POSIX sh 脚本（apt 更新源时仍会调它做 InRelease 验签），
+# 不能走 copy_elf_with_deps（readelf 对它无意义）；拷入后把脚本里硬编码的
+# Termux 前缀路径替换成 MEOW_RUNTIME_DIR 运行时定位（App 域读不到真实 Termux 路径）。
+if [ -f "$PREFIX/bin/apt-key" ]; then
+  cp -L "$PREFIX/bin/apt-key" "$RUNTIME/usr/bin/apt-key"
+  sed -i \
+    -e 's#/data/data/com.termux/files/usr/etc/apt/trusted.gpg.d#$MEOW_RUNTIME_DIR/usr/etc/apt/trusted.gpg.d#g' \
+    -e 's#/data/data/com.termux/files/usr/etc/apt/trusted.gpg#$MEOW_RUNTIME_DIR/usr/etc/apt/trusted.gpg#g' \
+    "$RUNTIME/usr/bin/apt-key"
+  chmod +x "$RUNTIME/usr/bin/apt-key"
+  echo "  + apt-key（已 patch 路径）"
+else
+  echo "  ⚠ 缺 $PREFIX/bin/apt-key（apt update 验签会失败）" >&2
+fi
+echo "» 拷贝 apt 下载 methods（http/file/copy/rred/store…）"
+for m in "$PREFIX"/lib/apt/methods/*; do
+  [ -f "$m" ] || continue
+  copy_elf_with_deps "$m" "$RUNTIME/usr/lib/apt/methods/$(basename "$m")" "apt-method-$(basename "$m")"
+done
+echo "» 拷贝 termux-keyring 公钥（dpkg -L termux-keyring 实测路径）…"
+if dpkg -L termux-keyring >/dev/null 2>&1; then
+  while IFS= read -r kg; do
+    [ -f "$kg" ] || continue
+    cp -L "$kg" "$RUNTIME/usr/etc/apt/trusted.gpg.d/"
+    echo "  + $(basename "$kg")"
+  done < <(dpkg -L termux-keyring 2>/dev/null | grep '\.gpg$' || true)
+fi
+# 若 termux-keyring 另装 share/keyring（旧版布局），一并带上（不存在则跳过）
+if [ -d "$PREFIX/share/keyring" ]; then
+  mkdir -p "$RUNTIME/usr/share"
+  cp -rL "$PREFIX/share/keyring" "$RUNTIME/usr/share/"
+fi
+# keyring 是 apt update 验签的前提：一张公钥都没有就应 fail loud（防静默拿到坏包源）
+if ! find "$RUNTIME/usr/etc/apt/trusted.gpg.d" -type f -print -quit | grep -q .; then
+  echo "✗ termux-keyring 未找到/未装，apt 验签缺失（请 pkg install termux-keyring）" >&2
+  exit 1
+fi
+echo "» 准备 meow-exec.so（execve 转发 LD_PRELOAD）…"
+if [ -n "${MEOW_EXEC_SO:-}" ] && [ -f "$MEOW_EXEC_SO" ]; then
+  # 预编译 .so（如 PC NDK 交叉编译产物）优先，省去 Termux 装 clang；仍保留源码编译路径
+  cp -L "$MEOW_EXEC_SO" "$RUNTIME/lib/meow-exec.so"
+  echo "  ✓ 使用预编译 meow-exec.so: $MEOW_EXEC_SO"
+else
+  MEOW_EXEC_SRC="$(cd "$(dirname "$0")" && pwd)/meow-exec.c"
+  if [ -f "$MEOW_EXEC_SRC" ]; then
+    command -v clang >/dev/null || { echo "✗ 未找到 clang，请先 pkg install clang（或用 MEOW_EXEC_SO 指定预编译 .so）" >&2; exit 1; }
+    clang -shared -fPIC -O2 -o "$RUNTIME/lib/meow-exec.so" "$MEOW_EXEC_SRC" -ldl
+  else
+    echo "✗ 找不到 meow-exec.c（$MEOW_EXEC_SRC）" >&2
+    exit 1
+  fi
+fi
+ls -lh "$RUNTIME/lib/meow-exec.so"
 
 # ── 3. DSH 闭包（PC 端 pnpm deploy 产物：node_modules + dsh/）──
 echo "» 解包 DSH 闭包…"
@@ -158,6 +236,14 @@ console.log("  ✓ symlink 物化完成");
 ' "$RUNTIME/node_modules"
 
 # ── 6. 打包（gzip 流；.bin 后缀避开 AGP 对 .gz 的自动解压改名）──
+echo "» 打包前自检（apt 包管理器产物）…"
+[ -f "$RUNTIME/usr/bin/apt-get" ] || { echo "✗ 缺 $RUNTIME/usr/bin/apt-get" >&2; exit 1; }
+[ -f "$RUNTIME/usr/bin/dpkg" ] || { echo "✗ 缺 $RUNTIME/usr/bin/dpkg" >&2; exit 1; }
+[ -f "$RUNTIME/usr/bin/gpgv" ] || { echo "✗ 缺 $RUNTIME/usr/bin/gpgv" >&2; exit 1; }
+[ -f "$RUNTIME/usr/bin/apt-key" ] || { echo "✗ 缺 $RUNTIME/usr/bin/apt-key（apt update 验签必需）" >&2; exit 1; }
+[ -f "$RUNTIME/lib/meow-exec.so" ] || { echo "✗ 缺 $RUNTIME/lib/meow-exec.so" >&2; exit 1; }
+[ -f "$RUNTIME/usr/lib/apt/methods/http" ] || { echo "✗ 缺 apt methods/http" >&2; exit 1; }
+echo "  ✓ apt/dpkg/gpgv/meow-exec/methods 齐备"
 echo "» 打包 tar.gz…"
 tar -C "$STAGE" -czf "$OUT_FILE" meow-runtime
 ls -lh "$OUT_FILE"
