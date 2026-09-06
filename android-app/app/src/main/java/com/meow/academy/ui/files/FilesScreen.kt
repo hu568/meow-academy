@@ -44,6 +44,7 @@ import com.meow.academy.data.files.FileEntry
 import com.meow.academy.data.files.FileRepository
 import com.meow.academy.ui.components.AppTopBar
 import com.meow.academy.ui.components.EmptyState
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -104,18 +105,43 @@ fun FilesScreen(
         if (uris.isNotEmpty()) vm.importFiles(uris)
     }
 
-    // 操作反馈 Snackbar
+    // 操作反馈 Snackbar：宿主超时 + 4 秒兜底双保险，杜绝气泡不自动消失（喵~）
     LaunchedEffect(state.snackbarMessage) {
-        state.snackbarMessage?.let { msg ->
+        val msg = state.snackbarMessage ?: return@LaunchedEffect
+        val autoDismiss = launch {
+            delay(4_000)
+            val current = snackbarHostState.currentSnackbarData
+            if (current?.visuals?.message == msg) current.dismiss()
+        }
+        try {
             snackbarHostState.showSnackbar(msg)
-            vm.consumeSnackbar()
+        } finally {
+            autoDismiss.cancel()
+            // 只在当前仍是本条消息时消费，避免把新来的消息一起清掉
+            if (state.snackbarMessage == msg) vm.consumeSnackbar()
+        }
+    }
+
+    // 一次性轻提示（如“文件过大”）：同样加 4 秒兜底自动关闭（喵~）
+    val showSnackbarOnce: (String) -> Unit = { msg ->
+        scope.launch {
+            val autoDismiss = launch {
+                delay(4_000)
+                val current = snackbarHostState.currentSnackbarData
+                if (current?.visuals?.message == msg) current.dismiss()
+            }
+            try {
+                snackbarHostState.showSnackbar(msg)
+            } finally {
+                autoDismiss.cancel()
+            }
         }
     }
 
     // 📤 待分享文件：打包完成（单文件直发 / 多选·目录已压 zip）→ 拉起系统分享面板（喵~）
     LaunchedEffect(state.shareFiles) {
         state.shareFiles?.let { files ->
-            FileShare.startShare(context, files)?.let { snackbarHostState.showSnackbar(it) }
+            FileShare.startShare(context, files)?.let { showSnackbarOnce(it) }
             vm.consumeShare()
         }
     }
@@ -136,8 +162,8 @@ fun FilesScreen(
         when (openKind(File(entry.path), repository)) {
             FileKind.IMAGE -> onOpenImage(entry)
             FileKind.TEXT, FileKind.MARKDOWN, FileKind.HTML -> onOpenFile(entry)
-            FileKind.LARGE_TEXT -> scope.launch { snackbarHostState.showSnackbar("文件过大，请用终端打开") }
-            else -> scope.launch { snackbarHostState.showSnackbar("无法预览（二进制或未知格式）") }
+            FileKind.LARGE_TEXT -> showSnackbarOnce("文件过大，请用终端打开")
+            else -> showSnackbarOnce("无法预览（二进制或未知格式）")
         }
     }
 
