@@ -30,8 +30,8 @@ object DshProcessLauncher {
      *  （plan-apt-package-manager.md §3.2：物理 $PREFIX = <filesDir>/data/data/com.termux/files/usr） */
     private const val APT_PREFIX_REL = "data/data/com.termux/files/usr"
 
-    /** apt 镜像（沿用主人现用镜像；备选官方 packages.termux.dev，风险 #10） */
-    private const val APT_MIRROR = "https://termux.3san.dev/termux/termux-main"
+    /** apt 镜像（官方源，索引与文件同步；termux.3san.dev 曾因索引过期 404，见 plan-apt-optimization.md §3.1） */
+    private const val APT_MIRROR = "https://packages.termux.dev/apt/termux-main"
 
     /**
      * 确保内置 apt 包管理器的运行环境（0.2.10，plan-apt-package-manager.md §4.2）。
@@ -97,8 +97,30 @@ object DshProcessLauncher {
             """.trimIndent() + "\n",
         )
 
-        // sources.list：镜像沿用（模板即代码，每次重写）
-        File(prefix, "etc/apt/sources.list").writeText("deb $APT_MIRROR stable main\n")
+        // sources.list：仅在缺失时播种（用户/AI 运行时换源必须保留，勿覆盖回退坏源，
+        // 见 plan-apt-optimization.md §3.2；apt.conf 仍每次重写——模板即代码，升级即时生效）
+        val sources = File(prefix, "etc/apt/sources.list")
+        if (!sources.exists()) {
+            sources.writeText("deb $APT_MIRROR stable main\n")
+        }
+
+        // $PREFIX/bin/{sh,bash} symlink 保险（plan-apt-optimization.md §3.4）：
+        // dpkg 二进制编译期硬编码 /data/data/com.termux/files/usr/bin/bash，物理前缀缺 shell
+        // 时某些维护脚本/子进程可能异常。指向 runtime lib/bash.bin，不存在才建（不覆盖包文件）；
+        // 未来若被真实 Termux 包接管（释放真文件），exists() 天然让 symlink 让位。
+        val bashReal = File(runtimeDir, "lib/bash.bin")
+        if (bashReal.exists()) {
+            listOf("bash", "sh").forEach { name ->
+                val link = File(prefix, "bin/$name")
+                if (!link.exists()) {
+                    try {
+                        java.nio.file.Files.createSymbolicLink(link.toPath(), bashReal.toPath())
+                    } catch (_: IOException) {
+                        // SELinux 禁 createSymbolicLink 时静默跳过（环境保险，不影响主链）
+                    }
+                }
+            }
+        }
 
         return prefix
     }
@@ -159,6 +181,14 @@ object DshProcessLauncher {
             // file 等装出的工具编译期硬编码 Termux 前缀（/data/data/com.termux/files/usr/...），
             // App 域读不到；用 MAGIC 环境变量把 magic 数据库指到物理 $PREFIX 内（plan §七/阶段1已知坑）
             put("MAGIC", aptPrefix.absolutePath + "/share/misc/magic")
+            // Termux 二进制编译期前缀 /data/data/com.termux/... 在 App 域不可读；
+            // git 模板在物理前缀里真实存在，用环境变量指过去即可消除 warning（plan-apt-optimization.md §3.3）
+            put("GIT_TEMPLATE_DIR", aptPrefix.absolutePath + "/share/git-core/templates")
+            put("GIT_EXEC_PATH", aptPrefix.absolutePath + "/libexec/git-core") // 兜底 libexec 路径
+            // 系统级配置/属性文件（etc/gitconfig、etc/gitattributes）App 域读不到（编译期路径 EACCES
+            // 直接 fatal/warning）；Termux git 包也不带系统配置，跳过 = 语义等价（真机 2026-09-06 验证）
+            put("GIT_CONFIG_NOSYSTEM", "1")
+            put("GIT_ATTR_NOSYSTEM", "1")
             put("APT_CONFIG", aptPrefix.absolutePath + "/etc/apt/apt.conf")
             put("TMPDIR", aptPrefix.absolutePath + "/tmp")
             put("SSL_CERT_FILE", runtimeDir.absolutePath + "/etc/tls/cert.pem") // openssl 编译期 CA 指 Termux，App 域环境变量接管

@@ -124,6 +124,21 @@ if [ -f "$PREFIX/bin/apt-key" ]; then
 else
   echo "  ⚠ 缺 $PREFIX/bin/apt-key（apt update 验签会失败）" >&2
 fi
+# apt-fix 一键修复脚本（0.2.10 优化，plan-apt-optimization.md §3.5）：dpkg --configure -a + apt-get -f install
+# 修复安装中断的 broken state。物理前缀经 $PREFIX 定位（launcher 注入），默认 fallback 兼容手测。
+cat > "$RUNTIME/usr/bin/apt-fix" <<'EOF'
+#!/system/bin/sh
+# apt-fix —— 修复 dpkg 中断状态（喵仓专用：物理前缀 + 硬编码 admindir）
+P="${PREFIX:-/data/user/0/com.meow.academy/files/data/data/com.termux/files/usr}"
+# meow-exec 维护脚本重写残留兜底（脚本自带 trap 被覆盖时可能残留）
+rm -f "$P/tmp"/meow-rewrite-*.sh 2>/dev/null
+dpkg --admindir="$P/var/lib/dpkg" --configure -a 2>&1
+rt=$?
+apt-get -f install -y 2>&1
+exit $((rt ? rt : $?))
+EOF
+chmod +x "$RUNTIME/usr/bin/apt-fix"
+echo "  + apt-fix（broken state 一键修复）"
 echo "» 拷贝 apt 下载 methods（http/file/copy/rred/store…）"
 for m in "$PREFIX"/lib/apt/methods/*; do
   [ -f "$m" ] || continue
