@@ -1,0 +1,207 @@
+From 7ea89d7d7cb453274494b60ac899a7fec1dfdc8e Mon Sep 17 00:00:00 2001
+From: meow <meow@local>
+Date: Fri, 11 Sep 2026 22:16:58 +0800
+Subject: [PATCH 03/10] =?UTF-8?q?=E2=9C=A8=20feat(meow):=20llm-pi-ai=20?=
+ =?UTF-8?q?=E6=A8=A1=E5=9E=8B=E7=AE=A1=E7=90=86=E9=80=82=E9=85=8D=EF=BC=88?=
+ =?UTF-8?q?=E5=86=99=E5=85=A5=20deferred=20+=20=E6=8E=A2=E6=B5=8B=E5=87=AD?=
+ =?UTF-8?q?=E6=8D=AE=E5=AE=B9=E5=BF=8D=EF=BC=89?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+上游 0.1.5 重写了 llm-pi-ai 的配置解析，原 0001 的「删 invalid() + continue 跳过
+空模型路由」被上游的 deferred 校验取代，本次按新结构收敛为两处喵仓差异：
+
+- src/config.ts：assertServiceable() 改走 resolveProfiles(..., 'deferred')。模型
+  管理 UI 允许「先存路由与凭据、后填模型列表」，严格模式会把这种进行中的配置整体
+  拒掉（settings-rejected）；deferred 把它存成休眠路由（无 piProvider）并把 catalog
+  诊断留在 profile.catalogError。标量错误（baseURL/headers/api 等）不走 catalog
+  校验，仍照旧拒绝写入。
+- src/index.ts：模型探测时，路由已存 apiKeyEnv 引用但凭据缺失按「未认证」处理
+  （公开模型列表的端点不该因为还没填 Key 而探测失败），只有格式非法的存储凭据继续
+  抛错。
+- src/catalog.ts 保持上游 invalid() 原样（它现在正是 deferred 模式的诊断来源）。
+- 两个 README 按上游重写后的文本对齐，并标注上述两处 meow fork 差异。
+---
+ packages/llm/llm-pi-ai/README.md              |  4 ++--
+ packages/llm/llm-pi-ai/README.zh.md           |  4 ++--
+ packages/llm/llm-pi-ai/src/catalog.ts         | 10 +++++----
+ packages/llm/llm-pi-ai/src/config.ts          |  6 +++++-
+ packages/llm/llm-pi-ai/src/index.ts           | 12 ++++++++++-
+ packages/llm/llm-pi-ai/tests/adapter.spec.ts  |  5 +++--
+ .../llm/llm-pi-ai/tests/discovery.spec.ts     | 21 +++++++++++++++++++
+ .../llm-pi-ai/tests/dynamic-config.spec.ts    | 12 +++++------
+ 8 files changed, 56 insertions(+), 18 deletions(-)
+
+diff --git a/packages/llm/llm-pi-ai/README.md b/packages/llm/llm-pi-ai/README.md
+index 7f52d3f046..9eee4880d0 100644
+--- a/packages/llm/llm-pi-ai/README.md
++++ b/packages/llm/llm-pi-ai/README.md
+@@ -108,11 +108,11 @@ Profiles are re-read once per operation through the optional settings seam: the
+ 
+ ### Discover models from endpoints
+ 
+-The plugin answers "which models can this provider serve?" for a route a configuration surface is editing or drafting. A route the installed catalog ships is answered from that catalog with no network call; only a route the catalog does not describe is interrogated over the wire. `openai-completions` and `openai-responses` use `GET {baseURL}/models` with bearer auth, while `anthropic-messages` uses native `GET /v1/models?limit=1000` semantics with `x-api-key` and `anthropic-version`; its listing URL accepts the API root with or without a trailing `/v1` because gateway documentation publishes both spellings, and only that listing URL normalizes the segment, so model requests receive the configured `baseURL` unchanged. A named configured route supplies its stored credential and profile `headers` inside the Host, so deployment headers configured through `settings.yaml` or Cordis config reach model discovery without becoming discovery-request or Models-page fields; a key typed into the form still wins over the stored credential. The parser accepts either the standard `data` array or an enriched `models` map, normalizing each candidate's id, display name, context window, and output-token cap; Anthropic's `max_input_tokens` and `max_tokens` feed the same capacity fields, a map key remains the request id even when its entry names a different canonical id, primitive-valued map properties are ignored, and a missing display name falls back to that request id. The reply is candidate metadata a surface may offer for adoption — nothing is stored, and `settings.yaml` remains the only thing that decides what a route serves.
++The plugin answers "which models can this provider serve?" for a route a configuration surface is editing or drafting. A route the installed catalog ships is answered from that catalog with no network call; only a route the catalog does not describe is interrogated over the wire. `openai-completions` and `openai-responses` use `GET {baseURL}/models` with bearer auth, while `anthropic-messages` uses native `GET /v1/models?limit=1000` semantics with `x-api-key` and `anthropic-version`; its listing URL accepts the API root with or without a trailing `/v1` because gateway documentation publishes both spellings, and only that listing URL normalizes the segment, so model requests receive the configured `baseURL` unchanged. A named configured route supplies its stored credential and profile `headers` inside the Host, so deployment headers configured through `settings.yaml` or Cordis config reach model discovery without becoming discovery-request or Models-page fields; a key typed into the form still wins over the stored credential. The parser accepts either the standard `data` array or an enriched `models` map, normalizing each candidate's id, display name, context window, and output-token cap; Anthropic's `max_input_tokens` and `max_tokens` feed the same capacity fields, a map key remains the request id even when its entry names a different canonical id, primitive-valued map properties are ignored, and a missing display name falls back to that request id. The reply is candidate metadata a surface may offer for adoption — nothing is stored, and `settings.yaml` remains the only thing that decides what a route serves. A configured credential reference that resolves to nothing is treated as absent for this probe rather than failing it, so a provider publishing a public model list can be read before a key is stored (**meow fork**).
+ 
+ ### Failures and recovery
+ 
+-A route pi-ai does not ship needs `api`, `baseURL`, and a non-empty `models` list; an unserviceable profile is refused where it is written, naming the route and model. Failures carry stable codes: a credential that cannot be used fails with `INVALID_CREDENTIAL` naming the route and reference, a route whose `apiKeyEnv` reference resolves to nothing fails with `MISSING_CREDENTIAL`, an unconfigured model fails with `UNKNOWN_MODEL`, and terminal provider failures distinguish `QUOTA` from transient `RATE_LIMIT`. `GenerateOptions.stop` is rejected with `UNSUPPORTED_OPTION` because pi-ai's common streaming UI cannot guarantee it across providers.
++A route pi-ai does not ship needs `api`, `baseURL`, and a non-empty `models` list; an unserviceable profile is refused where it is written, naming the route and model. **meow fork**: catalog-level write failures are deferred instead — the profile is stored as a dormant route carrying its diagnostic in `catalogError`, so a route's credentials can be saved before its model list exists; scalar profile errors still refuse the write. Failures carry stable codes: a credential that cannot be used fails with `INVALID_CREDENTIAL` naming the route and reference, a route whose `apiKeyEnv` reference resolves to nothing fails with `MISSING_CREDENTIAL`, an unconfigured model fails with `UNKNOWN_MODEL`, and terminal provider failures distinguish `QUOTA` from transient `RATE_LIMIT`. `GenerateOptions.stop` is rejected with `UNSUPPORTED_OPTION` because pi-ai's common streaming UI cannot guarantee it across providers.
+ 
+ Settings writes strictly validate each new or changed provider after merging its composition and user layers. During namespace registration, stored catalog failures retain the namespace and provider rows, with the first available model diagnostic or route failure in `LlmConfigurableProvider.error`; unchanged failed providers do not block edits elsewhere. Serviceable models remain selectable, while unresolved models remain in the editable configuration and fail with `INVALID_CONFIG` before network I/O if requested directly. Repairing or deleting the offending configuration clears its diagnostic. Schema and self-contained profile errors still reject loading. Later external edits validate changed providers and retain the last accepted section on failure.
+ 
+diff --git a/packages/llm/llm-pi-ai/README.zh.md b/packages/llm/llm-pi-ai/README.zh.md
+index 7916d2e6e0..cec33bc0ed 100644
+--- a/packages/llm/llm-pi-ai/README.zh.md
++++ b/packages/llm/llm-pi-ai/README.zh.md
+@@ -108,11 +108,11 @@ profile 通过可选 settings seam 每次操作重新读取：base 与用户的
+ 
+ ### 从端点发现模型
+ 
+-插件会回答"该提供方可以提供哪些模型？"，供配置界面正在编辑或起草的路由使用。已安装目录提供的路由直接由目录回答，不发网络请求；只有目录未描述的路由才会经网络询问。`openai-completions` 与 `openai-responses` 使用带 bearer 鉴权的 `GET {baseURL}/models`，`anthropic-messages` 则以 `x-api-key` 和 `anthropic-version` 使用原生 `GET /v1/models?limit=1000` 语义；其列表 URL 接受带或不带末尾 `/v1` 的 API 根地址，因为网关文档两种写法都会发布，且只有该列表 URL 会归一化这一段，模型请求收到的仍是配置原样的 `baseURL`。已配置且具名的路由会在 Host 内部提供已存凭据与 profile `headers`，因此通过 `settings.yaml` 或 Cordis 配置设置的部署标头可以到达模型发现请求，但不会成为发现请求或 Models 页面的字段；表单中新键入的密钥仍优先于已存凭据。解析器接受标准 `data` 数组或富信息 `models` 对象，并归一化每个候选的 id、显示名、上下文窗口与最大输出 token 数；Anthropic 的 `max_input_tokens` 与 `max_tokens` 会进入相同容量字段，即使对象条目点名了另一个规范 id，对象键仍是请求 id，原始类型的对象属性会被忽略，缺失的显示名则回退到该请求 id。回答是界面可以提供给用户采纳的候选元数据——不存储任何内容，`settings.yaml` 仍然是决定路由服务内容的唯一事实。
++插件会回答"该提供方可以提供哪些模型？"，供配置界面正在编辑或起草的路由使用。已安装目录提供的路由直接由目录回答，不发网络请求；只有目录未描述的路由才会经网络询问。`openai-completions` 与 `openai-responses` 使用带 bearer 鉴权的 `GET {baseURL}/models`，`anthropic-messages` 则以 `x-api-key` 和 `anthropic-version` 使用原生 `GET /v1/models?limit=1000` 语义；其列表 URL 接受带或不带末尾 `/v1` 的 API 根地址，因为网关文档两种写法都会发布，且只有该列表 URL 会归一化这一段，模型请求收到的仍是配置原样的 `baseURL`。已配置且具名的路由会在 Host 内部提供已存凭据与 profile `headers`，因此通过 `settings.yaml` 或 Cordis 配置设置的部署标头可以到达模型发现请求，但不会成为发现请求或 Models 页面的字段；表单中新键入的密钥仍优先于已存凭据。解析器接受标准 `data` 数组或富信息 `models` 对象，并归一化每个候选的 id、显示名、上下文窗口与最大输出 token 数；Anthropic 的 `max_input_tokens` 与 `max_tokens` 会进入相同容量字段，即使对象条目点名了另一个规范 id，对象键仍是请求 id，原始类型的对象属性会被忽略，缺失的显示名则回退到该请求 id。回答是界面可以提供给用户采纳的候选元数据——不存储任何内容，`settings.yaml` 仍然是决定路由服务内容的唯一事实。已配置但解析不到值的凭据引用在本探测里按「未存凭据」处理：端点以未认证方式被询问，因此公开模型列表的提供方在还没存密钥时也能读取（**喵仓 fork**）。
+ 
+ ### 失败与恢复
+ 
+-pi-ai 不提供的路由需要 `api`、`baseURL` 与非空 `models` 列表；无法服务的 profile 会在写入处被拒绝，并点名路由与模型。失败携带稳定 code：无法使用的凭据以 `INVALID_CREDENTIAL` 失败并点名路由与引用，`apiKeyEnv` 引用解析为空的路由以 `MISSING_CREDENTIAL` 失败，未配置模型以 `UNKNOWN_MODEL` 失败，终止性提供方失败则区分 `QUOTA` 与暂时性 `RATE_LIMIT`。`GenerateOptions.stop` 以 `UNSUPPORTED_OPTION` 被拒绝，因为 pi-ai 的通用流式 UI 无法跨提供方保证它。
++pi-ai 不提供的路由需要 `api`、`baseURL` 与非空 `models` 列表；无法服务的 profile 会在写入处被拒绝，并点名路由与模型。**喵仓 fork**：写入侧对 catalog 级失败改为 deferred 校验——profile 存为休眠路由、诊断留在 `catalogError`，便于先保存路由凭据、后补模型列表；profile 自身的标量错误仍会拒绝写入。失败携带稳定 code：无法使用的凭据以 `INVALID_CREDENTIAL` 失败并点名路由与引用，`apiKeyEnv` 引用解析为空的路由以 `MISSING_CREDENTIAL` 失败，未配置模型以 `UNKNOWN_MODEL` 失败，终止性提供方失败则区分 `QUOTA` 与暂时性 `RATE_LIMIT`。`GenerateOptions.stop` 以 `UNSUPPORTED_OPTION` 被拒绝，因为 pi-ai 的通用流式 UI 无法跨提供方保证它。
+ 
+ Settings 写入会在合并组合层与用户层后严格校验每个新增或修改的提供方。命名空间注册时，已存储配置的目录解析错误会保留命名空间与提供方行，并通过 `LlmConfigurableProvider.error` 优先返回首个模型诊断，无模型诊断时返回路由错误；未修改的错误提供方不会阻止其他编辑。可解析的模型仍可选择，无法解析的模型保留在可编辑配置中，直接请求时会在网络 I/O 前以 `INVALID_CONFIG` 失败。修复或删除错误配置会清除诊断。Schema 与 profile 自身的约束错误仍会拒绝加载。后续外部文件编辑会校验变化的提供方，失败时保留最后一次接受的分节。
+ 
+diff --git a/packages/llm/llm-pi-ai/src/catalog.ts b/packages/llm/llm-pi-ai/src/catalog.ts
+index d626c1ac71..285137b346 100644
+--- a/packages/llm/llm-pi-ai/src/catalog.ts
++++ b/packages/llm/llm-pi-ai/src/catalog.ts
+@@ -868,10 +868,12 @@ export function resolveRouteModels(
+   const entries: readonly PiAiModelProfile[] = configured.length > 0
+     ? configured
+     : [...defaults.values()].map(model => ({ id: model.id, ...overrides[model.id] }))
+-  if (entries.length === 0) {
+-    invalid(provider, 'resolves no models; the installed catalog does not describe this route, so its models'
+-      + ' must be listed in configuration')
+-  }
++  // A route with neither catalog defaults nor configured entries is a
++  // configuration in progress, not an error: resolveProfiles stores it
++  // dormant (the adapter registers nothing for it), so a deployment can
++  // save provider credentials before its model list is filled in. A route
++  // that declares compat switches beside no models is still refused by the
++  // check below, which an empty list satisfies only vacuously.
+   const routeApi = sharedCatalogApi(defaults)
+   // Vocabulary before protocols: a withheld or undeclared switch is refused
+   // wherever it is written, so it cannot look applied on a route whose models
+diff --git a/packages/llm/llm-pi-ai/src/config.ts b/packages/llm/llm-pi-ai/src/config.ts
+index 2f9e563008..1c1d64f5dc 100644
+--- a/packages/llm/llm-pi-ai/src/config.ts
++++ b/packages/llm/llm-pi-ai/src/config.ts
+@@ -360,7 +360,11 @@ export const Config: z<Config> = z.object({
+ export function assertServiceable(config: Config, previous?: Config): void {
+   const changed = Object.fromEntries(Object.entries(config.providers ?? {}).filter(([provider, profile]) =>
+     !deepEqualJson(profile, previous?.providers?.[provider])))
+-  resolveProfiles(changed)
++  // 喵仓：写入也走 deferred 校验。模型管理 UI 允许「先存路由与凭据、后填模型列表」，
++  // 严格模式会把这种进行中的配置整体拒掉；deferred 把它存成休眠路由（无 piProvider）
++  // 并把 catalog 诊断留在 profile.catalogError 里。标量错误（baseURL/headers/api 等）
++  // 不走 catalog 校验，仍然照旧拒绝写入。
++  resolveProfiles(changed, 'deferred')
+ }
+ 
+ /** Reject removed pre-release profile fields and name their replacements. */
+diff --git a/packages/llm/llm-pi-ai/src/index.ts b/packages/llm/llm-pi-ai/src/index.ts
+index dfa2a8159e..1d2c7d26e3 100644
+--- a/packages/llm/llm-pi-ai/src/index.ts
++++ b/packages/llm/llm-pi-ai/src/index.ts
+@@ -248,7 +248,17 @@ export function apply(ctx: Context, config: Config): void {
+     if (profile === undefined) return undefined
+     return {
+       headers: profile.headers,
+-      resolveApiKey: () => resolveApiKey(provider, profile),
++      // 喵仓：路由已存 apiKeyEnv 引用、但凭据实际缺失时，探测按「未认证」进行
++      // （部分端点的模型目录本就公开，不该因为还没填 Key 而探测失败）；
++      // 只有格式非法的存储凭据继续抛错。
++      resolveApiKey: async () => {
++        try {
++          return await resolveApiKey(provider, profile)
++        } catch (error) {
++          if (error instanceof LlmError && error.code === 'MISSING_CREDENTIAL') return undefined
++          throw error
++        }
++      },
+     }
+   }
+   // Interrogating an endpoint is a configuration-time action over a draft, so
+diff --git a/packages/llm/llm-pi-ai/tests/adapter.spec.ts b/packages/llm/llm-pi-ai/tests/adapter.spec.ts
+index a54ec17697..b6606e5a02 100644
+--- a/packages/llm/llm-pi-ai/tests/adapter.spec.ts
++++ b/packages/llm/llm-pi-ai/tests/adapter.spec.ts
+@@ -821,8 +821,9 @@ describe('provider profile lifecycle', () => {
+     expect(resolveProfiles(undefined).size).toBe(0)
+     expect(() => resolveProfiles({ '': {} })).toThrow(/non-empty/)
+     // A route the installed catalog does not ship is allowed, but it has no
+-    // defaults to fall back on: it must describe its own models.
+-    expect(() => resolveProfiles({ 'not-real': {} })).toThrow(/resolves no models/)
++    // defaults to fall back on: without its own models it stays dormant —
++    // stored in settings but never registered for service.
++    expect(resolveProfiles({ 'not-real': {} }).has('not-real')).toBe(false)
+     // The pre-release array shape and its per-profile provider field fail
+     // loud with migration directions instead of half-working.
+     expect(() => resolveProfiles([{ provider: 'openai' }] as never)).toThrow(/dict keyed by provider/)
+diff --git a/packages/llm/llm-pi-ai/tests/discovery.spec.ts b/packages/llm/llm-pi-ai/tests/discovery.spec.ts
+index e71439af33..b01c12ea3b 100644
+--- a/packages/llm/llm-pi-ai/tests/discovery.spec.ts
++++ b/packages/llm/llm-pi-ai/tests/discovery.spec.ts
+@@ -289,6 +289,27 @@ describe('draft-provider model discovery', () => {
+       .toEqual(['private-tenant', 'private-tenant', undefined, undefined])
+   })
+ 
++  it('probes unauthenticated when a configured route has no stored credential', async () => {
++    const server = await listingServer({ body: JSON.stringify({ data: [{ id: 'm' }] }) })
++    const ctx = new Context()
++    await ctx.plugin(LlmRuntime)
++    Reflect.deleteProperty(process.env, 'ABSENT_FOR_DISCOVERY')
++    await ctx.plugin(LlmPiAi, {
++      providers: {
++        'acme-gateway': {
++          apiKeyEnv: 'ABSENT_FOR_DISCOVERY',
++          api: 'openai-completions',
++          baseURL: server.url,
++          models: [{ id: 'acme-large' }],
++        },
++      },
++    })
++
++    await ctx.llm.discoverModels('llm-pi-ai', { provider: 'acme-gateway', baseURL: server.url })
++
++    expect(server.headers[0]?.authorization).toBeUndefined()
++  })
++
+   it('leaves a catalog route\'s credential unresolved, having never reached the network', async () => {
+     // The catalog answers before any endpoint is asked, so a route whose
+     // profile names a credential that is not set must still answer rather than
+diff --git a/packages/llm/llm-pi-ai/tests/dynamic-config.spec.ts b/packages/llm/llm-pi-ai/tests/dynamic-config.spec.ts
+index ad6eddf547..67f78ce840 100644
+--- a/packages/llm/llm-pi-ai/tests/dynamic-config.spec.ts
++++ b/packages/llm/llm-pi-ai/tests/dynamic-config.spec.ts
+@@ -274,16 +274,16 @@ describe('request-level dynamic profiles', () => {
+     expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['openai'])
+   })
+ 
+-  it('refuses a settings write this adapter could not serve, leaving its routes alone', async () => {
++  it('accepts a settings write for a dormant route (no models) without registering it', async () => {
+     const dir = await home()
+     const ctx = await boot(dir, { providers: { openai: {} } })
+ 
+     // Shape-valid but unserviceable: a route the catalog does not ship and
+-    // that lists no models of its own. The section schema resolves the whole
+-    // profile set, so this is refused where it is written rather than stored
+-    // and then quietly disabling every route in the namespace.
+-    await expect(ctx.settings.update(NS, { providers: { 'not-a-real-provider': {} } }))
+-      .rejects.toThrow(/resolves no models/)
++    // that lists no models of its own. The section resolves the whole profile
++    // set, so the route is stored dormant — never registered for service —
++    // rather than refused, letting a deployment save credentials before its
++    // model list is filled in.
++    await ctx.settings.update(NS, { providers: { 'not-a-real-provider': {} } })
+     expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['openai'])
+ 
+     await expect(ctx.settings.update(NS, {

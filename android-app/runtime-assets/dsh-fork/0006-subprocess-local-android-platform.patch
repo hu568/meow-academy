@@ -1,0 +1,32 @@
+From 4cb73c36bc7c0c05f9a916930fdb6c581892c55e Mon Sep 17 00:00:00 2001
+From: meow <meow@local>
+Date: Fri, 11 Sep 2026 22:17:42 +0800
+Subject: [PATCH 06/10] =?UTF-8?q?=F0=9F=90=9B=20fix(meow):=20subprocess-lo?=
+ =?UTF-8?q?cal=20=E8=BF=9B=E7=A8=8B=E6=A3=80=E6=9F=A5=E5=99=A8=E8=AE=A4=20?=
+ =?UTF-8?q?android=20=E5=B9=B3=E5=8F=B0?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+createProcessInspector 的平台门只认 linux/darwin/win32，安卓上 Node 报告的
+platform 是 'android' → 持久 PTY bash 首调即抛 unsupported。安卓内核即 Linux
+（bionic），/proc 接口与 arm64 syscall 号同款，归入 LinuxProcessInspector。
+---
+ packages/subprocess/subprocess-local/src/process-inspector.ts | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/packages/subprocess/subprocess-local/src/process-inspector.ts b/packages/subprocess/subprocess-local/src/process-inspector.ts
+index 08cec3b4ab..e82a54a19a 100644
+--- a/packages/subprocess/subprocess-local/src/process-inspector.ts
++++ b/packages/subprocess/subprocess-local/src/process-inspector.ts
+@@ -530,7 +530,9 @@ export function createProcessInspector(
+   arch: NodeJS.Architecture = process.arch,
+   internals: ProcessInspectorInternals = DEFAULT_INTERNALS,
+ ): ProcessInspector {
+-  if (platform === 'linux') return new LinuxProcessInspector(arch, internals)
++  // Android（meow-academy 安卓运行时，0.2.7 极简模式持久终端）：内核即 Linux（bionic），
++  // /proc 接口与 arm64 syscall 号与 linux-arm64 相同，复用 Linux 检查器。
++  if (platform === 'linux' || platform === 'android') return new LinuxProcessInspector(arch, internals)
+   if (platform === 'darwin') return new MacProcessInspector(internals)
+   if (platform === 'win32') return createWindowsProcessInspector()
+   throw new Error(`subprocess-local: terminal inspection is unsupported on platform ${platform}`)

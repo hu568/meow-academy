@@ -230,6 +230,8 @@ object RuntimeExtractor {
             File(filesDir, AGENTS_SKILLS_DIR),
             File(filesDir, AGENTS_MEMORY_DIR),
             File(filesDir, AGENTS_PERSONAS_DIR),
+            // TMPDIR 兜底（见 DshProcessLauncher）：spill/subprocess 的 mkdtemp 落点
+            File(filesDir, "tmp"),
         )
         dirs.forEach { it.mkdirs() }
         // 角色库播种：README.md + skills/ + 内置 default 角色缺则播种、永不覆盖（用户/AI 可改）

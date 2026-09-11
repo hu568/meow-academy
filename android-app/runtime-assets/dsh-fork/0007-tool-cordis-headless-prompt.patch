@@ -1,0 +1,38 @@
+From 8d5bd967151ed24da9c4a542b0b04e696188a7b6 Mon Sep 17 00:00:00 2001
+From: meow <meow@local>
+Date: Fri, 11 Sep 2026 22:17:43 +0800
+Subject: [PATCH 07/10] =?UTF-8?q?=E2=9C=A8=20feat(meow):=20=E5=88=9B?=
+ =?UTF-8?q?=E9=80=A0=E6=A8=A1=E5=BC=8F=E9=97=AD=E5=8C=85=E6=94=AF=E6=92=91?=
+ =?UTF-8?q?=20=E2=80=94=20tool-cordis=20headless=20=E9=83=A8=E7=BD=B2?=
+ =?UTF-8?q?=E6=AE=B5?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+CORDIS_SYSTEM_PROMPT 顶部加 headless 部署适配段：只写 code.host、cordis_run 同步
+激活、外观诉求不写插件（Web 前端已砍，host-only 全程无审批）。
+---
+ packages/extensions/tool-cordis/src/prompt.ts | 11 ++++++++++-
+ 1 file changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/packages/extensions/tool-cordis/src/prompt.ts b/packages/extensions/tool-cordis/src/prompt.ts
+index 81d91b8e28..0c25b07442 100644
+--- a/packages/extensions/tool-cordis/src/prompt.ts
++++ b/packages/extensions/tool-cordis/src/prompt.ts
+@@ -1,6 +1,15 @@
+ /** Model guidance shared by the Cordis dynamic-plugin tools. */
+ 
+-export const CORDIS_SYSTEM_PROMPT = `# Dynamic Cordis Plugins
++export const CORDIS_SYSTEM_PROMPT = `# Deployment note (headless runtime — read first)
++
++This deployment (meow-academy, an Android app) runs DSH without any browser Client page. The overrides below take precedence over everything later in this document:
++
++- Host-only plugins only. Always provide \`code.host\`; never provide \`code.client\`. Never register Slot UI, theme overrides, Tool cards, overlays, or anything browser-side: no page will ever answer, and a Client half would stall forever.
++- Because packages never carry a Client half, \`cordis_run\` activates them immediately and \`awaiting-approval\` never occurs. Ignore all later approval/browser-flow guidance; after \`cordis_run\` the result is synchronous (\`running\` or a technical failure).
++- Visual, styling, or rendering requests are not plugin work here: change \`appconfig/*.jsonc\` configuration files (hot-reloaded) or generate plain HTML files in the workspace instead. Never express them as a Client plugin.
++- Dynamic plugins (this toolset) are temporary process-local capabilities. Durable, reusable session modes are a different mechanism: author an agent preset under \`\${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/\` — the \`editing-cordis-compositions\` skill teaches that workflow.
++
++# Dynamic Cordis Plugins
+ 
+ Dynamic Cordis plugins temporarily extend the current DSH process. A Plugin uses apply(ctx) to consume Services, listen to Events, provide Services, register model Tools, or register browser UI in Slots.
+ 

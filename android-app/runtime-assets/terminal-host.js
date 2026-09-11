@@ -61,7 +61,8 @@ function launchDsh() {
   if (dshStarted || !runtimeDir || !startDsh) return
   dshStarted = true
   const nodeBin = process.env.DSH_NODE_BIN || process.execPath
-  const entry = path.join(runtimeDir, 'node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js')
+  // 0.1.5 起宿主入口由喵仓自带（dsh/host.mjs）——上游删除了 jsonrpc-demo 包（plan-dsh-upgrade-0.1.5 §2.3）
+  const entry = path.join(runtimeDir, 'dsh/host.mjs')
   const config = path.join(runtimeDir, 'dsh/cordis.yml')
   term.write(`"${linker64}" "${nodeBin}" "${entry}" "${config}" &\r`)
 }

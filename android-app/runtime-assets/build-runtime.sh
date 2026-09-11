@@ -183,8 +183,8 @@ ls -lh "$RUNTIME/lib/meow-exec.so"
 echo "» 解包 DSH 闭包…"
 tar -C "$RUNTIME" -xzf "$CLOSURE_TGZ"
 [ -f "$RUNTIME/dsh/cordis.yml" ] || { echo "✗ 闭包缺 dsh/cordis.yml" >&2; exit 1; }
-[ -f "$RUNTIME/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js" ] || \
-  { echo "✗ 闭包缺 jsonrpc-demo/lib/packaged-bin.js" >&2; exit 1; }
+[ -f "$RUNTIME/dsh/host.mjs" ] || \
+  { echo "✗ 闭包缺 dsh/host.mjs（喵仓宿主入口，替代已删除的 jsonrpc-demo/packaged-bin.js）" >&2; exit 1; }
 
 # ── 3.5 真终端：node-pty Android fork + terminal-host ──
 # 官方 node-pty 在 Android 编译失败，用预编译 arm64 fork（无需编译工具链）

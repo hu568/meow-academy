@@ -1,39 +1,219 @@
 # 喵仓（meow-academy）组合 —— 安卓 App 内置 DSH jsonrpc 运行时
-# stdout 专用于 JSON-RPC 帧：不要加载 console logger 或终端 UI。
-# 相比官方 examples/jsonrpc-agent/cordis.yml：
-#   - sdk-jsonrpc-server → meow-jsonrpc（自定义插件：包装官方 server 并新增 session/cancel、session/bash）
-#   - 去掉 sandbox（landlock 原生模块在 Android 不可加载；App 沙箱兜底）
-#   - 保留：llm-deepseek / bash / agent-spine / jsonl 持久化 / 文件工具 / todo / token-meter / compaction
-# plan-standard-mode（2026-08-30）：接入 agent-presets 体系 —— 基座挂「注册表/服务」行
-#   （presets/commands/goals/skill/user-questions/subagents），模型面工具行随 meow-standard
-#   预设组合按会话挂载（preset 系统只对 join 预设的会话生效）。
+# 基线：DSH dsh-v0.1.5-rc.2（fb2c4b9e69），plan/plan-dsh-upgrade-0.1.5.md。
 #
-# 布局纪律（照官方 base.cordis.patch.yml + standard preset 的分工）：
+# stdout 专用于 JSON-RPC 帧：不要加载 console logger 或终端 UI。
+#
+# 与上游 0.1.5 `packages/bundle/base/cordis.patch.yml`（84 行）的差异，逐条说明：
+#   - 入口：sdk-jsonrpc-server → meow-jsonrpc（自定义插件：包装官方 server，扩展
+#     session/cancel、session/bash、session/setModel、附件、预设/角色/记忆 RPC）。
+#   - 删 agent-spine-demo（上游 0.1.5 已删除该包）：它原来的职责拆成显式行 ——
+#     agent/agent-loop/tools/system-prompt/jobs/tool-* 各自成行；persona 迁到
+#     system-prompt 行的 personaPrefix（人格层归角色库，见 plan-memory-execution）。
+#   - 删 session-persistence-sqlite（上游已删除）：改 session-persistence-jsonl，
+#     并补它的存储/投影依赖（session-query-sqlite / session-projection / storage*）。
+#   - 不挂 sandbox（landlock 原生模块在 Android 不可加载）与 sandbox enforcer 三行
+#     （bash-sandbox/fs-sandbox/pwsh-sandbox）、approval/permission（无审批 UI，
+#     无 enforcer 时无人消费）。sandbox-policy 单独保留：极简模式的 terminal-bash
+#     硬 inject 它，mode=danger-full-access = 「无沙箱」语义（详见下方该行注释）。
+#   - 删 pwsh 家族、hmr（不用模块热重载）、session-telemetry-otel（不外发遥测）、
+#     workflow/tool-ralph（worker_threads 未在安卓验证）、tool-fs-search（依赖外部 rg）。
+#   - fs-sandbox → fs-local（喵仓自建 deny 规则 + Android 适配）。
+#   - web：tool-web 关 fetch（App 侧工具面保持与 0.2.x 一致）；web-fetch-http 行保留
+#     （web 行的 fetchProvider 是必填）。
+#   - 新增喵仓闭包行：terminal 家族（极简模式预设消费）、code-runtime（PTC 预设消费）、
+#     cordis-host-runner（创造预设消费）、web-search-tavily、agent-presets。
+#
+# 布局纪律（照官方 base + preset 的分工）：
 #   - 服务/注册表 = 基座（host 平面）：注入在任何会话存在之前就要解析，preset 子树里的
 #     isolate realm 实例对外不可见，挂预设里会让基座消费者永远 pending；
 #   - 模型面工具行 = 预设组合：注册进基座注册表的作用域层，随会话销毁，决定「这个会话有什么能力」。
+#     基座只保留「裸会话」（未 join 任何预设，例如升级前的旧会话）也要有的那一套工具面。
 
 - id: meow-jsonrpc
   name: ./meow-extensions/meow-jsonrpc.js
   config:
     maxTokensAsSuccess: true
 
-# 可配置 Provider 机制（模型管理）：settings + credentials 后端 + pi-ai 通用网关
-# settings-file 提供 settings service（provider profile 存 settings.json，运行时热生效）
-# credentials-local 提供 credentials service（provider apiKey 存 dsh-credentials.yaml）
-# llm-pi-ai 承载用户自定义 OpenAI 格式 provider（空 providers = dormant，经 settings 写入才注册）
+# ══════════════════════════════════════════════════════════════════════════
+# 一、核心服务（上游 base 的 host 平面行，缺一即 fail loud 或 undefined）
+# ══════════════════════════════════════════════════════════════════════════
+
+- id: timer
+  name: '@deepseek-ai/cordis-plugin-timer'
+
+- id: llm
+  name: '@deepseek-ai/dsh-llm'
+
+- id: deepseek-llm-api-extensions
+  name: '@deepseek-ai/dsh-deepseek-llm-api-extensions'
+
+- id: session
+  name: '@deepseek-ai/dsh-session'
+
+# 持久化日志事件层（DeepSeek 专用事件扩展；session-log-deepseek inject 扩展服务）
+- id: session-log-deepseek
+  name: '@deepseek-ai/dsh-session-log-deepseek'
+
+# Typert：类型图注册表/加载器/RPC 网关（0.1.5 新增的远程面底座；官方 base 必备行）
+- id: typert
+  name: '@deepseek-ai/dsh-typert-registry'
+
+- id: typert-loader
+  name: '@deepseek-ai/dsh-typert-loader'
+
+- id: typert-gateway
+  name: '@deepseek-ai/dsh-api-gateway'
+
+# 会话标题（首条消息后由模型生成；App 会话抽屉显示）
+- id: session-title
+  name: '@deepseek-ai/dsh-session-title'
+  config:
+    fallbackMaxWords: 5
+    fallbackMaxBytes: 40
+    maxTitleBytes: 80
+
+- id: session-title-llm
+  name: '@deepseek-ai/dsh-session-title-first-prompt-llm'
+  config:
+    targetWords: 5
+    targetCjkCharacters: 10
+    maxInputBytes: 4096
+    maxOutputTokens: 64
+    timeoutMs: 60000
+
+# 问答接缝（userQuestions）：单 provider 槽位由 meow-jsonrpc 按连接生命周期注册/释放。
+# tool-ask-user（预设组合）与 plan-mode 的计划审阅都经它落到 App 问答卡。
+- id: user-questions
+  name: '@deepseek-ai/dsh-user-questions'
+
+# Agent 注册表（会话 = agent；meow-jsonrpc 经 ctx.agents 建会话/恢复/取消）
+- id: agent
+  name: '@deepseek-ai/dsh-agent'
+
+# 插件包清单（创造模式下模型自省「有哪些包可用」；inject agents/扩展/loader）
+- id: plugin-package-inventory-deepseek
+  name: '@deepseek-ai/dsh-plugin-package-inventory-deepseek'
+
+# 新会话的默认模型（App 在 initialize 里带 provider/model，这里是兜底值；
+# deepseek-flash 是 llm-deepseek 目录里的合法 id）
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: deepseek-official
+    model: deepseek-flash
+
+# 后台任务注册表（子代理 continuable、bash 后台运行都登记在这里；tool-jobs 在预设组合）
+- id: jobs
+  name: '@deepseek-ai/dsh-jobs-local'
+
+# 模型请求重试执行器（读各 profile 的 retryPolicy）
+- id: llm-retry
+  name: '@deepseek-ai/dsh-llm-retry'
+
+# 斜杠命令注册表（/plan、/goal、/compact 的前置，命令注册方都 inject 它）。
+# 官方部署挂 host 平面；preset 内的命令经作用域层遮蔽全局。
+- id: commands
+  name: '@deepseek-ai/dsh-commands'
+
+- id: command-feedback
+  name: '@deepseek-ai/dsh-command-feedback'
+
+# Skill 注册表：基座单例 + 按作用域分层；预设组合里的 skill-filesystem / tool-skill
+# 注册进预设自己的层（官方 standard preset 同款分工）。
+- id: skill
+  name: '@deepseek-ai/dsh-skill'
+
+# 目标域（goal）：注册表按会话键控，单例服务所有会话；/goal 命令 inject ['commands','goals']，
+# 两者都在基座 → 立即 active。模型面 tool-goal 在预设组合里。
+- id: goal
+  name: '@deepseek-ai/dsh-goal'
+
+- id: goal-round-driver
+  name: '@deepseek-ai/dsh-goal-round-driver'
+
+- id: command-goal
+  name: '@deepseek-ai/dsh-command-goal'
+
+# 子代理注册表 + 进程内 spawn/fork 驱动（host 平面单例，官方 base 同款）；
+# 委派工具行（tool-subagent / tool-subagent-control）在预设组合里解析这个注册表。
+- id: subagent
+  name: '@deepseek-ai/dsh-subagent'
+
+- id: subagent-spawn-in-process
+  name: '@deepseek-ai/dsh-subagent-spawn-in-process'
+  config:
+    providerName: spawn
+
+- id: subagent-fork-in-process
+  name: '@deepseek-ai/dsh-subagent-fork-in-process'
+  config:
+    providerName: fork
+
+# 计量器（看板调用量投影依赖它；按 Session 键控，必须在基座）
+- id: token-meter
+  name: '@deepseek-ai/dsh-token-meter'
+
+# 基座 compaction：为「未 join 任何预设的裸会话」（升级前旧会话）保留的兜底策略。
+# join meow-standard 的会话由预设组合里的 compaction 组按作用域遮蔽此处。
+- id: compaction-basic
+  name: '@deepseek-ai/dsh-compaction-basic'
+  config:
+    thresholdRatio: 0.8
+    retainRatio: 0.16
+    maxTokens: 8192
+    compactionRetries: 1
+
+# 工具调用超时策略 / 大结果 spill / 重复调用提醒（官方 base 的 host 平面行）
+- id: timeout-policy
+  name: '@deepseek-ai/dsh-tool-call-timeout-policy'
+
+- id: spill-local
+  name: '@deepseek-ai/dsh-spill-local'
+
+- id: spill-policy
+  name: '@deepseek-ai/dsh-spill-policy'
+  config:
+    maxInlineBytes: 50000
+
+# 会话 checkpoint 策略：每次模型请求与顶层调度前落持久化边界
+- id: session-checkpoint-policy
+  name: '@deepseek-ai/dsh-session-checkpoint-policy'
+
+- id: repeat-tool-reminder
+  name: '@deepseek-ai/dsh-repeat-tool-reminder'
+  config:
+    thresholds: [3, 5, 8]
+    argumentsPreviewChars: 500
+
+# ══════════════════════════════════════════════════════════════════════════
+# 二、模型与配置（可配置 Provider 机制）
+# ══════════════════════════════════════════════════════════════════════════
+
+# settings service：provider profile 存 dsh-settings.json（运行时热生效；watch 关闭，
+# App 侧只按需写）。dshHome 是 0.1.5 新增的必填字段（settings.yaml 的默认落点基准）。
 - id: settings
   name: '@deepseek-ai/dsh-settings-file'
   config:
     path: !!js process.env.DSH_SETTINGS_PATH ?? (process.env.DSH_CWD ?? process.cwd()) + '/dsh-settings.json'
+    dshHome: !!js process.env.DSH_HOME ?? (process.env.DSH_CWD ?? process.cwd()) + '/.dsh'
     watch: false
 
+# credentials service：provider apiKey 存 dsh-credentials.yaml
 - id: credentials
   name: '@deepseek-ai/dsh-credentials-local'
   config:
     path: !!js process.env.DSH_CREDENTIALS_PATH ?? (process.env.DSH_CWD ?? process.cwd()) + '/dsh-credentials.yaml'
+    dshHome: !!js process.env.DSH_HOME ?? (process.env.DSH_CWD ?? process.cwd()) + '/.dsh'
     watch: false
 
+# settings 远程控制器（0.1.5：settings 服务不再提供通用 mutate / ns 视图 describe；
+# RPC 层 settings/setProvider 等写操作经这个官方控制器的 mutate/update 落盘 ——
+# 与 Web Models 页同一条路径，llm-pi-ai 注册的 validate 钩子（deferred 写入）照常生效）。
+- id: settings-controller
+  name: '@deepseek-ai/dsh-api-settings-controller'
+
+# llm-pi-ai 承载用户自定义 OpenAI 格式 provider（空 providers = dormant，
+# 经 settings 写入才注册；写入走 deferred 校验，允许先存凭据后填模型，见 dsh-fork patch）
 - id: llm-pi-ai
   name: '@deepseek-ai/dsh-llm-pi-ai'
   config:
@@ -46,9 +226,13 @@
     thinking: enabled
     reasoningEffort: high
 
-# 图片附件（M5 发图铺路）：官方 attachment-local，sharp 走 @img/sharp-wasm32 WASM 兜底。
-# 存储根 = <dshHome>/attachments/v1；dshHome 用 DSH_HOME，未注入则落在 DSH_CWD/.dsh（App workspace 内）。
-# imageCompressionConcurrency=1：Termux WASM 解码较慢，串行更稳。
+# ══════════════════════════════════════════════════════════════════════════
+# 三、附件（图片）
+# ══════════════════════════════════════════════════════════════════════════
+
+# 图片附件（M5 发图）：官方 attachment-local，sharp 走 @img/sharp-wasm32 WASM 兜底。
+# 存储根 = <dshHome>/attachments/v1；imageCompressionConcurrency=1：
+# Termux WASM 解码较慢，串行更稳。
 - id: attachments
   name: '@deepseek-ai/dsh-attachment-local'
   config:
@@ -58,10 +242,67 @@
     normalizedImageMaxDimension: 2048
     imageCompressionConcurrency: 1
 
+# ══════════════════════════════════════════════════════════════════════════
+# 四、会话持久化与投影（0.1.5 = JSONL-only）
+# ══════════════════════════════════════════════════════════════════════════
+
+# 会话持久化：JSONL backend。上游刻意用 link() 发布且写入租约走原生 flock，
+# 两条安卓硬阻塞已由 dsh-fork patch 修（publishLinkNoReplace / lease 可移植回退）。
+- id: session-persistence-jsonl
+  name: '@deepseek-ai/dsh-session-persistence-jsonl'
+  config:
+    root: !!js process.env.DSH_SESSION_DIR ?? (process.env.DSH_FILES_DIR ?? process.cwd()) + '/.dsh-sessions'
+
+# 会话全文检索：openAt=never（App 侧搜索走 Room，不投这份 SQLite；精确读取/标题/血缘仍可用）
+- id: session-query-sqlite
+  name: '@deepseek-ai/dsh-session-query-sqlite'
+  config:
+    path: ':memory:'
+    openAt: never
+
+# 投影注册表（agentPreset 等按会话记录的派生状态；agent-presets 与 sandbox-policy 依赖）
+- id: session-projection
+  name: '@deepseek-ai/dsh-session-projection'
+
+# 持久化 KV 存储栈（投影缓存经 storage-domain 落 json backend）
+- id: storage
+  name: '@deepseek-ai/dsh-storage'
+
+- id: storage-json
+  name: '@deepseek-ai/dsh-storage-json'
+  config:
+    root: !!js (process.env.DSH_HOME ?? (process.env.DSH_CWD ?? process.cwd()) + '/.dsh') + '/storages'
+
+- id: storage-domain
+  name: '@deepseek-ai/dsh-storage-domain'
+  config:
+    backend: json
+
+- id: session-projection-cache
+  name: '@deepseek-ai/dsh-session-projection-cache'
+  config:
+    writeEveryEvents: 200
+    writeIntervalMs: 5000
+
+# ══════════════════════════════════════════════════════════════════════════
+# 五、执行与文件能力
+# ══════════════════════════════════════════════════════════════════════════
+
 # 受管子进程组（bash 执行器底座；Android 上 PATH 含 runtime/bin 与 /system/bin）
 - id: subprocess
   name: '@deepseek-ai/dsh-subprocess-local'
 
+# 沙箱策略服务（plan-minimal-mode）：极简模式的 terminal-bash 硬 inject sandboxPolicy。
+# 本部署无 enforcer（landlock 原生模块不可加载）→ mode 定 danger-full-access = 「无沙箱」
+# 语义：spawnArgv 对 full-access 短路直启，不触碰 sandbox enforcer。对现有栈零影响：
+# tool-bash 读 ctx.shell.sandboxMode（bash-local 从不设置 → undefined）不触达本服务。
+- id: sandbox-policy
+  name: '@deepseek-ai/dsh-sandbox-policy'
+  config:
+    mode: danger-full-access
+    workspaceRoot: !!js process.env.DSH_CWD ?? process.cwd()
+
+# bash 执行器（DSH_BASH_BIN 存在时经 linker64 加载 bash.bin，见 dsh-fork patch）
 - id: bash
   name: '@deepseek-ai/dsh-bash-local'
   config:
@@ -69,149 +310,17 @@
     timeoutMs: 60000
     maxOutputBytes: 262144
 
-# 沙箱策略服务（plan-minimal-mode）：极简模式的 terminal-bash 硬 inject sandboxPolicy
-# （terminal 家族，packages/terminal/terminal-bash src/index.ts:26）。本部署无 enforcer
-# （landlock 原生模块不可加载）→ mode 定 danger-full-access = 「无沙箱」语义：spawnArgv
-# 对 full-access 短路直启（terminal-bash src/index.ts:94），不触碰 sandbox enforcer。
-# 对现有栈零影响：tool-bash 读 ctx.shell.sandboxMode（bash-local 从不设置 → undefined）
-# 不触达本服务；fs-local 无 sandbox 引用；纯 JS 包（仅依赖 schemastery），已随闭包。
-- id: sandbox-policy
-  name: '@deepseek-ai/dsh-sandbox-policy'
-  config:
-    mode: danger-full-access
+# shell 环境面（tool-bash inject shellEnv：把部署 env 折叠成模型可见的 shell 环境描述）
+- id: shell-env
+  name: '@deepseek-ai/dsh-shell-env'
 
-# 喵喵老师学习助教：persona + agent loop + 工具装配
-# 说明：spine 内部无条件挂 jobs 注册表（toolJobs:false 只裁模型面 job 工具）；
-# skills.enabled:false 裁掉 spine 内置的 skill 注册表/工具（改由下方 skill 行 + 预设组合提供，
-# 以便 skill 工具只随预设会话出现）；goals 不经 spine 开（同样改基座行 + 预设工具行）。
-# 记忆系统改造（plan-memory-execution §1.10，2026-09-02）：persona 不再引用 {{soul}}——
-# 角色层（<soul>/<user>）与记忆层（<facts>/存储契约）改由 meow-jsonrpc 注册的独立
-# `meow:memory` section（order 50）按会话开关注入，并为首条消息固化快照；基座只留
-# 环境说明三段（工作区/外观路由/安全边界），任何预设的会话都要。
-- id: agent-spine
-  name: '@deepseek-ai/dsh-agent-spine-demo'
-  config:
-    includeHarnessIdentity: false
-    includeRuntimeContext: false
-    persona: |
-      会话工作区：每个会话绑定一个工作目录（首条消息定死，是 App 私有数据目录下 files 的某个工作区文件夹）。读写文件请优先用相对路径（例如 notes/test.txt），也可以用对话中给出的会话内绝对路径；不要读写 /tmp、/sdcard 等系统目录。bash 工具可用于执行命令。
+# 模型面 bash 工具（基座行：裸会话也有 bash；预设组合不重复挂）
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
 
-      外观与渲染类诉求（Markdown 样式、代码块/公式/Mermaid 外观、主题颜色、聊天背景等）：请修改 appconfig/ 目录下对应的 *.jsonc 配置文件（例如 markdown-config.jsonc），改完即时生效；不要把 UI 诉求写进 cordis.yml 或代码里。
-
-      安全边界：禁止读取 appconfig/dsh-credentials.yaml 与 datastore/ 目录下的文件（包含密钥与内部数据）；config-defaults/ 是只读默认模板目录，可读取、可复制到 appconfig/ 修改，但不可直接修改；dsh-presets/ 目录是系统预设（只读纪律，不可修改）；.agents/memory/JOURNAL.jsonl 只能经 memory 工具读写（通用文件工具已被拒）；.agents/memory/snapshots/ 是内部快照缓存，不要读写；dsh-settings.json 与 .dsh-sessions/chat.db 可读，但聊天记录含隐私，谨慎引用。
-    workspaceContext: false
-    skills:
-      enabled: false
-    toolBash:
-      enableRunInBackground: false
-    toolJobs: false
-
-# ── Agent 预设体系（plan-standard-mode §4.2①）──────────────────────────────
-# 注册表/名单服务：list() 每次重扫 roots（自动扫描接口），resolve 失败 fail loud。
-# roots = filesDir/dsh-presets（assets 播种，trust: system 只读纪律）；
-# includeUserRoot 追加 ${DSH_HOME}/.agent-presets/（用户/AI 自建预设，trust: user）。
-# 坑：!!js 在 ESM 作用域无 require，路径只能字符串拼接。
-- id: agent-presets
-  name: '@deepseek-ai/dsh-agent-presets'
-  config:
-    default: meow-standard
-    roots:
-      - path: !!js (process.env.DSH_FILES_DIR ?? process.cwd()) + '/dsh-presets'
-        trust: system
-    includeUserRoot: true
-
-# 斜杠命令注册表（CommandRuntime）：/plan、/goal、/compact 的前置，命令注册方都 inject 它。
-# 官方部署挂 host 平面（注入在会话存在之前解析），preset 内的命令经作用域层遮蔽全局。
-- id: commands
-  name: '@deepseek-ai/dsh-commands'
-
-# 目标域（goal）：注册表按会话键控，单例服务所有会话；/goal 命令（command-goal）
-# inject ['commands','goals']，两者都在基座 → 立即 active。模型面 tool-goal 在预设组合里。
-# goal-round-driver：同会话目标轮次驱动（官方 base 同款基座行）。
-- id: goals
-  name: '@deepseek-ai/dsh-goal'
-
-- id: goal-round-driver
-  name: '@deepseek-ai/dsh-goal-round-driver'
-
-- id: command-goal
-  name: '@deepseek-ai/dsh-command-goal'
-
-# Skill 注册表：基座单例 + 按作用域分层；预设组合里的 skill-filesystem / tool-skill
-# 注册进预设自己的层（官方 standard preset 同款分工）。
-- id: skill
-  name: '@deepseek-ai/dsh-skill'
-
-# 问答接缝（userQuestions）：单 provider 槽位由 meow-jsonrpc 按连接生命周期注册/释放。
-# tool-ask-user（预设组合）与 plan-mode 的计划审阅都经它落到 App 问答卡。
-- id: user-questions
-  name: '@deepseek-ai/dsh-user-questions'
-
-# 子代理注册表 + 进程内 spawn 驱动（host 平面单例，官方 base 同款）；
-# 委派工具行（tool-subagent / tool-subagent-control）在预设组合里解析这个注册表。
-- id: subagent
-  name: '@deepseek-ai/dsh-subagent'
-
-- id: subagent-spawn-in-process
-  name: '@deepseek-ai/dsh-subagent-spawn-in-process'
-  config:
-    providerName: spawn
-
-# 创造模式底座（0.2.6，plan-creative-mode）：动态插件 Host 半边运行器 —— 提供
-# dynamicCordisRunner（动态插件注册表/生命周期/VM 执行）与 cordisInspect（inspect
-# provider 注册表）两服务，供预设组合里的 tool-cordis 行 inject。服务必须在任何会话
-# 存在之前就绪 → host 平面行（官方 web-app bundle 同款分工；vmTimeoutMs 默认 5000ms
-# 即插件 apply() 的 VM 预算）。无 Client 半边部署：只装本包、不装 cordis-client-runner/
-# ui-cordis —— host-only 包 cordis_run 直接激活不经审批（host-runner src/index.ts:270）。
-- id: cordis-host-runner
-  name: '@deepseek-ai/dsh-cordis-host-runner'
-
-# PTC 模式底座（0.2.7，plan-ptc-mode）：Code Mode 执行引擎 —— codeRuntime 服务。
-# 官方 CLI 由 bundle patch 挂 host 平面（packages/bundle/headless/cordis.patch.yml:25），
-# 官方 code 预设组合不含此行、只「等待宿主的 codeRuntime」→ 喵仓同样挂基座：
-# 只有会话挂了 tool-presentation 行（meow-code 预设）才消费它，其余会话零影响。
-# 资源预算（worker_threads）：computeMs/maxWallMs/maxOutputBytes 走默认（60s/600s/64MB），
-# maxOldGenerationSizeMb 默认 512 按安卓调低到 128（会议笔记 §8.2；真机 §9.1 已验 128 可用）。
-- id: code-runtime
-  name: '@deepseek-ai/dsh-code-runtime-worker-thread'
-  config:
-    maxOldGenerationSizeMb: 128
-
-# 会话持久化：SQLite backend（node:sqlite，无原生依赖）。规避 jsonl 的 link() 在 Android
-# SELinux 下 EACCES 的问题；session-checkpoints 提供模型请求/工具调用边界的语义 checkpoint。
-- id: sessions
-  name: '@deepseek-ai/dsh-session-persistence-sqlite'
-  config:
-    path: !!js process.env.DSH_SESSION_DB ?? (process.env.DSH_CWD ?? process.cwd()) + '/.dsh-sessions/chat.db'
-
-- id: session-checkpoints
-  name: '@deepseek-ai/dsh-session-checkpoint-policy'
-
-- id: tool-todo
-  name: '@deepseek-ai/dsh-tool-todo'
-  config:
-    allowParallelInProgress: true
-
-# 网络搜索（DeepSeek 官方 web_search，复用 DEEPSEEK_API_KEY）；DSH_WEB_SEARCH 环境变量开关
-- id: web
-  name: '@deepseek-ai/dsh-web'
-  config:
-    searchProvider: deepseek-official
-
-- id: web-search-deepseek
-  name: '@deepseek-ai/dsh-web-search-deepseek'
-  config:
-    apiKeyEnv: DEEPSEEK_API_KEY
-
-- id: tool-web
-  name: '@deepseek-ai/dsh-tool-web'
-  config:
-    search: !!js process.env.DSH_WEB_SEARCH === '1'
-    fetch: false
-
-# 文件能力（M4 文件管理铺路）
-# phase4：deny 规则禁止 agent 读取敏感文件（凭证 / DataStore 内部明文 key）。
-# 用 DSH_FILES_DIR 构造绝对路径，避免 cwd=workspace 时相对基准错误；文件级精确 + 目录级前缀。
+# 文件能力：fs-local（喵仓自建 deny 规则，禁读凭证/DataStore/系统预设/记忆日志）
+# phase4：deny 用 DSH_FILES_DIR 构造绝对路径，避免 cwd=workspace 时相对基准错误；
+# 规则同时取词法 + realpath 两形态（安卓部署根经挂载别名到达，见 dsh-fork patch）。
 - id: fs-local
   name: '@deepseek-ai/dsh-fs-local'
   config:
@@ -234,6 +343,7 @@
 - id: fs-observation-policy
   name: '@deepseek-ai/dsh-fs-observation-policy'
 
+# 模型面文件工具（read/write/edit/glob/grep；基座行）
 - id: tool-fs
   name: '@deepseek-ai/dsh-tool-fs'
 
@@ -242,16 +352,110 @@
   config:
     maxOutputChars: 16000
 
-- id: token-meter
-  name: '@deepseek-ai/dsh-token-meter'
-
-# 基座 compaction：为「未 join 任何预设的裸会话」（升级前旧会话）保留的兜底策略。
-# join meow-standard 的会话由预设组合里的 compaction 组（basic + pruner + command-compact，
-# 同参数）按作用域遮蔽此处。
-- id: compaction-basic
-  name: '@deepseek-ai/dsh-compaction-basic'
+# 模型面 todo 工具（看板 todo 悬浮栏依赖它的事件）
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
   config:
-    thresholdRatio: 0.8
-    retainRatio: 0.16
-    maxTokens: 8192
-    compactionRetries: 1
+    allowParallelInProgress: true
+
+# ══════════════════════════════════════════════════════════════════════════
+# 六、预设 / 动态插件 / 代码执行底座
+# ══════════════════════════════════════════════════════════════════════════
+
+# Agent 预设体系（plan-standard-mode §4.2①）
+# 注册表/名单服务：list() 每次重扫 roots（自动扫描接口），mount 失败 fail loud。
+# roots = filesDir/dsh-presets（assets 播种，trust: system 只读纪律）；
+# includeUserRoot 追加 ${DSH_HOME}/.agent-presets/（用户/AI 自建预设，trust: user）；
+# includeShippedRoot=false：不扫描包内自带预设（喵仓名单只有自己的四套）。
+# 坑：!!js 在 ESM 作用域无 require，路径只能字符串拼接。
+- id: agent-presets
+  name: '@deepseek-ai/dsh-agent-presets'
+  config:
+    default: meow-standard
+    roots:
+      - path: !!js (process.env.DSH_FILES_DIR ?? process.cwd()) + '/dsh-presets'
+        trust: system
+    includeShippedRoot: false
+    includeUserRoot: true
+
+# 创造模式底座（plan-creative-mode）：动态插件 Host 半边运行器 —— 提供
+# dynamicCordisRunner 与 cordisInspect 两服务，供预设组合里的 tool-cordis 行 inject。
+# 服务必须在任何会话存在之前就绪 → host 平面行。无 Client 半边部署：host-only 包
+# cordis_run 直接激活不经审批。
+- id: cordis-host-runner
+  name: '@deepseek-ai/dsh-cordis-host-runner'
+
+# PTC 模式底座（plan-ptc-mode）：codeRuntime 服务。官方 CLI 由 bundle patch 挂 host 平面，
+# 官方 code 预设组合不含此行、只「等待宿主的 codeRuntime」→ 喵仓同样挂基座：
+# 只有会话挂了 tool-presentation 行（meow-code 预设）才消费它，其余会话零影响。
+# maxOldGenerationSizeMb 默认 512 按安卓调低到 128（真机已验证 128 可用）。
+- id: code-runtime
+  name: '@deepseek-ai/dsh-code-runtime-worker-thread'
+  config:
+    maxOldGenerationSizeMb: 128
+
+# ══════════════════════════════════════════════════════════════════════════
+# 七、网络
+# ══════════════════════════════════════════════════════════════════════════
+
+# 网络能力：搜索走 DeepSeek 官方（复用 DEEPSEEK_API_KEY），Tavily 为备选 provider；
+# fetchProvider 是必填字段（0.1.5 schema），故保留 web-fetch-http 行，
+# 但 tool-web 关 fetch → 模型面与 0.2.x 一致（只有 web_search）。
+- id: web
+  name: '@deepseek-ai/dsh-web'
+  config:
+    searchProvider: deepseek-official
+    fetchProvider: http
+
+- id: web-search-deepseek
+  name: '@deepseek-ai/dsh-web-search-deepseek'
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+
+- id: web-fetch-http
+  name: '@deepseek-ai/dsh-web-fetch-http'
+
+- id: web-search-tavily
+  name: '@deepseek-ai/dsh-web-search-tavily'
+  config:
+    apiKeyEnv: TAVILY_API_KEY
+
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    search: !!js process.env.DSH_WEB_SEARCH === '1'
+    fetch: false
+
+# ══════════════════════════════════════════════════════════════════════════
+# 八、提示词与 Agent 循环（官方 base 的最后三行）
+# ══════════════════════════════════════════════════════════════════════════
+
+# 工具注册表（工具行注册进来；presentation 模式走默认 native）
+- id: tools
+  name: '@deepseek-ai/dsh-tools'
+
+# 部署 persona（原 agent-spine 的 persona 三段迁移至此）：
+#   - includeHarnessIdentity=false：不注入「You are an AI agent powered by DeepSeek
+#     Harness」身份行（喵仓人格由角色库/记忆系统提供，身份行会污染人设）；
+#   - includeRuntimeContext=false：不注入动态运行上下文快照（App 侧语义由 meow:memory
+#     section 承担）；
+#   - personaPrefix 只留「部署环境说明」——工作区、外观路由、安全边界，任何预设的会话都要；
+#   - 人格层（SOUL/USER）与记忆层（FACT）由 meow-jsonrpc 注册的独立 `meow:memory`
+#     section（order 50）按会话开关注入，并在首条消息固化快照（plan-memory-execution §1.10）。
+- id: system-prompt
+  name: '@deepseek-ai/dsh-system-prompt'
+  config:
+    includeHarnessIdentity: false
+    includeRuntimeContext: false
+    personaPrefix: |
+      会话工作区：每个会话绑定一个工作目录（首条消息定死，是 App 私有数据目录下 files 的某个工作区文件夹）。读写文件请优先用相对路径（例如 notes/test.txt），也可以用对话中给出的会话内绝对路径；不要读写 /tmp、/sdcard 等系统目录。bash 工具可用于执行命令。
+
+      外观与渲染类诉求（Markdown 样式、代码块/公式/Mermaid 外观、主题颜色、聊天背景等）：请修改 appconfig/ 目录下对应的 *.jsonc 配置文件（例如 markdown-config.jsonc），改完即时生效；不要把 UI 诉求写进 cordis.yml 或代码里。
+
+      安全边界：禁止读取 appconfig/dsh-credentials.yaml 与 datastore/ 目录下的文件（包含密钥与内部数据）；config-defaults/ 是只读默认模板目录，可读取、可复制到 appconfig/ 修改，但不可直接修改；dsh-presets/ 目录是系统预设（只读纪律，不可修改）；.agents/memory/JOURNAL.jsonl 只能经 memory 工具读写（通用文件工具已被拒）；.agents/memory/snapshots/ 是内部快照缓存，不要读写；dsh-settings.json 与 .dsh-sessions/ 下的会话日志可读，但聊天记录含隐私，谨慎引用。
+
+# Agent 循环：agents 空 = 不预建 agent，会话按需由 meow-jsonrpc（App 请求）创建
+- id: agent-loop
+  name: '@deepseek-ai/dsh-agent-loop'
+  config:
+    agents: []

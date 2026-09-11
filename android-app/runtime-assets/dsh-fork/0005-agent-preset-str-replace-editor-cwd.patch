@@ -1,0 +1,84 @@
+From 34e172b0f8dec5d01058c22c5c85aadc745b47b7 Mon Sep 17 00:00:00 2001
+From: meow <meow@local>
+Date: Fri, 11 Sep 2026 22:17:42 +0800
+Subject: [PATCH 05/10] =?UTF-8?q?=E2=9C=A8=20feat(meow):=20Agent=20?=
+ =?UTF-8?q?=E9=A2=84=E8=AE=BE=E6=94=AF=E6=92=91=20=E2=80=94=20str=5Freplac?=
+ =?UTF-8?q?e=5Feditor=20=E4=BC=9A=E8=AF=9D=20cwd?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+新版 tool-str-replace-editor 仍无 cwd 支持（0.1.5 grep 0 命中）：路径解析按会话
+头的 cwd（exec.agent.session.header.cwd，创建时经 meta.cwd 写入）相对化，
+非 agent 调用回退进程 cwd。喵仓「会话按工作区隔离」依赖它。
+---
+ .../fs/tool-str-replace-editor/src/index.ts   | 19 ++++++++++++++-----
+ 1 file changed, 14 insertions(+), 5 deletions(-)
+
+diff --git a/packages/fs/tool-str-replace-editor/src/index.ts b/packages/fs/tool-str-replace-editor/src/index.ts
+index f77736685e..217a1692ca 100644
+--- a/packages/fs/tool-str-replace-editor/src/index.ts
++++ b/packages/fs/tool-str-replace-editor/src/index.ts
+@@ -86,16 +86,25 @@ class MutationPolicy {
+   }
+ }
+ 
++// 与 tool-fs/session-cwd.ts 同义的内联版（plan-standard-mode §4.5）：sessionCwd 未从
++// @deepseek-ai/dsh-tool-fs 包根导出（src/ 不在 publish files 白名单），且本包未声明对
++// tool-fs 的依赖，不能跨包 import —— 语义保持一致：取调用 agent 的会话工作区
++// （exec.agent.session.header.cwd，创建时经 meta.cwd 写入会话头），非 agent 调用返回
++// undefined，行为同旧（后端按自己的默认基准解析）。
++const sessionCwdOf = (exec: ToolRunContext): string | undefined => exec.agent?.session.header.cwd
++
+ async function resolveTarget(
+   ctx: Context,
+   path: string,
+   signal: AbortSignal,
++  exec: ToolRunContext,
+ ): Promise<FsTarget> {
+   if (path.trim().length === 0) throw new Error('path must be a non-empty string')
+   if (!isAbsolute(path)) {
+     throw new Error(`The path ${path} is not an absolute path, it should start with \`/\`. Maybe you meant /${path}?`)
+   }
+-  return ctx.fs.resolve(path, { signal })
++  const cwd = sessionCwdOf(exec)
++  return ctx.fs.resolve(path, { ...(cwd !== undefined ? { cwd } : {}), signal })
+ }
+ 
+ async function statExisting(
+@@ -221,7 +230,7 @@ async function viewPath(
+   maxOutputChars: number,
+   exec: ToolRunContext,
+ ): Promise<string> {
+-  const target = await resolveTarget(ctx, path, exec.signal)
++  const target = await resolveTarget(ctx, path, exec.signal, exec)
+   const info = await statExisting(ctx, target, 'view', exec)
+   if (info.type === 'directory') {
+     if (viewRange !== undefined) {
+@@ -246,7 +255,7 @@ async function createFile(
+ ): Promise<string> {
+   const content = requiredForCommand(fileText, 'file_text', 'create')
+   const sandboxPolicy = policy.resolve(exec)
+-  const target = await resolveTarget(ctx, path, exec.signal)
++  const target = await resolveTarget(ctx, path, exec.signal, exec)
+   if (await ctx.fs.stat(target, exec.signal) !== undefined) {
+     throw new Error(`File already exists at: ${target.displayPath}. Cannot overwrite files using command \`create\`.`)
+   }
+@@ -284,7 +293,7 @@ async function replaceInFile(
+     throw new Error('Parameter `new_str` must be omitted or contain a string for command: str_replace')
+   }
+   const sandboxPolicy = policy.resolve(exec)
+-  const target = await resolveTarget(ctx, path, exec.signal)
++  const target = await resolveTarget(ctx, path, exec.signal, exec)
+   const intent = await ctx.waterfall('fs/edit-intent', target, exec, () => undefined)
+   const oldValue = requiredForCommand(oldStr, 'old_str', 'str_replace', false)
+   const newValue = newStr ?? ''
+@@ -337,7 +346,7 @@ async function insertInFile(
+   if (insertLine === undefined) throw new Error('Parameter `insert_line` is required for command: insert')
+   const value = requiredForCommand(newStr, 'new_str', 'insert')
+   const sandboxPolicy = policy.resolve(exec)
+-  const target = await resolveTarget(ctx, path, exec.signal)
++  const target = await resolveTarget(ctx, path, exec.signal, exec)
+   const intent = await ctx.waterfall('fs/edit-intent', target, exec, () => undefined)
+   const info = await statExisting(ctx, target, 'insert', exec)
+   if (info.type !== 'file') {

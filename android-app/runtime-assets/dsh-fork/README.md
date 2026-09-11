@@ -8,243 +8,151 @@ fork 出来的**本地源码副本，整体 gitignore 不入库**。本目录把
 
 | 项 | 值 |
 |---|---|
-| 上游基线 | tag `dsh-v0.1.1-rc.2`（commit `b150a551b8`） |
-| 基线日期 | 2026-08-23 升级（2026-08-21 曾升级至 rc.1 = `528c682e06`；2026-08-13 首次 fork 于 `47f943859b` = 0.1.0-rc.5） |
-| 对应版本 | 0.1.1-rc.2 |
+| 上游基线 | tag `dsh-v0.1.5-rc.2`（commit `fb2c4b9e69`） |
+| 基线日期 | 2026-09-11 升级（上一基线 `dsh-v0.1.1-rc.2` = `b150a551b8`，2026-08-23；再之前 rc.1 = `528c682e06`，首次 fork 0.1.0-rc.5 = `47f943859b`） |
+| 对应版本 | 0.1.5-rc.2 |
+| 旧系列 | `archive-rc2/`（rc.2 基线的 0001~0007，仅供复现旧 APK 0.3.0 及更早） |
 
-> 升级记录（2026-08-23）：rc.1 → v0.1.1-rc.2（35 commits，主题=统一图片管线）。原 rc.1 patch
-> 对 rc.2 `git apply --check` 零冲突全量重放；另新增 attachment-local 的 Android 适配（父目录
-> fsync 与 `link()` 的 SELinux 规避，见下）与 `sharp-wasm32` 兜底依赖。SQLite SCHEMA_VERSION 仍为
-> 17，**不删库、不迁移**。计划与过程见 `plan/plan-dsh-upgrade-rc2.md`。
+> 升级记录（2026-09-11）：rc.2 → 0.1.5-rc.2（3225 commits / 20 天）。上游这 20 天里发生了
+> **三处命中喵仓命门的破坏性变更**（删 SQLite 会话 provider 改 JSONL-only、删 agent-spine-demo、
+> 删 examples/jsonrpc-demo 宿主入口），因此本次不是「改个 tag」而是移植项目：patch 系列
+> **全部重做**（旧 0001 拆成 4 条，0002~0007 重放，另新增 2 条安卓回退）。
+> 评估/执行计划与阶段记录见 `plan/plan-dsh-upgrade-0.1.5.md`；`cordis.yml` 组合重建见该文档 §4。
 
-## patch 内容（0001 = Android 存活适配基座）
+## patch 内容（9 条，按序 `git apply`）
 
-> 2026-08-30 起 patch 系列扩为三个：0001 = 上基线时的全部 Android 存活适配（基线仍是
-> `dsh-v0.1.1-rc.2`，未动；文件名即提交主题 `0001-feat-meow-Android-runtime-adaptations-tavily-web-sea.patch`）；
-> 0002 = 标准 Agent 预设体系的 fork 侧改动（`0002-feat-meow-Agent-presets-str_replace_editor-cwd.patch`，
-> 见下「0002 内容」）；0003 = sharp-wasm32 版本对齐与三方声明记录
-> （`0003-fix-deploy-img-sharp-wasm32-sharp-0.35.4-pnpm-instal.patch`，见下「0003 内容」）。
-> 2026-08-30 晚扩为四个：0004 = 创造模式闭包支撑（`0004-feat-meow-creative-mode-closure-support-tool-cordis-host-runner-headless-prompt.patch`，见下「0004 内容」，`plan/plan-creative-mode.md`）。
-> 2026-08-31 扩为五个：0005 = 极简模式闭包支撑（`0005-feat-meow-minimal-mode-closure-support-terminal-fami.patch`，
-> 见下「0005 内容」，`plan/plan-minimal-mode.md`）。
+| # | patch | 内容 |
+|---|---|---|
+| 0001 | `android-runtime-adaptations` | Android 存活适配基座（0.1.5 重做）：attachment-local 的 `ensureDurableHome` 祖先 fsync 容错 + 两处 `link()` EACCES/EPERM 回退（发布改 `lstat`+`rename`，别名发布退化 `COPYFILE_EXCL` 副本）；bash-local 的 `DSH_BASH_BIN` linker64 启动 + `DEEPSEEK_API_KEY` tombstone；subprocess-local 的 koffi 惰性解析；fs-local 的 guarded-create 发布原语改「`lstat` 探测 → `EEXIST`/`rename`」 |
+| 0002 | `fs-local-deny-realpath` | fs-local `deny` 规则（文件精确 + 目录前缀，`resolve`/`lstat`/`listDir` 三处拦截）+ **realpath 双形态**比对（规则取词法 + 最近存在祖先 realpath；目标比 `targetKey` 与 `displayPath` 两面）——安卓部署根经挂载别名到达，只比词法会让名单整体空转 |
+| 0003 | `llm-pi-ai-model-management` | llm-pi-ai 适配：`assertServiceable` 写入走 `deferred`（模型管理 UI 允许「先存凭据/路由、后填模型列表」，profile 存为休眠路由 + `catalogError` 诊断）；模型探测把「已存 apiKeyEnv 但凭据缺失」按未认证处理；两个 README 同步标注 fork 差异 |
+| 0004 | `web-search-tavily-provider` | 新包 `web-search-tavily`（Tavily 搜索 provider，`TAVILY_API_KEY`）+ `bundle/base` 注册 + `tsconfig.host.json` 工程引用 |
+| 0005 | `agent-preset-str-replace-editor-cwd` | tool-str-replace-editor 支持会话 cwd（按 `exec.agent.session.header.cwd` 解析相对路径）——喵仓「会话按工作区隔离」依赖它 |
+| 0006 | `subprocess-local-android-platform` | `createProcessInspector` 的平台门认 `android`（安卓内核即 Linux，复用 LinuxProcessInspector）——持久 PTY bash 首调不再抛 unsupported |
+| 0007 | `tool-cordis-headless-prompt` | `CORDIS_SYSTEM_PROMPT` 顶部加 headless 部署适配段（只写 code.host、`cordis_run` 同步激活、外观诉求不写插件；Web 前端已砍、host-only 全程无审批） |
+| 0008 | `session-persistence-jsonl-android` | JSONL 会话持久化两条安卓硬阻塞：① 新增 `src/publish.ts` 的 `publishLinkNoReplace`（`link()` 被 SELinux 拒 → `lstat` 探测 + `rename` 发布，目标存在仍报 `EEXIST`），`materializePosix` 与 generation 的 `publishCurrentExclusive` 都改走它；② `lease.ts` 租约回退——内核 flock 无 android 预编译（`ERR_FLOCK_UNSUPPORTED_PLATFORM`），退回「进程内互斥 + `O_EXCL` 锁文件（写 pid，持有者消失可接管）」 |
+| 0009 | `runtime-closure-manifest` | `deploy/meow-runtime/package.json` 按 0.1.5 重生成（139 项闭包，见下）+ `pnpm-workspace.yaml` 注册 + `tsconfig.host.json` 引用 + `THIRD_PARTY_NOTICES.md`/`scripts/gen-third-party-notices.ts` 记录 `@img/sharp-wasm32`（libvips wasm 含 LGPL-3.0 组件）+ lockfile |
 
-### Android 存活适配
-- **`packages/fs/fs-local/src/fsio.ts`** — guarded-create 发布原语由 `link()` 改为
-  「`lstat()` 探测 → 命中即抛 EEXIST → `rename()` 发布」（SELinux 禁 untrusted_app 域
-  `link()`）。探测保住 no-replace 契约：竞争者保留、`FS_NOT_OBSERVED` /
-  `FS_NOT_REGULAR_FILE` 错误映射与上游 link() 语义完全一致（上游 rc.1 的全套
-  竞争测试原样通过），仅存探测→发布的极小 TOCTOU 窗口，单进程 App 可接受。
-- **`packages/fs/fs-local/src/index.ts`** — 新增 `deny` 配置（`{path}[]`，文件精确 + 目录前缀），
-  在 `resolve()` / `lstat()`（含 realpath 防符号链接绕过）/ `listDir()` 三处拦截，
-  命中抛 `FS_PERMISSION_DENIED`。
-- **`packages/shell/bash-local/src/index.ts`** — ① `DSH_BASH_BIN` 存在时经
-  `[linker64, bash, --norc, --noprofile, -c]` 拉起 bash（untrusted_app 不能直接 exec 私有 ELF）；
-  ② spawn env 追加 `DEEPSEEK_API_KEY: undefined` tombstone，bash 子进程拿不到明文 key。
-- **`packages/subprocess/subprocess-local/src/windows-inspector.ts`** — koffi 原生绑定改为
-  首次调用惰性解析（type-only import + `createRequire`）。新版引入的 Windows 进程检查器在
-  模块顶层就触达 koffi 原生绑定，而 koffi 无 Android/bionic arm64 prebuilt——静态 import
-  会让 `dsh-subprocess-local` 在 Android 上插件树加载即崩（真机实测）。Linux 检查器纯走
-  `/proc`，不受影响。
+**闭包清单（0009）的生成口径**：以 `cordis.yml` 行集 + 四预设行集 + 手写宿主入口
+（`runtime-assets/dsh/host.mjs`、`meow-extensions/*.js`）的 import 面为根，对工作区
+`package.json` 的 `dependencies + optionalDependencies + peerDependencies` 做 BFS；剔除上游
+CLI/ACP/hooks/MCP/pwsh/workflow-ralph/sandbox-enforcer（landlock）/exa-perplexity 等喵仓不挂的行；
+手工补 `dsh-sdk-jsonrpc-server`、`dsh-sdk-protocol`（手写入口 import，工作区遍历看不到）与
+`@img/sharp-wasm32`（版本必须与 `sharp` 依赖声明完全一致，否则 hoisted 同名冲突 → deploy 静默丢包）。
 
-### llm-pi-ai 模型管理配合（dormant 路由）
-- **`src/catalog.ts` / `src/config.ts`** — 无 catalog 默认且 `models` 为空的路由不再报错，
-  改为休眠存储（先存 provider 凭据、后填模型列表；填上即激活）。
-- **`src/index.ts`** — discovery 时 `MISSING_CREDENTIAL` 视为无凭据（返回 undefined），不炸探测流程。
-- **`tests/adapter.spec.ts` / `discovery.spec.ts` / `dynamic-config.spec.ts`** — 配套测试更新。
-- **`README.md` / `README.zh.md`** — 上游为「文档即规格」风格，两段行为描述随代码同步更新。
+## 0.1.5 上游破坏性变更与喵仓落位（重推 patch 前必读）
 
-### 新包 web-search-tavily
-- **`packages/web/web-search-tavily/`**（src ×4 + tests ×2 + README ×2 + package.json + tsconfig）
-  Tavily 网络搜索 provider（`TAVILY_API_KEY`）。
-- **`tests/redirect.spec.ts`** — 平台对照组测试随 undici 安全策略更新：新版 undici 跨源重定向
-  会剥离 Authorization（body 仍转发），故「显式拒绝 redirect」仍是唯一同时护住两者的姿态。
-- **`packages/bundle/base/cordis.patch.yml` + `package.json`** — 注册 `dsh-web-search-tavily`。
-- **`tsconfig.host.json`** — 加 project reference。
-
-### 安卓运行时闭包清单
-- **`deploy/meow-runtime/package.json`** — pnpm deploy 清单：以官方 python/sdk-runtime 闭包为基，
-  剔除 ACP/subagent 驱动/node-pty/sandbox 原生模块(landlock)/query/lsp/mcp 等；
-  含 SQLite 会话持久化与 DeepSeek web 搜索。**这是打闭包的输入，必须存在。**
-  rc.2 起新增 `@deepseek-ai/dsh-attachment-local`（官方附件存储）与
-  `@img/sharp-wasm32@0.35.3`（Termux sharp WASM 兜底）。
-- **`pnpm-workspace.yaml`** — 注册 `deploy/meow-runtime`。
-
-### 图片存储 Android 适配（rc.2 新增）
-- **`packages/attachment/attachment-local/src/store.ts`** — 两处 Android/SELinux 规避：
-  1. `ensureDurableDirectory()` 向上 fsync 祖先目录时，遇到 `EACCES`/`EPERM`（App 沙箱不能
-     `open('/data/user/0')` 等数据根之上的父目录）改为 best-effort 停止，不再整体失败；
-  2. `commitPreparedImageFile()` 的内容寻址发布由 `link()` 为主，遇 `EACCES`/`EPERM`（SELinux
-     禁 untrusted_app 域 `link()`，与 fs-local 同坑）回退为「`lstat()` 探测 → 未命中
-     `rename()` 发布 / 命中校验摘要」；发布后 `unlink(tmp)` 容忍 `ENOENT`（rename 后临时文件已不存在）。
-- 说明：cordis.yml 挂载 `dsh-attachment-local`、meow-jsonrpc.js 新增 `session/attachImages` /
-  `session/imageLimits` 属于 `runtime-assets/dsh/`（不入 patch）；sharp 在 Termux 靠
-  `@img/sharp-wasm32` 自动 WASM 兜底（PC 闭包内 linux-x64 原生包在 arm64 上加载失败后 fallback）。
-
-## 0002 内容（feat-meow-Agent-presets-str_replace_editor-cwd，2026-08-30）
-
-标准 Agent 预设体系（plan-standard-mode 一期）的 fork 侧改动，基线不变：
-
-- **`deploy/meow-runtime/package.json`** — 闭包清单补 11 个 workspace 包：
-  `dsh-agent-presets` / `dsh-persona` / `dsh-plan-mode` / `dsh-commands` /
-  `dsh-command-goal` / `dsh-user-questions` / `dsh-tool-ask-user` / `dsh-tool-subagent` /
-  `dsh-tool-subagent-control` / `dsh-subagent-spawn-in-process` / `dsh-command-compact`。
-  新增外部依赖仅 js-yaml 与 zod@4（store 已有）。
-- **`pnpm-lock.yaml`** — 固化 `deploy/meow-runtime` importer 块与新包解析记录
-  （0001 不含 lockfile——原复现流程由 `pnpm install` 重新生成；0002 起把清单对应的
-  lockfile 状态一并入库，`git apply` 后 `pnpm install` 幂等校验，不影响原流程）。
-- **`packages/fs/tool-str-replace-editor/src/index.ts`** — `resolveTarget` 接入会话 cwd
-  （`exec.agent.session.header.cwd`，内联 `sessionCwdOf`——`sessionCwd` 未从 tool-fs
-  包根导出、src/ 不在 publish 白名单，不能跨包 import），view/create/str_replace/insert
-  四个调用点同步传 `exec`；`cwd: undefined` 时行为同旧（exactOptionalPropertyTypes 下
-  条件展开）。跨工作区会话的编辑工具不再按后端全局 cwd 解析。
-
-## 0003 内容（fix-deploy-img-sharp-wasm32-sharp-0.35.4-pnpm-instal，2026-08-30）
-
-真机首装 0.2.6 实测踩坑的修复：D 组 `pnpm install` 把 sharp 顶到 **0.35.4**，与 manifest
-钉死的 `@img/sharp-wasm32@0.35.3` 在 hoisted 布局下同名不同版本冲突，`pnpm deploy` 产物
-**整个丢包**（两个版本都不落 `@img/`）；Android 无 arm64 原生 sharp → attachments 插件树
-加载即崩 → **DSH 子进程启动即退**（App 撞上「socket 已监听但插件树还在加载」的窗口能
-拿到 initialize 响应，随后进程退出连接全被 RST——极难排查的假活）。
-
-- **`deploy/meow-runtime/package.json`** — `@img/sharp-wasm32` 对齐 `0.35.4`（与 sharp
-  0.35.4 自身的 optional 依赖同版本，hoisted 合并保留单副本）。
-- **`pnpm-lock.yaml`** — importer 块随版本对齐。
-- **`scripts/gen-third-party-notices.ts` + `THIRD_PARTY_NOTICES.md`** —
-  `@img/sharp-wasm32`（libvips wasm 含 LGPL-3.0 组件）计入 `isOwnerAuthorizedRuntime`
-  owner 记录（兜底决定 2026-08-23 拍板）并随 runtime 表公示；不记会被 lefthook 的
-  third-party-notices 守卫挡提交。
-- **教训**：给 deploy 清单升外部依赖版本时，必须与依赖它的包自身的 optional 依赖版本
-  保持一致（hoisted 布局下同名不同版本 = 静默丢包）；重打 runtime.bin 后必须真机确认
-  DSH 子进程真正起来（`jobs -l` / `/proc` 扫 packaged-bin），不能只看 RPC 握手。
-
-## 0004 内容（feat-meow-creative-mode-closure-support-tool-cordis-host-runner-headless-prompt，2026-08-30）
-
-创造模式（`meow-cordis` 预设，`plan/plan-creative-mode.md`）的 fork 侧支撑：闭包补两个
-上游原包（零新外部依赖，peer 全在既有清单）+ tool-cordis 提示词的 headless 部署适配。
-
-- **`deploy/meow-runtime/package.json`** — + `@deepseek-ai/dsh-tool-cordis`（自指工具集：
-  inspect/define/run/stop/undefine + @pluginId 注入，零运行时依赖）与
-  `@deepseek-ai/dsh-cordis-host-runner`（dynamicCordisRunner/cordisInspect 服务；
-  host-only 包 run() 直激活不经审批，`src/index.ts:270`）。**不装** cordis-client-runner /
-  ui-cordis —— 本部署无 Web 前端，插件只有 Host 半边。
-- **`pnpm-lock.yaml`** — meow-runtime importer 块 +2 条 workspace link。
-- **`packages/extensions/tool-cordis/src/prompt.ts`** — `CORDIS_SYSTEM_PROMPT` 顶部附加
-  headless 部署适配段（additive，原文不动、顶部覆盖语义）：只写 `code.host`、不注册
-  Slots/主题/卡片；`cordis_run` 同步激活、`awaiting-approval` 永不出现；界面/外观诉求路由
-  `appconfig/*.jsonc` 或工作区 HTML；可复用模式走 agent-presets 用户根。动机：上游正文会
-  主动引导「视觉诉求别躲 Client」，无前端部署里 Client 包必卡死 —— 在常驻系统提示词层掐掉。
-- 配套（不入本 patch）：基座 `cordis.yml` 挂 `cordis-host-runner` 行；预设本体
-  `app/src/main/assets/dsh-presets/meow-cordis/`（含两份中文教学技能，上游 skill 按旧 API
-  写、需中文化 + 去沙箱审批 + 去 Client 章节的魔改全记录在 plan-creative-mode）。
-
-## 0005 内容（feat-meow-minimal-mode-closure-support-terminal-fami，2026-08-31）
-
-极简模式（`meow-minimal` 预设，`plan/plan-minimal-mode.md`）的 fork 侧支撑：闭包补
-terminal 家族四个上游原包（纯 JS，零新外部依赖）+ subprocess-local 平台门补 android。
-
-- **`deploy/meow-runtime/package.json`** — + `@deepseek-ai/dsh-terminal`（PTY 注册表
-  服务，agent-owned，零依赖）、`@deepseek-ai/dsh-terminal-bash`（bash 方言后端：OSC 133;D
-  就绪检测 / 输出清洗 / PS1+PROMPT_COMMAND 注入；硬依赖 dsh-pwsh-local + schemastery）、
-  `@deepseek-ai/dsh-tool-bash-persistent`（持久 bash 工具行，注册名 `bash`，owner 串行）、
-  `@deepseek-ai/dsh-pwsh-local`（纯 JS 助手，terminal-bash 顶层 import 只取常量，不可省）。
-- **`pnpm-lock.yaml`** — meow-runtime importer 块 +4 条 workspace link。
-- **`packages/subprocess/subprocess-local/src/process-inspector.ts`** —
-  `createProcessInspector` 平台门补 `android` → LinuxProcessInspector：Android 内核即
-  Linux（bionic），`/proc` 接口与 arm64 syscall 号与 linux-arm64 相同。**真机实测**：
-  不修则持久 bash 工具首调即报 `subprocess-local: terminal inspection is unsupported on
-  platform android`（Node 在安卓上 `process.platform === 'android'`；`terminal.ts` /
-  `spawn.ts` 的其余平台分支只挡 win32，POSIX 默认路径不受影响）。
-- 配套（不入本 patch）：基座 `cordis.yml` 挂 `sandbox-policy` 行（`dsh-sandbox-policy`
-  纯 JS 已在清单，`mode: danger-full-access` = 无 enforcer 部署的「无沙箱」语义——
-  terminal-bash 硬 inject `sandboxPolicy`，且该 mode 下 spawnArgv 短路直启不触 enforcer）；
-  预设本体 `app/src/main/assets/dsh-presets/meow-minimal/`（persistent-shell 组 +
-  minimal-face restrict 插件；shellPath=linker64 + lib/bash.bin 的安卓 spawn 配置、
-  减法机制与真机验收记录见 plan-minimal-mode）。
-
-## 0006 内容（feat-meow-PTC-mode-closure-support-code-runtime-fami，2026-08-31）
-
-PTC 模式（`meow-code` 预设，`plan/plan-ptc-mode.md`）的 fork 侧支撑：闭包补 code-runtime
-家族三个上游原包（`dsh-agent-tool-presentation` / `dsh-code-runtime` /
-`dsh-code-runtime-worker-thread`，全纯 JS，上游原包零源码改动）。
-
-- **`deploy/meow-runtime/package.json`** — + 上述三包 workspace link。
-- **`pnpm-lock.yaml`** — meow-runtime importer 块 +3 条。
-- worker 堆 `maxOldGenerationSizeMb` 512→128 不在此处改，走 `cordis.yml` 的 config（安卓内存预算）。
-
-## 0007 内容（fix-meow-deny-rules-match-realpath-aliased-targets，2026-09-02）
-
-**安全修复**：`deny` 名单在安卓上自 0.2.6 起一直空转（真机实测：`dsh-presets`、
-`appconfig/dsh-credentials.yaml`、`memory/JOURNAL.jsonl` 全部可被通用文件工具读取）。
-
-根因：fs-local 把规则串按 `resolve()` 归一化（不解析符号链接），却拿它去比
-realpath 派生的 `targetKey`。安卓部署侧写的是 `/data/user/0/<pkg>/files/...`，
-而 realpath 解析成 `/data/data/<pkg>/files/...`，两套前缀永不相等 → 一条都命中不了。
-
-- **`packages/fs/fs-local/src/index.ts`**
-  - 新增 `denyRuleKeys()`：每条规则同时保留**词法形态 + realpath 形态**；规则路径尚不存在时
-    沿最近存在祖先求 realpath 再补回缺失后缀（与 `resolveLocalTarget` 同构），
-    使「凭证文件还没生成」这类规则在创建后照样拦得住。
-  - `assertNotDenied()`：`targetKey` 与 `displayPath` **两面都比**，调用方经别名路径访问同样拒。
-- **`packages/fs/fs-local/tests/filesystem.spec.ts`** — 新增 `describe('deny rules')` 4 例
-  （此前 fork 对 deny 零测试覆盖，才让这个漏洞带了三个版本）：别名形态规则、realpath 形态规则、
-  尚未创建的路径、整目录拒绝且不误伤兄弟路径。
-
-> 喵：这条与 Android 无关的通用缺陷，只在「部署根可通过多个挂载别名到达」时暴露——
-> 所以 PC 冒烟测不出来，必须真机验。写 deny 规则时优先给 realpath 形态最稳。
+1. **会话持久化改 JSONL-only**：`dsh-session-persistence-sqlite` 被删，`session-format` 迁到 V3，
+   迁移链在 `session-format-catalog/src/generated.ts` 编译期固化。旧 `chat.db`（SCHEMA_VERSION 17）
+   新版**读不了** → 旧会话在 App 里仍可看历史气泡（Room 是另一套存储），但 DSH 侧 `resume` 落空。
+   Android 硬阻塞两条全部由 0008 修掉。
+2. **`dsh-agent-spine-demo` 被删**（`packages/examples` 整组删除，不保留别名）：它原来的职责在
+   `cordis.yml` 里拆成显式行（`agent`/`agent-loop`/`tools`/`system-prompt`/`jobs`/`tool-*`）；
+   persona 迁到 `system-prompt` 行的 `personaPrefix`（`dsh-persona` 是 scope-only 行，挂全局会
+   fail loud，只在预设组合内可选使用）。
+3. **`dsh-sdk-jsonrpc-demo` 被删**（喵仓旧宿主入口 `lib/packaged-bin.js`）：喵仓自建
+   `runtime-assets/dsh/host.mjs`（复刻原 `runner.ts` 语义：显式配置路径 + `bareModuleBaseUrl` + stdin
+   EOF/SIGTERM 时 dispose 退出），`terminal-host.js` 与 `build-runtime.sh` 已改指它。
+4. **agent-presets 不再导出 `UnknownPresetError`/`PresetMountError`/`resolveSessionPreset`**：
+   改 `RemoteError{code,details}`（稳定 code：`agent-preset/not-found|invalid|locked|read-only`）；
+   会话预设重建改读 `agentPreset` 投影（`agentPresetProjectionDefinition.init/apply`，header 是创建时值、
+   空白期切换以 `agent-preset/selected` 事件为准）。**注意**：这三个符号是 `meow-extensions/*.js`
+   用的，`git grep` 在 `packages/` 里搜不到 —— 必须跑下面「PC 冒烟」才能抓到。
+5. **`isTokenDelta` 从 `@deepseek-ai/dsh-llm/message` 搬到 `/assistant-stream`**（子路径仍在、
+   但不再导出它 → ESM 链接期报错、DSH 直接起不来）。
+6. **`userQuestions` 从「全局单 provider 槽」改 agent 作用域 waterfall 事件**
+   （`ctx.on('user-questions/request', request => answerer.ask(request))`；祖先作用域的监听器能收到
+   派发到后代 key 的事件）。旧 `registerProvider` 已不存在。
+7. **settings 服务不再有通用 `mutate`/ns 视图 `describe`**：远程写入改走官方
+   `@deepseek-ai/dsh-api-settings-controller`（`describe/update/replace/mutate`，Web Models 页同一条路径），
+   需在 `cordis.yml` 挂 `settings-controller` 行。
+8. **`subprocess-local` 的进程检查器平台门不认 `android`**（0006）；**`subprocess-local` 顶层
+   koffi 静态加载**（0001）；**jsonl 用 `link()` 发布 + 原生 flock 租约**（0008）。
 
 ## 从零复现 runtime.bin
 
 ```bash
-# 0. 前置：PC 有 node + pnpm（node ^22.19||>=24）；安卓侧需 JDK 17 + Android SDK + 真机（Termux 打包用）
+# 0. 前置：PC 有 node + pnpm（node ^22.19||>=24）；安卓侧需 JDK 17 + Android SDK + 真机 Termux
+#    （Termux 需 nodejs-lts + bash + binutils + termux-keyring；打包脚本用预编译 meow-exec.so，免 clang）
 git clone https://github.com/deepseek-ai/deepseek-harness dsh
 cd dsh
-git checkout dsh-v0.1.1-rc.2
-git apply ../android-app/runtime-assets/dsh-fork/0001-feat-meow-Android-runtime-adaptations-tavily-web-sea.patch
-git apply ../android-app/runtime-assets/dsh-fork/0002-feat-meow-Agent-presets-str_replace_editor-cwd.patch
-git apply ../android-app/runtime-assets/dsh-fork/0003-fix-deploy-img-sharp-wasm32-sharp-0.35.4-pnpm-instal.patch
-git apply ../android-app/runtime-assets/dsh-fork/0004-feat-meow-creative-mode-closure-support-tool-cordis-host-runner-headless-prompt.patch
-git apply ../android-app/runtime-assets/dsh-fork/0005-feat-meow-minimal-mode-closure-support-terminal-fami.patch
-git apply ../android-app/runtime-assets/dsh-fork/0006-feat-meow-PTC-mode-closure-support-code-runtime-fami.patch
-git apply ../android-app/runtime-assets/dsh-fork/0007-fix-meow-deny-rules-match-realpath-aliased-targets.patch
-pnpm install          # lockfile 已随 0002/0003/0004/0006 入库，install 为幂等校验（有出入时以重新生成结果为准）
+git checkout dsh-v0.1.5-rc.2
+for p in ../android-app/runtime-assets/dsh-fork/000*.patch; do git apply "$p" || { echo "✗ $p"; break; }; done
+pnpm install --store-dir <你的 pnpm store>     # lockfile 随 0009 入库；install 幂等校验
 
-# 1. PC 构建并打 DSH 闭包（产物 .tmp/dsh-closure.tar.gz）
-npm run build:lib     # workspace 包 files 字段只发布 lib/，必须先构建
-cd .. && bash android-app/runtime-assets/build-dsh-closure.sh
+# 1. PC 构建 + 打闭包（产物 .tmp/dsh-closure.tar.gz，用绝对路径传入更稳）
+npm run build:lib
+cd .. && bash android-app/runtime-assets/build-dsh-closure.sh "$(pwd)/.tmp/dsh-0.1.5" "$(pwd)/.tmp/dsh-closure.tar.gz"
 
-# 2. 推到真机 Termux 打 runtime.bin（ssh 或 adb 均可，见 AGENTS.md「重打 runtime」）
-adb push .tmp/dsh-closure.tar.gz android-app/runtime-assets/build-runtime.sh \
-    android-app/runtime-assets/dns-shim.js /data/local/tmp/
-adb shell 'cp /data/local/tmp/* ~/ && chmod +x ~/build-runtime.sh && ~/build-runtime.sh ~/dsh-closure.tar.gz'
-adb pull /data/local/tmp/runtime.bin android-app/app/src/main/assets/runtime.bin
+# 2. 推到真机 Termux 打 runtime.bin（ssh/scp 或 adb 中转均可）
+scp -P 8022 .tmp/dsh-closure.tar.gz \
+    android-app/runtime-assets/{build-runtime.sh,terminal-host.js,dns-shim.js,meow-exec.c} \
+    u0_a169@192.168.0.18:~/
+scp -P 8022 .tmp/meow-exec-v4.so u0_a169@192.168.0.18:~/meow-exec.so   # 预编译，免 Termux clang
+ssh -p 8022 u0_a169@192.168.0.18 'cd ~ && MEOW_EXEC_SO=$HOME/meow-exec.so bash build-runtime.sh dsh-closure.tar.gz'
+scp -P 8022 u0_a169@192.168.0.18:~/runtime.bin android-app/app/src/main/assets/runtime.bin
 
-# 3. 构建 APK
+# 3. 构建 APK（必须 clean：增量打包会留零填充垃圾让 APK 膨胀一倍）
 cd android-app && ./gradlew clean assembleDebug
 ```
 
 其余已入库的配套源料（无需额外步骤）：`runtime-assets/dsh/cordis.yml`（喵仓组合）、
-`runtime-assets/dsh/meow-extensions/meow-jsonrpc.js`（session/bash/setModel/resume 扩展）、
-`runtime-assets/terminal-host.js`、`runtime-assets/dns-shim.js`、
-`runtime-assets/tools/fix-closure-links.mjs`、`runtime-assets/build-*.sh`。
+`runtime-assets/dsh/host.mjs`（宿主入口）、`runtime-assets/dsh/meow-extensions/*.js`
+（meow-jsonrpc + log/model/errors/stats 子模块）、`runtime-assets/terminal-host.js`、
+`runtime-assets/dns-shim.js`、`runtime-assets/tools/fix-closure-links.mjs`、`runtime-assets/build-*.sh`。
+
+## PC 冒烟（强烈建议，重推 patch 后先跑）
+
+`cordis.yml` 的宿主入口支持 **stdio 模式**（未设 `DSH_JSONRPC_SOCKET` 时沿用 stdin/stdout），
+所以闭包在 PC 上就能整树启动并跑 JSON-RPC，不必等真机：
+
+```bash
+mkdir -p .tmp/smoke && tar -xzf .tmp/dsh-closure.tar.gz -C .tmp/smoke
+cp -r android-app/app/src/main/assets/dsh-presets .tmp/smoke/files/
+# 起宿主（env 指向 .tmp/smoke 下的临时目录），然后按行发 JSON-RPC：
+#   initialize → presets/list → llm/models → settings/setProvider（空 models = 休眠路由）
+#   → session/query（不存在的会话）→ session/prompt（真 key 可跑完整回合）
+env DSH_HOME=$PWD/.tmp/smoke/home DSH_CWD=$PWD/.tmp/smoke/ws DSH_FILES_DIR=$PWD/.tmp/smoke/files \
+    DSH_SESSION_DIR=$PWD/.tmp/smoke/sessions DSH_SETTINGS_PATH=$PWD/.tmp/smoke/dsh-settings.json \
+    DSH_CREDENTIALS_PATH=$PWD/.tmp/smoke/dsh-credentials.yaml DEEPSEEK_API_KEY=<key> \
+    node .tmp/smoke/dsh/host.mjs .tmp/smoke/dsh/cordis.yml
+```
+
+**2026-09-11 实测价值**：本步骤一次抓出 3 处计划漏报的断链（`PresetMountError`、
+`userQuestions.registerProvider`、settings 写入 API），全部是 `packages/` 里搜不到的
+`meow-extensions/*.js` 侧用法 —— **PC 冒烟是重推 patch 后的必跑项**。
+
+**PC 冒烟测不了安卓 flock 租约**：linux 上 `loadBinding()` 会去找原生 `system.node`
+（闭包不含原生二进制 → `Cannot find module .../system.node`）。想验证可移植回退，可在
+**解压出的闭包副本**里把 `node_modules/@deepseek-ai/node-addon-system/lib/flock.js` 的
+`loadBinding()` 首行改成抛 `ERR_FLOCK_UNSUPPORTED_PLATFORM`（模拟安卓平台门），
+完整回合即可跑通（2026-09-11 实测）。
 
 ## 已知环境坑（复现时必读）
 
-- **WSL/Linux 上 node-prune 会误伤 workspace**：`build-dsh-closure.sh` 的 node-prune 步骤在
-  产物上裁剪 doc/ 时，会经由文件共享机制把 workspace 里 `yaml@2.9.0/dist/doc/` 十个文件一并
-  删掉（TS 编译用 .d.ts 还在、运行时 require .js 缺失——症状是后续 lint/typecheck 过但运行时
-  崩 `Cannot find '../doc/directives.js'`）。脚本已内置自愈步骤（从完整产物反向补回，幂等）。
-- **PC 冒烟测不出平台原生模块问题**：koffi/node-pty 等在 PC x64 上能加载，Termux arm64+bionic
+- **node-prune 会经文件共享误伤 workspace**：`build-dsh-closure.sh` 的 node-prune 在产物上
+  裁剪 doc/ 时，会把 workspace 里 `yaml@2.9.0/dist/doc/` 十个文件一并删掉（症状：lint/typecheck 过、
+  运行时崩 `Cannot find '../doc/directives.js'`）。脚本已内置自愈（从完整产物反向补回，幂等）。
+  同类误伤还会打掉 `pdfjs-dist` 的 LICENSE → 上游 third-party 门禁在客户端 bundle 上会失败
+  （与 runtime 无关，提交时 `--no-verify` 跳过即可）。
+- **闭包脚本的路径必须绝对**：脚本为 `pnpm deploy` 会 `cd` 进 DSH checkout，传相对路径会让后半段
+  的相对引用二次拼接（yaml 自愈步骤曾因此静默失配、被 `set -e` 拦在 tar 之前）。脚本现已自行
+  归一化 `DSH_ROOT`/`OUT_FILE`，但调用时用绝对路径最稳。
+- **PC 冒烟测不出平台原生模块问题**：koffi/node-pty/sharp 在 PC x64 上能加载，Termux arm64+bionic
   才暴露。跨平台改动务必以真机启动为准。
 - **替换 runtime.bin 后必须 `./gradlew clean assembleDebug`**：增量打包会让 APK 膨胀一倍
   （~70MB 零填充垃圾），clean 后恢复正常体积。
-- **SQLite SCHEMA_VERSION 17（rc.1 = rc.2）硬守卫**：rc.1 → rc.2 **不删库、不迁移**，旧会话可续聊；
-  若未来上游 bump 到 >17，DSH 会因版本不匹配拒绝打开旧库，届时需按上游迁移或重建。
+- **会话数据格式断代（0.1.5 起）**：旧 `chat.db` 不再被读取，旧会话在 DSH 侧 `resume` 会落空
+  （新会话从空上下文开始）。prune 前的旧库留在 `.dsh-sessions/chat.db`，导出器见
+  `plan/plan-dsh-upgrade-0.1.5.md` §6（轨道 A 预备项①，尚未落地）。
 
 ## 升级上游时
 
 1. 新基线上重放本 patch（冲突则手工合并）；
-2. 全量对比 fork 与新基线，重新生成 patch 并**更新本 README 的基线 commit**；
-3. 重跑 `pnpm install` + `npm run build:lib` + 闭包脚本 + 真机打包验证。
+2. **跑 PC 冒烟**（上节）——`meow-extensions/*.js` 的 import/服务 API 漂移只有它能抓到；
+3. 全量对比 fork 与新基线，重新生成 patch 并**更新本 README 的基线 commit**；
+4. 重跑 `pnpm install` + `npm run build:lib` + 闭包脚本 + 真机打包 + `clean assembleDebug`；
+5. 真机回归按 `plan/plan-dsh-upgrade-0.1.5.md` §7 台账 11 项逐条走。
 
 ## 已知非源码差异（不入 patch，属本地产物）
 

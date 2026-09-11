@@ -227,8 +227,10 @@ object DshProcessLauncher {
             put("DSH_NODE_BIN", node.absolutePath)
             // bash 二进制绝对路径（terminal-host 用 linker64 加载；bin/bash 是 wrapper 脚本）
             put("DSH_BASH_BIN", runtimeDir.absolutePath + "/lib/bash.bin")
-            // DSH 会话持久化（SQLite）与默认 cwd（cordis.yml 里经 DSH_SESSION_DB / DSH_CWD 读取）
-            put("DSH_SESSION_DB", context.filesDir.absolutePath + "/.dsh-sessions/chat.db")
+            // DSH 会话持久化根目录（0.1.5 起 JSONL-only，cordis.yml 经 DSH_SESSION_DIR 读取；
+            // 旧 SQLite 库 .dsh-sessions/chat.db 保留在磁盘上供历史查询，新 provider 不读它）
+            // 与默认 cwd（DSH_CWD）
+            put("DSH_SESSION_DIR", context.filesDir.absolutePath + "/.dsh-sessions")
             // 可配置 provider 的 settings / credentials 文档路径（模型管理，M4）
             // phase4：settings 迁至 appconfig/ 且 JSON 化（DSH settings-file 原生支持 .json）
             put("DSH_SETTINGS_PATH", RuntimeExtractor.appConfigDir(context).absolutePath + "/dsh-settings.json")
@@ -240,6 +242,11 @@ object DshProcessLauncher {
             put("DSH_HOME", context.filesDir.absolutePath + "/.dsh")
             // filesDir 绝对路径（cordis.yml 的 fs-local deny 用绝对路径构造敏感文件规则）
             put("DSH_FILES_DIR", context.filesDir.absolutePath)
+            // TMPDIR：node 的 os.tmpdir() 在 Termux 版 node 上默认返回编译期前缀路径
+            // （/data/data/com.termux/files/usr/tmp）——App 域不可写，会让 spill-local 的
+            // mkdtemp、subprocess 的 runner 临时目录直接 EACCES（0.1.5 真机实测）。
+            // 上面 apt 段已把它设成物理 $PREFIX/tmp（同样在 filesDir 内、天然可写），这里只兜底。
+            if (get("TMPDIR") == null) put("TMPDIR", context.filesDir.absolutePath + "/tmp")
             // 网络搜索开关（'1' 启用；cordis.yml 里 tool-web.search 据此决定是否注册 web_search）
             put("DSH_WEB_SEARCH", if (webSearchEnabled) "1" else "0")
             if (apiKey.isNotBlank()) {

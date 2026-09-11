@@ -20,8 +20,14 @@
 set -euo pipefail
 
 DSH_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)/dsh}"
+# 归一化为绝对路径：下面为 pnpm deploy 会 cd 进 DSH_ROOT，若不绝对化，脚本后半段的
+# $DSH_ROOT/... 相对引用会二次拼接（yaml 自愈步骤曾因此在相对路径调用下静默失配）。
+DSH_ROOT="$(cd "$DSH_ROOT" && pwd)"
 # 默认落到仓库根 .tmp/（临时产物不入库；release/ 只放 APK）
 OUT_FILE="${2:-$(cd "$(dirname "$0")/../.." && pwd)/.tmp/dsh-closure.tar.gz}"
+# 同上：输出路径也绝对化（tar 与 ls 都在 cd 之后执行）。
+mkdir -p "$(dirname "$OUT_FILE")"
+OUT_FILE="$(cd "$(dirname "$OUT_FILE")" && pwd)/$(basename "$OUT_FILE")"
 OUT_DIR="$(dirname "$OUT_FILE")"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DSH_DIR="$SCRIPT_DIR/dsh"

@@ -1,0 +1,385 @@
+From 5d5fe830e45842ba7c25530e8df2fa65c409614c Mon Sep 17 00:00:00 2001
+From: meow <meow@local>
+Date: Fri, 11 Sep 2026 22:16:53 +0800
+Subject: [PATCH 01/10] =?UTF-8?q?=E2=9C=A8=20feat(meow):=20Android=20?=
+ =?UTF-8?q?=E5=AD=98=E6=B4=BB=E9=80=82=E9=85=8D=E5=9F=BA=E5=BA=A7=EF=BC=88?=
+ =?UTF-8?q?0.1.5=20=E5=9F=BA=E7=BA=BF=E9=87=8D=E5=81=9A=EF=BC=89?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+上游 0.1.5 重写了这些文件，逐 hunk 重推（原 0001 的同名部分已失效）：
+
+- attachment-local/store.ts：上游新增 ensureDurableHome() 会从 DSH_HOME 一路
+  fsync 到文件系统根（安卓 open('/data/user/0') EACCES → 整次发布失败），改为
+  遇 EACCES/EPERM best-effort 停止；link() 被 SELinux 拒时 lstat 探测 + rename
+  发布（publishStagedObject），别名发布退化为 COPYFILE_EXCL 副本
+  （publishImmutableAlias）；unlink(临时名) 容忍 ENOENT。
+- bash-local/index.ts：DSH_BASH_BIN 存在时经 linker64 加载 bash.bin
+  （untrusted_app 不能直接 exec 私有 ELF）；spawn env 追加 DEEPSEEK_API_KEY
+  tombstone。
+- subprocess-local/windows-inspector.ts：koffi 首次调用才解析（惰性），静态
+  import 会让插件树在安卓（无 bionic prebuilt）加载即崩。
+- fs-local/fsio.ts：guarded-create 发布原语由 link() 换成「lstat 探测 → EEXIST /
+  rename 发布」，保住上游 no-replace 契约（上游此版新增 inspectPublicationTarget
+  与 throwGuardedCreateFailure，已按新结构对齐）。
+---
+ .../attachment/attachment-local/src/store.ts  | 64 ++++++++++++++++---
+ packages/fs/fs-local/src/fsio.ts              | 29 +++++++--
+ packages/shell/bash-local/src/index.ts        | 16 ++++-
+ .../subprocess-local/src/windows-inspector.ts | 62 +++++++++++-------
+ 4 files changed, 132 insertions(+), 39 deletions(-)
+
+diff --git a/packages/attachment/attachment-local/src/store.ts b/packages/attachment/attachment-local/src/store.ts
+index 7fab679e34..38a1c8c8c1 100644
+--- a/packages/attachment/attachment-local/src/store.ts
++++ b/packages/attachment/attachment-local/src/store.ts
+@@ -2,7 +2,7 @@
+ 
+ import { createHash, randomUUID } from 'node:crypto'
+ import { constants, createReadStream } from 'node:fs'
+-import { chmod, link, mkdir, open, readFile, unlink } from 'node:fs/promises'
++import { chmod, copyFile, link, lstat, mkdir, open, readFile, rename, unlink } from 'node:fs/promises'
+ import { dirname, join, parse, resolve } from 'node:path'
+ import {
+   AttachmentError,
+@@ -161,7 +161,18 @@ async function ensureDurableDirectory(path: string, boundary: string): Promise<v
+   let level = target
+   while (level !== stop) {
+     const parent = dirname(level)
+-    await syncDirectory(parent)
++    try {
++      await syncDirectory(parent)
++    } catch (error) {
++      // Android app sandbox（untrusted_app）不能 open /data、/data/user/0 等 App 数据根之上的
++      // 父目录做 fsync（EACCES/EPERM）。对进程不可达的祖先做 best-effort：停止向上遍历，
++      // 不把整次发布打成失败（单进程常驻部署下不影响发布正确性，仅少一层崩溃持久性证明）。
++      if (!(error instanceof Error && 'code' in error
++        && (error.code === 'EACCES' || error.code === 'EPERM'))) {
++        throw error
++      }
++      return
++    }
+     /* v8 ignore next -- filesystem-root guard: callers pass a boundary that is an ancestor of path, so the walk reaches it first. */
+     if (parent === level) return
+     level = parent
+@@ -282,9 +293,22 @@ export async function publishImmutableAlias(
+     try {
+       await link(source, target)
+     } catch (error) {
+-      /* v8 ignore next -- Private same-filesystem directories make EEXIST the only recoverable link race. */
+-      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
+-      if (await digestFile(target) !== sha256) {
++      if (!(error instanceof Error && 'code' in error)) throw error
++      if (error.code === 'EACCES' || error.code === 'EPERM') {
++        // Android app sandbox（untrusted_app）禁止 link(2)（SELinux）。别名语义退化为内容相同的独立副本：
++        // COPYFILE_EXCL 保住 no-replace 竞争语义，内容寻址下两个名字可互换（代价 = 少一层空间去重）。
++        try {
++          await copyFile(source, target, constants.COPYFILE_EXCL)
++        } catch (copyError) {
++          if (!(copyError instanceof Error && 'code' in copyError && copyError.code === 'EEXIST')) throw copyError
++          if (await digestFile(target) !== sha256) {
++            throw new AttachmentError('Stored attachment failed integrity verification.', 'ATTACHMENT_CORRUPT')
++          }
++        }
++      } else if (error.code !== 'EEXIST') {
++        throw error
++      } else if (await digestFile(target) !== sha256) {
++        /* v8 ignore next -- Private same-filesystem directories make EEXIST the only recoverable link race. */
+         throw new AttachmentError('Stored attachment failed integrity verification.', 'ATTACHMENT_CORRUPT')
+       }
+     }
+@@ -358,15 +382,37 @@ async function publishStagedObject(
+     try {
+       await link(staged.path, target)
+     } catch (error) {
+-      /* v8 ignore next -- Private same-filesystem directories make EEXIST the only recoverable link race. */
+-      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
+-      if (await digestFile(target) !== staged.sha256) {
++      if (!(error instanceof Error && 'code' in error)) throw error
++      if (error.code === 'EACCES' || error.code === 'EPERM') {
++        // Android app sandbox（untrusted_app）禁止 link(2)（SELinux）。与 fs-local 同款规避：
++        // lstat 探测命中即视为已存在；未命中用 rename() 原子发布（单进程下语义近似 no-replace）。
++        let targetExists = true
++        try {
++          await lstat(target)
++        } catch (statError) {
++          if (!(statError instanceof Error && 'code' in statError && statError.code === 'ENOENT')) throw statError
++          targetExists = false
++        }
++        if (targetExists) {
++          if (await digestFile(target) !== staged.sha256) {
++            throw new AttachmentError('Stored attachment failed integrity verification.', 'ATTACHMENT_CORRUPT')
++          }
++        } else {
++          await rename(staged.path, target)
++        }
++      } else if (error.code !== 'EEXIST') {
++        throw error
++      } else if (await digestFile(target) !== staged.sha256) {
++        /* v8 ignore next -- Private same-filesystem directories make EEXIST the only recoverable link race. */
+         throw new AttachmentError('Stored attachment failed integrity verification.', 'ATTACHMENT_CORRUPT')
+       }
+     }
+     // Windows shares the read-only attribute across hard links and refuses to
+     // unlink either name once it is set, so discard the staging name first.
+-    await unlink(staged.path)
++    // Android 走 rename() 发布时临时名已随 rename 消失，仅容忍 ENOENT。
++    await unlink(staged.path).catch((cleanupError: unknown) => {
++      if (!(cleanupError instanceof Error && 'code' in cleanupError && cleanupError.code === 'ENOENT')) throw cleanupError
++    })
+     // The target remains the sole link for a new object; this also restores
+     // read-only mode when the deduplication path observes an existing object.
+     await chmod(target, 0o400)
+diff --git a/packages/fs/fs-local/src/fsio.ts b/packages/fs/fs-local/src/fsio.ts
+index e07567e0e3..5cf4fc7c0f 100644
+--- a/packages/fs/fs-local/src/fsio.ts
++++ b/packages/fs/fs-local/src/fsio.ts
+@@ -7,7 +7,7 @@
+ 
+ import { randomUUID } from 'node:crypto'
+ import { createReadStream } from 'node:fs'
+-import { chmod, link, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat } from 'node:fs/promises'
++import { chmod, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat } from 'node:fs/promises'
+ import type { BigIntStats, Dirent, Stats } from 'node:fs'
+ import { basename, dirname, join, resolve } from 'node:path'
+ import { TextDecoder } from 'node:util'
+@@ -516,6 +516,22 @@ async function removeStagingDirOrThrow(
+   throw originalError
+ }
+ 
++// Android (meow fork): SELinux denies link(), so the default guarded-create
++// publication probes the target and reports EEXIST to the shared failure
++// mapper instead of hard-linking; on an absent target rename() publishes.
++async function publishCreateNoReplace(tempPath: string, absolutePath: string): Promise<void> {
++  try {
++    await lstat(absolutePath, { bigint: true })
++  } catch (probeError: unknown) {
++    if (!isENOENT(probeError) && !isENOTDIR(probeError)) throw probeError
++    await rename(tempPath, absolutePath)
++    return
++  }
++  const eexist: NodeJS.ErrnoException = new Error(`EEXIST: file exists: ${absolutePath}`)
++  eexist.code = 'EEXIST'
++  throw eexist
++}
++
+ async function throwGuardedCreateFailure(
+   error: unknown,
+   absolutePath: string,
+@@ -531,8 +547,9 @@ async function throwGuardedCreateFailure(
+     }
+   }
+ 
+-  // Link errno values vary by platform and filesystem. Inspect the target entry
+-  // after failure so a collision is not confused with missing hard-link support.
++  // Publication errno values vary by platform and filesystem. Inspect the target
++  // entry after failure so a collision is not confused with missing support for
++  // the no-replace primitive.
+   if (existing !== undefined) {
+     if (!existing.isFile()) {
+       throw new FsError(`cannot write "${displayPath}": not a regular file`, 'FS_NOT_REGULAR_FILE', { cause: error })
+@@ -564,7 +581,7 @@ async function throwGuardedCreateFailure(
+  * inert as a mode on Windows but identifies replacement security semantics.
+  * @param signal - cancellation checked before final publication.
+  * @param internals - Test hook for pinning temp names and observing the staged file.
+- * @param createIfAbsent - when provided, publish with a hard-link no-replace
++ * @param createIfAbsent - when provided, publish with a no-replace
+  * primitive; a concurrent creator's file is preserved and this write is
+  * rejected with `FS_NOT_OBSERVED` using the supplied display path.
+  */
+@@ -588,7 +605,7 @@ export async function writeFileAtomic(
+   const platform = internals.platform ?? process.platform
+   const copyFileDacl = internals.copyFileDacl ?? copyFileDaclWin32
+   const replaceFile = internals.replaceFile ?? replaceFileWin32
+-  const linkFile = internals.linkFile ?? link
++  const linkFile = internals.linkFile ?? publishCreateNoReplace
+   const inspectPublicationTarget = internals.inspectPublicationTarget
+     ?? (path => lstat(path, { bigint: true }))
+   const removeStagingDir = internals.removeStagingDir
+@@ -614,6 +631,8 @@ export async function writeFileAtomic(
+ 
+     throwIfAborted(signal, 'write')
+     if (createIfAbsent !== undefined) {
++      // Android (meow fork): the default publication is a probed rename —
++      // SELinux denies link(); injected linkFile seams keep upstream semantics.
+       try {
+         await linkFile(tempPath, absolutePath)
+       } catch (error: unknown) {
+diff --git a/packages/shell/bash-local/src/index.ts b/packages/shell/bash-local/src/index.ts
+index 0ab4c03964..6bc516eef1 100644
+--- a/packages/shell/bash-local/src/index.ts
++++ b/packages/shell/bash-local/src/index.ts
+@@ -195,7 +195,9 @@ export class LocalBashExecutor extends ShellExecutor {
+       // One explicit env map for the seam, layered so the trusted dshEnv
+       // snapshot beats both the caller's env and the terminal overrides; the
+       // subprocess service merges the whole map after its ambient scrub.
+-      env: { ...ENV_OVERRIDES, ...spec.env, ...spec.dshEnv },
++      // 喵仓：显式 tombstone 兜底过滤 DeepSeek key，即使上层 env/scrub
++      // 行为变化，bash 子进程也看不到明文 key（Node 跳过 undefined 条目）。
++      env: { ...ENV_OVERRIDES, ...spec.env, ...spec.dshEnv, DEEPSEEK_API_KEY: undefined },
+     }
+   }
+ 
+@@ -210,8 +212,16 @@ export class LocalBashExecutor extends ShellExecutor {
+     return { stdout, stderr }
+   }
+ 
++  /** Android（untrusted_app 域）不能直接 exec 私有 ELF bash，经 linker64（系统 ELF）加载 bash.bin */
++  private bashArgv(command: string): readonly string[] {
++    const bashBin = process.env.DSH_BASH_BIN
++    const linker64 = process.env.DSH_LINKER64 || '/system/bin/linker64'
++    if (bashBin) return [linker64, bashBin, '--norc', '--noprofile', '-c', command]
++    return ['bash', '-c', command]
++  }
++
+   async run(spec: ShellExecSpec): Promise<ShellRunResult> {
+-    return this.runArgv(spec, ['bash', '-c', spec.command])
++    return this.runArgv(spec, this.bashArgv(spec.command))
+   }
+ 
+   /**
+@@ -242,7 +252,7 @@ export class LocalBashExecutor extends ShellExecutor {
+   }
+ 
+   start(spec: ShellExecSpec): ShellProcess {
+-    return this.startArgv(spec, ['bash', '-c', spec.command])
++    return this.startArgv(spec, this.bashArgv(spec.command))
+   }
+ 
+   /**
+diff --git a/packages/subprocess/subprocess-local/src/windows-inspector.ts b/packages/subprocess/subprocess-local/src/windows-inspector.ts
+index 14715c65aa..9e058b244b 100644
+--- a/packages/subprocess/subprocess-local/src/windows-inspector.ts
++++ b/packages/subprocess/subprocess-local/src/windows-inspector.ts
+@@ -10,7 +10,20 @@
+  */
+ 
+ import { spawnSync } from 'node:child_process'
+-import koffi from 'koffi'
++import { createRequire } from 'node:module'
++import type koffi from 'koffi'
++
++let cachedKoffi: typeof koffi | undefined
++/**
++ * Lazy koffi accessor: the module top level of `koffi` resolves its native
++ * binding immediately, and no prebuilt exists for Android/bionic arm64, so a
++ * static import would break plugin load on every platform that ships this
++ * package (meow fork, 2026-08-21). Resolving here defers that load to the
++ * first Win32 inspection, which only happens on Windows.
++ */
++function koffiRef(): typeof koffi {
++  return cachedKoffi ??= createRequire(import.meta.url)('koffi')
++}
+ import type { SubprocessTerminalSignal } from '@deepseek-ai/dsh-subprocess'
+ import type { ProcessIdentity, ProcessInspector, ProcessSnapshot } from './process-inspector.ts'
+ 
+@@ -183,7 +196,12 @@ interface Win32Bindings {
+   closeHandle(handle: NativePtr): number
+ }
+ 
+-const PVOID: ReturnType<typeof koffi.pointer> = koffi.pointer('void')
++let cachedPvVoid: ReturnType<typeof koffi.pointer> | undefined
++/** Lazy void-pointer type: see koffiRef for why this is not a module constant. */
++function pvVoid(): ReturnType<typeof koffi.pointer> {
++  if (cachedPvVoid === undefined) cachedPvVoid = koffiRef().pointer('void')
++  return cachedPvVoid
++}
+ 
+ /**
+  * Resolve the koffi Win32 struct types once. Registration is lazy and cached
+@@ -194,20 +212,20 @@ const PVOID: ReturnType<typeof koffi.pointer> = koffi.pointer('void')
+ function win32Structs(): { PROCESSENTRY32W: ReturnType<typeof koffi.struct>; FILETIME: ReturnType<typeof koffi.struct> } {
+   if (cachedStructs !== undefined) return cachedStructs
+   // koffi PROCESSENTRY32W layout (tlhelp32.h); the size assert pins the x64 layout.
+-  const PROCESSENTRY32W = koffi.struct('PROCESSENTRY32W', {
++  const PROCESSENTRY32W = koffiRef().struct('PROCESSENTRY32W', {
+     dwSize: 'uint32',
+     cntUsage: 'uint32',
+     th32ProcessID: 'uint32',
+-    th32DefaultHeapID: PVOID,
++    th32DefaultHeapID: pvVoid(),
+     th32ModuleID: 'uint32',
+     cCntThreads: 'uint32',
+     th32ParentProcessID: 'uint32',
+     pcPriClassBase: 'int32',
+     dwFlags: 'uint32',
+-    szExeFile: koffi.array('char16', 260),
++    szExeFile: koffiRef().array('char16', 260),
+   })
+   // koffi FILETIME layout (minwinbase.h): two 32-bit halves of the 64-bit timestamp.
+-  const FILETIME = koffi.struct('FILETIME', {
++  const FILETIME = koffiRef().struct('FILETIME', {
+     dwLowDateTime: 'uint32',
+     dwHighDateTime: 'uint32',
+   })
+@@ -237,26 +255,26 @@ let cachedBindings: Win32Bindings | undefined
+ function win32Bindings(): Win32Bindings {
+   if (cachedBindings !== undefined) return cachedBindings
+   const { PROCESSENTRY32W, FILETIME } = win32Structs()
+-  const kernel32 = koffi.load('kernel32.dll')
++  const kernel32 = koffiRef().load('kernel32.dll')
+   const bind = (
+     name: string,
+     result: ReturnType<typeof koffi.pointer> | string,
+     args: Array<ReturnType<typeof koffi.pointer> | string>,
+   ): unknown => kernel32.func('__stdcall', name, result, args)
+   cachedBindings = {
+-    createToolhelp32Snapshot: bind('CreateToolhelp32Snapshot', PVOID, ['uint32', 'uint32']),
+-    process32FirstW: bind('Process32FirstW', 'int', [PVOID, koffi.pointer(PROCESSENTRY32W)]),
+-    process32NextW: bind('Process32NextW', 'int', [PVOID, koffi.pointer(PROCESSENTRY32W)]),
+-    openProcess: bind('OpenProcess', PVOID, ['uint32', 'int', 'uint32']),
++    createToolhelp32Snapshot: bind('CreateToolhelp32Snapshot', pvVoid(), ['uint32', 'uint32']),
++    process32FirstW: bind('Process32FirstW', 'int', [pvVoid(), koffiRef().pointer(PROCESSENTRY32W)]),
++    process32NextW: bind('Process32NextW', 'int', [pvVoid(), koffiRef().pointer(PROCESSENTRY32W)]),
++    openProcess: bind('OpenProcess', pvVoid(), ['uint32', 'int', 'uint32']),
+     getProcessTimes: bind('GetProcessTimes', 'int', [
+-      PVOID,
+-      koffi.pointer(FILETIME),
+-      koffi.pointer(FILETIME),
+-      koffi.pointer(FILETIME),
+-      koffi.pointer(FILETIME),
++      pvVoid(),
++      koffiRef().pointer(FILETIME),
++      koffiRef().pointer(FILETIME),
++      koffiRef().pointer(FILETIME),
++      koffiRef().pointer(FILETIME),
+     ]),
+-    waitForSingleObject: bind('WaitForSingleObject', 'uint32', [PVOID, 'uint32']),
+-    closeHandle: bind('CloseHandle', 'int', [PVOID]),
++    waitForSingleObject: bind('WaitForSingleObject', 'uint32', [pvVoid(), 'uint32']),
++    closeHandle: bind('CloseHandle', 'int', [pvVoid()]),
+   } as unknown as Win32Bindings
+   return cachedBindings
+ }
+@@ -269,7 +287,7 @@ function win32Bindings(): Win32Bindings {
+  * @returns the branded allocation pointer.
+  */
+ function allocNative(type: Parameters<typeof koffi.alloc>[0], count: number): NativePtr {
+-  const value: unknown = koffi.alloc(type, count)
++  const value: unknown = koffiRef().alloc(type, count)
+   return value as NativePtr
+ }
+ 
+@@ -283,10 +301,10 @@ function snapshotWindowsProcesses(bindings: Win32Bindings): ProcessEntry[] {
+   const entries: ProcessEntry[] = []
+   try {
+     const entry = allocNative(PROCESSENTRY32W, 1)
+-    koffi.encode(entry, 'uint32', PROCESSENTRY32W.size)
++    koffiRef().encode(entry, 'uint32', PROCESSENTRY32W.size)
+     let ok = bindings.process32FirstW(snapshot, entry)
+     while (ok !== 0) {
+-      const record = koffi.decode(entry, PROCESSENTRY32W) as {
++      const record = koffiRef().decode(entry, PROCESSENTRY32W) as {
+         th32ProcessID: number
+         th32ParentProcessID: number
+       }
+@@ -313,7 +331,7 @@ function windowsProcessState(bindings: Win32Bindings, pid: number): WindowsProce
+        cannot be staged deterministically; the absent-process path is covered and the caller
+        treats undefined as a detector miss. */
+     if (bindings.getProcessTimes(handle, creation, exit, kernel, user) === 0) return undefined
+-    const record = koffi.decode(creation, FILETIME) as { dwLowDateTime: number; dwHighDateTime: number }
++    const record = koffiRef().decode(creation, FILETIME) as { dwLowDateTime: number; dwHighDateTime: number }
+     const wait = bindings.waitForSingleObject(handle, 0)
+     /* v8 ignore next -- an opened process handle has exactly one of these two
+        zero-time wait states; an unexpected Win32 failure is an unreadable process. */

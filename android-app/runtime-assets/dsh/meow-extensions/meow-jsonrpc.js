@@ -44,9 +44,9 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { isTokenDelta } from '@deepseek-ai/dsh-llm/message'
+import { isTokenDelta } from '@deepseek-ai/dsh-llm/assistant-stream'
 import { admitEncodedImages } from '@deepseek-ai/dsh-attachment'
-import { resolveSessionPreset } from '@deepseek-ai/dsh-agent-presets'
+import { agentPresetProjectionDefinition as agentPresetProjection } from '@deepseek-ai/dsh-agent-presets'
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import { setLogger, warn, warnOnce } from './log.js'
 import { clampReasoningEffort } from './model.js'
@@ -221,6 +221,20 @@ function readFactsFile() {
  */
 function isSessionNotFoundError(error) {
   return /session "\S+" not found$/.test(String(error?.message ?? error))
+}
+
+/**
+ * 从持久化日志重建会话当前预设（0.1.5 官方语义：读 agentPreset 投影，不只看 header）：
+ * header 是创建时值，空白期切换过预设的会话以日志里最后一条 agent-preset/selected 为准。
+ * 直接复用 agent-presets 导出的投影定义（init/apply），避免手写一份语义漂移的副本。
+ * @param {object} header 会话 header（句柄/snapshot 上的值）
+ * @param {Array} events 该会话全量事件
+ * @returns {string | null} 预设 id；无记录时 null
+ */
+function presetFromLog(header, events) {
+  let state = agentPresetProjection.init(header)
+  for (const event of events) state = agentPresetProjection.apply(state, event)
+  return state ?? null
 }
 
 /** 规范化为快照对象（容错：坏 JSON / 缺字段补默认） */function normalizeSnapshot(parsed) {
@@ -443,6 +457,28 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
    */
   presetsService() {
     return this.ctx.get('agentPresets')
+  }
+
+  /**
+   * 把 agent-presets 域错误映射为结构化 RPC 错误（0.1.5：RemoteError{code,details}）。
+   *
+   * 失败路径才扫描名单：PRESET_UNKNOWN 的 App 气泡要列可用预设（旧版错误对象自带
+   * available，新版只有 code），名单扫描本身失败不让原始错误丢失（warn + 空名单）。
+   * @param {unknown} error 捕获到的异常（非预设异常原样重抛）
+   * @returns {Promise<never>} 总是以 throw 结束
+   */
+  async mapPresetError(error) {
+    let available = []
+    const presets = this.presetsService()
+    if (presets !== undefined) {
+      try {
+        available = (await presets.list()).map((preset) => preset.id)
+      } catch (listError) {
+        // 名单扫描失败只让错误 data 少一份可用列表，不该改变错误本身
+        warnOnce('mapPresetError:list', '预设名单扫描失败（错误 data 将不带可用列表）', listError)
+      }
+    }
+    throwMappedPresetError(error, available)
   }
 
   /**
@@ -736,8 +772,28 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
   }
 
   /**
-   * 从持久化日志解析会话所属预设 id（resolveSessionPreset 语义：header 是创建时值，
-   * 空白期切换过预设的会话以最后一条 agent-preset/selected 事件为准）。
+   * 打开持久化会话并读出 header + 全量事件。0.1.5 的 persistence API 形态：
+   * `open(id, 'read')` 取生命周期句柄、`handle.read()` 读事件（rc.2 的 `load()` 已随
+   * SQLite provider 一起被删除）。句柄读完即关；关闭失败只留痕，不顶掉已读到的日志。
+   * @param {object} persistence sessionPersistence 服务
+   * @param {string} sessionId 会话 id
+   * @returns {Promise<{header: object, events: Array}>} not-found 等错误原样抛出，由调用方判定
+   */
+  async openPersistedSession(persistence, sessionId) {
+    const handle = await persistence.open(SessionId(sessionId), 'read')
+    try {
+      const result = await handle.read()
+      return { header: handle.header, events: result.events }
+    } finally {
+      await handle.close().catch((error) => {
+        // close 是幂等清理；真失败会在下一次 open/stat 上暴露，这里只留痕
+        warnOnce(`persistenceClose:${sessionId}`, '会话持久化句柄关闭失败', error)
+      })
+    }
+  }
+
+  /**
+   * 从持久化日志解析会话所属预设 id（重建语义见 presetFromLog）。
    * @returns {string | undefined} 无名单/无持久化/读日志失败时返回 undefined
    */
   async loggedPresetId(sessionId) {
@@ -745,8 +801,8 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     const persistence = this.ctx.get('sessionPersistence')
     if (persistence === undefined) return undefined
     try {
-      const inspection = await persistence.load(SessionId(sessionId))
-      return resolveSessionPreset({ header: inspection.meta, events: inspection.events })
+      const inspection = await this.openPersistedSession(persistence, sessionId)
+      return presetFromLog(inspection.header, inspection.events) ?? undefined
     } catch (error) {
       // 「not found」= 新会话创建前的正常查询路径（尚无日志），静默；其它失败（库损坏/权限）
       // = 恢复出的工具面凭空变少（「AI 突然不会用某工具」类问题将无线索），留痕
@@ -787,7 +843,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
    * installModelSelection（运行时切换 provider/model/reasoningEffort）与
    * Agent 预设挂载（plan-standard-mode §4.4①，照官方 api-proxy composeAgent 配方），
    * 同 sessionId 复用 live agent + selection。磁盘已有持久化日志时走 resume。
-   * TS 的 private 只是编译期约束，运行时属性照常存在；本插件锁定 DSH rc.2。
+   * TS 的 private 只是编译期约束，运行时属性照常存在；本插件锁定 DSH 0.1.5-rc.2 基线。
    *
    * 预设/工作区语义（§三.4，App 把归属缓冲在 Room 行、随首条消息携带）：
    *   - create 路径：消费 pendingHints —— resolve（未知 → PRESET_UNKNOWN；不传 → 默认预设）
@@ -840,7 +896,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
             try {
               await presets.mount(agentCtx, presetId)
             } catch (error) {
-              throwMappedPresetError(error)
+              await this.mapPresetError(error)
             }
           }
           // 记忆工具按开关条件注册到 agent 作用域（§1.9）：OFF → 完全不注册，AI 不知情。
@@ -879,7 +935,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
               try {
                 resolvedPreset = await presets.resolve(hints?.presetId)
               } catch (error) {
-                throwMappedPresetError(error)
+                await this.mapPresetError(error)
               }
             }
             handle = await this.ctx.agents.create({
@@ -898,7 +954,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
             try {
               resolvedPreset = await presets.resolve(hints?.presetId)
             } catch (error) {
-              throwMappedPresetError(error)
+              await this.mapPresetError(error)
             }
           }
           handle = await this.ctx.agents.create({
@@ -941,7 +997,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     try {
       return await super.prompt(params)
     } catch (error) {
-      throwMappedPresetError(error)
+      await this.mapPresetError(error)
     }
   }
 
@@ -1079,12 +1135,12 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     return { ok: true, model }
   }
 
-  /** settings/describe：读取某 namespace 的 redacted descriptor */
+  /** settings/describe：读取某 namespace 的 redacted descriptor（经官方 settingsController） */
   describeSettings(params) {
-    const settings = this.ctx.get('settings')
-    if (settings === undefined) return { namespaces: [] }
+    const controller = this.ctx.get('settingsController')
+    if (controller === undefined) return { namespaces: [] }
     const ns = params?.ns !== undefined && params.ns !== '' ? String(params.ns) : 'llm-pi-ai'
-    const hit = settings.describe({ redactSecrets: true }).find((d) => d.ns === ns)
+    const hit = (controller.describe()?.namespaces ?? []).find((d) => d.ns === ns)
     if (hit === undefined) return { namespaces: [] }
     return { namespaces: [{ ns: hit.ns, value: hit.value, revision: hit.revision, ...(hit.user === undefined ? {} : { user: hit.user }) }] }
   }
@@ -1093,8 +1149,8 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
   async setProvider(params) {
     const provider = String(params.provider ?? '')
     if (provider === '') throw new Error('settings/setProvider: provider is required')
-    const settings = this.ctx.get('settings')
-    if (settings === undefined) throw new Error('settings service unavailable')
+    const controller = this.ctx.get('settingsController')
+    if (controller === undefined) throw new Error('settings controller unavailable')
     const credentials = this.ctx.get('credentials')
 
     const ref = this.providerCredentialRef(provider)
@@ -1116,10 +1172,9 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
       && !Array.isArray(params.compat)) profile.compat = params.compat
 
     const expectedRevision = params.expectedRevision !== undefined ? Number(params.expectedRevision) : undefined
-    await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', provider], value: profile }], expectedRevision)
-
-    const desc = settings.describe({ redactSecrets: true }).find((d) => d.ns === 'llm-pi-ai')
-    return { provider, revision: desc?.revision ?? 0 }
+    // 写响应自带 revision：不必再 describe 一次（旧实现两条往返）
+    const view = await controller.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', provider], value: profile }], expectedRevision)
+    return { provider, revision: view?.revision ?? 0 }
   }
 
   /** settings/updateProviderModels：只更新 provider 的模型列表，不触碰 baseURL/API Key 等配置 */
@@ -1127,23 +1182,22 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     const provider = String(params.provider ?? '')
     if (provider === '') throw new Error('settings/updateProviderModels: provider is required')
     if (params.models === undefined) throw new Error('settings/updateProviderModels: models is required')
-    const settings = this.ctx.get('settings')
-    if (settings === undefined) throw new Error('settings service unavailable')
+    const controller = this.ctx.get('settingsController')
+    if (controller === undefined) throw new Error('settings controller unavailable')
     const expectedRevision = params.expectedRevision !== undefined ? Number(params.expectedRevision) : undefined
-    await settings.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', provider, 'models'], value: params.models }], expectedRevision)
-    const desc = settings.describe({ redactSecrets: true }).find((d) => d.ns === 'llm-pi-ai')
-    return { provider, revision: desc?.revision ?? 0 }
+    const view = await controller.mutate('llm-pi-ai', [{ op: 'set', path: ['providers', provider, 'models'], value: params.models }], expectedRevision)
+    return { provider, revision: view?.revision ?? 0 }
   }
 
   /** settings/removeProvider：删除 provider profile + 对应 credential */
   async removeProvider(params) {
     const provider = String(params.provider ?? '')
     if (provider === '') throw new Error('settings/removeProvider: provider is required')
-    const settings = this.ctx.get('settings')
-    if (settings === undefined) throw new Error('settings service unavailable')
+    const controller = this.ctx.get('settingsController')
+    if (controller === undefined) throw new Error('settings controller unavailable')
     const credentials = this.ctx.get('credentials')
     const expectedRevision = params.expectedRevision !== undefined ? Number(params.expectedRevision) : undefined
-    await settings.mutate('llm-pi-ai', [{ op: 'unset', path: ['providers', provider] }], expectedRevision)
+    await controller.mutate('llm-pi-ai', [{ op: 'unset', path: ['providers', provider] }], expectedRevision)
     if (credentials !== undefined) await credentials.unset(this.providerCredentialRef(provider))
     return { removed: true }
   }
@@ -1295,7 +1349,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     if (persistence === undefined) return { stats: null }
     let inspection
     try {
-      inspection = await persistence.load(SessionId(sessionId))
+      inspection = await this.openPersistedSession(persistence, sessionId)
     } catch (error) {
       // 「not found」= App 查询了不存在的会话（响应合同内的 null），静默；
       // 其它失败（库损坏/权限）会让看板调用量整个空掉，必须留痕
@@ -1330,7 +1384,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     try {
       rec = await this.getOrCreateSession(sessionId)
     } catch (error) {
-      throwMappedPresetError(error)
+      await this.mapPresetError(error)
     }
     const agent = rec.handle.agent
     if (this.ctx.agents.get(agent.id) !== agent) {
@@ -1406,7 +1460,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     if (persistence === undefined) return empty
     let inspection
     try {
-      inspection = await persistence.load(SessionId(sessionId))
+      inspection = await this.openPersistedSession(persistence, sessionId)
     } catch (error) {
       // 「not found」= 合同内空响应，静默；其它失败（库损坏/权限）→ 水合全空（todo/plan/goal 丢），留痕
       if (!isSessionNotFoundError(error)) {
@@ -1430,14 +1484,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     }
     const blank = !events.some((event) => event.type === 'user/message' || event.type === 'turn/start')
     // preset 与 resume 重挂同源：header（创建时值）+ agent-preset/selected 事件（空白期切换）
-    let preset = null
-    try {
-      preset = resolveSessionPreset({ header: inspection.meta, events }) ?? null
-    } catch (error) {
-      // 同 loggedPresetId 型：query 通道的预设解析失败会让 App 恢复出错误的面
-      warnOnce(`queryPreset:${sessionId}`, `会话预设解析失败（恢复的预设信息将缺失）`, error)
-      preset = null
-    }
+    const preset = presetFromLog(inspection.header, events)
     return { sessionId, preset, blank, todos, plan, goal }
   }
 
@@ -1483,7 +1530,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     try {
       composition = await presets.read(id)
     } catch (error) {
-      throwMappedPresetError(error)
+      await this.mapPresetError(error)
     }
     return { id, composition }
   }
@@ -1501,7 +1548,7 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
     try {
       preset = await presets.resolve(id)
     } catch (error) {
-      throwMappedPresetError(error)
+      await this.mapPresetError(error)
     }
     if (preset.trust !== 'user') {
       throw meowRpcError(RPC_ERROR.PRESET_IMMUTABLE, `preset "${id}" is built into the app and cannot be deleted`, {
@@ -1539,26 +1586,26 @@ class MeowJsonRpcServer extends HarnessSdkJsonRpcServer {
   }
 
   /**
-   * 注册问答 provider（连接建立时调用，§4.4④）。
+   * 注册问答答案器（连接建立时调用，§4.4④）。
    *
-   * 生命周期要点：serve() 每条 socket 连接 new 一个 server 实例，而
-   * UserQuestionService 全局单 provider（重复注册抛 DUPLICATE_PROVIDER）——
-   * provider 必须挂连接生命周期：连接建立 registerProvider，socket close 的
-   * cleanup 里 dispose 并 reject 本实例全部 pending（重连才不会撞单槽限制）。
-   * 重连竞态（旧连接尚未清理、新连接先到）注册失败 → 本连接问答通道不可用，
-   * 工具调用会收到 NO_PROVIDER，App 重连后恢复；不写任何 stdout 日志（会污染
-   * JSON-RPC 帧）。
+   * DSH 0.1.5 把 userQuestions 从「全局单 provider 槽」改成 **agent 作用域 waterfall
+   * 事件** `user-questions/request`（官方测试写法：`ctx.on('user-questions/request',
+   * request => answerer.ask(request))`，见 dsh-user-questions/tests）。作用域规则是
+   * 「祖先作用域的监听器能收到派发到后代 key 的事件」（dsh-scope src/index.ts 注释），
+   * 所以在插件根 ctx 注册即可覆盖所有会话作用域的提问。
+   *
+   * 生命周期仍挂连接：serve() 每条 socket 连接 new 一个 server 实例；socket close 的
+   * cleanup 里 dispose 监听并 reject 本实例全部 pending。多层监听共存不会撞单槽，
+   * 但按「最后一个回答者胜」的顺序，旧连接必须先摘掉监听（否则会把问题答给已断开的
+   * 客户端）。注册失败 = ask_user 永久挂起（AGENTS 记录过探针挂死事故），必须留痕；
+   * 不写 stdout（会污染 JSON-RPC 帧）。
    */
   installQuestionProvider() {
-    const userQuestions = this.ctx.get('userQuestions')
-    if (userQuestions === undefined) return
     try {
-      this.questionProviderDisposer = userQuestions.registerProvider({
-        ask: (request) => this.askUser(request),
-      })
+      this.questionProviderDisposer = this.ctx.on('user-questions/request',
+        (request) => this.askUser(request))
     } catch (error) {
-      // 最高危的静默：provider 没建成 → ask_user 永久挂起（AGENTS 记录过探针挂死事故），必须留痕
-      warn('问答通道 provider 注册失败（ask_user 将永久挂起）', error)
+      warn('问答通道答案器注册失败（ask_user 将永久挂起）', error)
       this.questionProviderDisposer = undefined
     }
   }

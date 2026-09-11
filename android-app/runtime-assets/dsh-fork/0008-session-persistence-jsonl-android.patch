@@ -1,0 +1,296 @@
+From 8aef82cbae867e8f56a4872be0ea65d29eb9fdfa Mon Sep 17 00:00:00 2001
+From: meow <meow@local>
+Date: Fri, 11 Sep 2026 22:17:43 +0800
+Subject: [PATCH 08/10] =?UTF-8?q?=F0=9F=90=9B=20fix(meow):=20jsonl=20?=
+ =?UTF-8?q?=E4=BC=9A=E8=AF=9D=E6=8C=81=E4=B9=85=E5=8C=96=E5=AE=89=E5=8D=93?=
+ =?UTF-8?q?=E5=9B=9E=E9=80=80=EF=BC=88link=20=E5=8F=91=E5=B8=83=20+=20floc?=
+ =?UTF-8?q?k=20=E7=A7=9F=E7=BA=A6=EF=BC=89?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+上游 0.1.5 删掉 sqlite provider、改 JSONL-only，而新 jsonl 有两条安卓硬阻塞：
+
+- 发布路径刻意用 link()（拒绝 rename 以免静默覆盖）→ SELinux 禁 untrusted_app
+  域 link(2)。新增 src/publish.ts 的 publishLinkNoReplace()：EACCES/EPERM 时
+  lstat 探测 + rename 发布，目标已存在仍报 EEXIST（保住上层 no-replace 映射）；
+  materializePosix 与 generation 的 publishCurrentExclusive 都改走它。
+- 写入租约静态走 @deepseek-ai/node-addon-system/flock，只发 linux/darwin 预编译，
+  android 上 loadBinding() 抛 ERR_FLOCK_UNSUPPORTED_PLATFORM（新建会话首次落盘
+  即失败，只读不抛）。lease.ts 先试内核 flock，不支持时退回可移植锁文件：
+  进程内便携锁集合 + O_EXCL 锁文件（写 pid，持有者进程消失即可接管），
+  语义弱化与风险写在 acquirePortable 的 JSDoc 里（喵仓单进程常驻部署）。
+---
+ .../src/generation.ts                         |   4 +-
+ .../session-persistence-jsonl/src/index.ts    |  10 +-
+ .../session-persistence-jsonl/src/lease.ts    | 100 +++++++++++++++++-
+ .../session-persistence-jsonl/src/publish.ts  |  44 ++++++++
+ 4 files changed, 150 insertions(+), 8 deletions(-)
+ create mode 100644 packages/session/session-persistence-jsonl/src/publish.ts
+
+diff --git a/packages/session/session-persistence-jsonl/src/generation.ts b/packages/session/session-persistence-jsonl/src/generation.ts
+index 1e1fd9aa0f..dbc1e5b532 100644
+--- a/packages/session/session-persistence-jsonl/src/generation.ts
++++ b/packages/session/session-persistence-jsonl/src/generation.ts
+@@ -9,7 +9,6 @@
+ 
+ import { createHash, randomBytes } from 'node:crypto'
+ import {
+-  link as fsLink,
+   lstat as fsLstat,
+   open as fsOpen,
+   readFile as fsReadFile,
+@@ -35,6 +34,7 @@ import type {
+ import { validateStoredEvents } from '@deepseek-ai/dsh-session-persistence'
+ import type { JsonlCompression } from './format.ts'
+ import { generationLogFilename, logSuffix, SessionLogScanner } from './format.ts'
++import { publishLinkNoReplace } from './publish.ts'
+ import { publishNewFileWin32 } from './win32.ts'
+ import {
+   compressZstdFrame,
+@@ -215,7 +215,7 @@ const defaultFileSystem: GenerationFileSystem = {
+   readdir: path => fsReaddir(path),
+   stat: path => fsStat(path, { bigint: true }),
+   lstat: path => fsLstat(path),
+-  link: fsLink,
++  link: publishLinkNoReplace,
+   rm: path => fsRm(path, { force: true }),
+ }
+ 
+diff --git a/packages/session/session-persistence-jsonl/src/index.ts b/packages/session/session-persistence-jsonl/src/index.ts
+index ba4f8996f0..a1f340cccc 100644
+--- a/packages/session/session-persistence-jsonl/src/index.ts
++++ b/packages/session/session-persistence-jsonl/src/index.ts
+@@ -13,7 +13,7 @@ import {
+   sessionFormatCatalog,
+ } from '@deepseek-ai/dsh-session-format-catalog'
+ import { readdirSync, type Dirent } from 'node:fs'
+-import { open, mkdir, readdir, realpath, link, rm, stat, truncate } from 'node:fs/promises'
++import { open, mkdir, readdir, realpath, rm, stat, truncate } from 'node:fs/promises'
+ import { dirname, join, resolve } from 'node:path'
+ import { performance } from 'node:perf_hooks'
+ import { scheduler } from 'node:timers/promises'
+@@ -32,6 +32,7 @@ import {
+ } from '@deepseek-ai/dsh-session-persistence'
+ import { JsonlBackendTracker, JsonlSessionHandle, type StorageHandleState } from './storage.ts'
+ import { SessionWriteLease } from './lease.ts'
++import { publishLinkNoReplace } from './publish.ts'
+ import { SESSION_FORMAT_VERSION, SessionId as makeSessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
+ import type { SessionEvent, SessionId, SessionHeader, SessionLogOffset as SessionLogOffsetType } from '@deepseek-ai/dsh-session'
+ import {
+@@ -1129,12 +1130,13 @@ class JsonlSessionPersistence extends SessionPersistence {
+     await this.syncDirPosix(project)
+     await this.rejectExistingLog(finalPath, id)
+     const tmp = await this.writeSyncedTempFile(finalPath, content)
+-    // Publish via link()+unlink(), NOT rename(): link fails with EEXIST if the
++    // Publish through the no-replace primitive: it fails with EEXIST if the
+     // final path already exists, so two processes materializing the same id
+-    // concurrently cannot clobber each other. rename() would silently overwrite.
++    // concurrently cannot clobber each other. Android has no link(2) — the
++    // primitive falls back to a probed rename() there（见 ./publish.ts）。
+     let linked = false
+     try {
+-      await link(tmp, finalPath)
++      await publishLinkNoReplace(tmp, finalPath)
+       linked = true
+     } finally {
+       // Remove an unpublished temp on failure. After publication, defer cleanup
+diff --git a/packages/session/session-persistence-jsonl/src/lease.ts b/packages/session/session-persistence-jsonl/src/lease.ts
+index 59dfe27fca..0f322f4506 100644
+--- a/packages/session/session-persistence-jsonl/src/lease.ts
++++ b/packages/session/session-persistence-jsonl/src/lease.ts
+@@ -24,11 +24,14 @@
+  * materializing session, and the surviving file keeps the stable inode later
+  * lockers verify against. The browser worker stubs the native flock entry to
+  * immediate success: it is single-process, so the in-process write claim
+- * already excludes every writer.
++ * already excludes every writer. The Android app sandbox has no native flock binding at all
++ * (`@deepseek-ai/node-addon-system` ships linux/darwin prebuilds only), so `acquire` falls back
++ * to a portable lock file; that fallback's weakened cross-process semantics are documented on
++ * {@link SessionWriteLease.acquirePortable}.
+  * @module @deepseek-ai/dsh-session-persistence-jsonl/lease
+  */
+ 
+-import { mkdir, open, stat } from 'node:fs/promises'
++import { mkdir, open, readFile, rm, stat } from 'node:fs/promises'
+ import type { FileHandle } from 'node:fs/promises'
+ import { join } from 'node:path'
+ import { tryLockExclusive } from '@deepseek-ai/node-addon-system/flock'
+@@ -43,6 +46,8 @@ export const LEASE_FILENAME = 'session.lock'
+ type HeldLock =
+   | { readonly kind: 'posix'; readonly handle: FileHandle }
+   | { readonly kind: 'win32'; readonly handle: number }
++  /* 喵仓 Android 回退：O_EXCL 锁文件的描述符与路径（release 时删除锁文件）。 */
++  | { readonly kind: 'portable'; readonly handle: FileHandle; readonly path: string }
+ 
+ /** Whether a flock failure means another descriptor holds the lock. */
+ function isLockContention(error: unknown): boolean {
+@@ -51,6 +56,33 @@ function isLockContention(error: unknown): boolean {
+   return code === 'EAGAIN' || code === 'EWOULDBLOCK'
+ }
+ 
++/** 喵仓 Android 回退：本进程已持有的可移植锁路径（同进程重入靠它拦住）。 */
++const portableLocks = new Set<string>()
++
++/**
++ * 锁文件里记录的是持有者 pid。读取失败、内容不是正整数一律按「可接管」处理：
++ * 一个空/损坏的锁文件不该永久堵死会话；`kill(pid, 0)` 报 ESRCH 才说明进程消失，
++ * 其余失败（含 EPERM = 进程存在但属主不同）都按存活处理。
++ * @param path - 可移植锁文件路径。
++ * @returns 记录的持有者进程是否仍在。
++ */
++async function portableHolderAlive(path: string): Promise<boolean> {
++  let pid: number
++  try {
++    pid = Number.parseInt((await readFile(path, 'utf8')).trim(), 10)
++  } catch {
++    // 读不到就无法证明有人持有（ENOENT 说明竞争者已清理），按可接管处理。
++    return false
++  }
++  if (!Number.isSafeInteger(pid) || pid <= 0) return false
++  try {
++    process.kill(pid, 0)
++    return true
++  } catch (error: unknown) {
++    return (error as NodeJS.ErrnoException | null)?.code !== 'ESRCH'
++  }
++}
++
+ /**
+  * One held write lock. Constructed only by {@link SessionWriteLease.acquire};
+  * `release` closes the descriptor or handle, which is what releases the lock.
+@@ -85,6 +117,24 @@ export class SessionWriteLease {
+       return new SessionWriteLease({ kind: 'win32', handle })
+     }
+     /* v8 ignore stop */
++    try {
++      return await SessionWriteLease.acquirePosix(path, id)
++    } catch (error: unknown) {
++      // 喵仓 Android：android-arm64 没有 node-addon-system 预编译，loadBinding() 抛
++      // ERR_FLOCK_UNSUPPORTED_PLATFORM；退回可移植锁文件（语义弱化见 acquirePortable）。
++      if ((error as NodeJS.ErrnoException | null)?.code !== 'ERR_FLOCK_UNSUPPORTED_PLATFORM') throw error
++      return await SessionWriteLease.acquirePortable(path, id)
++    }
++  }
++
++  /**
++   * POSIX 分支：内核 flock 独占锁 + inode 复核重试。
++   * @param path - `session.lock` 的绝对路径。
++   * @param id - 被守护的会话 id，用于错误身份。
++   * @returns 持有 posix 描述符锁的租约。
++   * @throws {SessionAlreadyOwnedError} 另一个存活持有者仍持有该路径。
++   */
++  private static async acquirePosix(path: string, id: SessionId): Promise<SessionWriteLease> {
+     // Bounded retry: locking an inode a releasing creator just unlinked (or a
+     // recreated path) re-opens the fresh file; steady state needs one pass.
+     for (let attempt = 0; attempt < 3; attempt += 1) {
+@@ -115,6 +165,46 @@ export class SessionWriteLease {
+     throw new SessionAlreadyOwnedError(id)
+   }
+ 
++  /**
++   * 喵仓 Android 回退：`O_EXCL` 锁文件 + 进程内互斥。
++   *
++   * 内核语义在这里弱化为：锁文件存在且其 pid 仍存活即「他人持有」；持有者进程消失
++   * 时可删除并接管，所以崩溃不会永久堵死后继者。**弱化点**：没有「描述符关闭即释放」
++   * 的内核保证，接管依赖 pid 失效判断（pid 被复用时会误判占用）；创建与探测之间仍有
++   * 极小 TOCTOU 窗口。喵仓是单进程常驻部署（一个 terminal-host 持一个 DSH），跨进程
++   * 竞争本就罕见，同进程重入由 `portableLocks` 拦住。
++   * @param path - `session.lock` 的绝对路径。
++   * @param id - 被守护的会话 id，用于错误身份。
++   * @returns 持有可移植锁文件的租约。
++   * @throws {SessionAlreadyOwnedError} 另一个存活持有者仍持有该路径。
++   */
++  private static async acquirePortable(path: string, id: SessionId): Promise<SessionWriteLease> {
++    for (let attempt = 0; attempt < 3; attempt += 1) {
++      if (portableLocks.has(path)) throw new SessionAlreadyOwnedError(id)
++      let handle: FileHandle
++      try {
++        handle = await open(path, 'wx', 0o600)
++      } catch (error: unknown) {
++        if ((error as NodeJS.ErrnoException | null)?.code !== 'EEXIST') throw error
++        if (await portableHolderAlive(path)) throw new SessionAlreadyOwnedError(id)
++        // 持有者已消失：接管它的锁文件（ENOENT 说明竞争者已先行清理）。
++        await rm(path, { force: true })
++        continue
++      }
++      try {
++        await handle.writeFile(`${process.pid}\n`)
++        await handle.sync()
++      } catch (error: unknown) {
++        await handle.close()
++        await rm(path, { force: true })
++        throw error
++      }
++      portableLocks.add(path)
++      return new SessionWriteLease({ kind: 'portable', handle, path })
++    }
++    throw new SessionAlreadyOwnedError(id)
++  }
++
+   /**
+    * Release the kernel lock by closing its descriptor or handle. The POSIX
+    * lock file is never removed: every acquired lock belongs to a
+@@ -130,6 +220,12 @@ export class SessionWriteLease {
+       return
+     }
+     /* v8 ignore stop */
++    if (this.held.kind === 'portable') {
++      portableLocks.delete(this.held.path)
++      await this.held.handle.close()
++      await rm(this.held.path, { force: true })
++      return
++    }
+     await this.held.handle.close()
+   }
+ }
+diff --git a/packages/session/session-persistence-jsonl/src/publish.ts b/packages/session/session-persistence-jsonl/src/publish.ts
+new file mode 100644
+index 0000000000..07f3494c79
+--- /dev/null
++++ b/packages/session/session-persistence-jsonl/src/publish.ts
+@@ -0,0 +1,44 @@
++/**
++ * Publish a staged file at a target path without replacing an existing entry.
++ *
++ * POSIX `link(2)` is the upstream primitive: it fails with `EEXIST` when the
++ * target exists, so two processes publishing one path cannot clobber each
++ * other. The Android app sandbox (`untrusted_app`) is denied `link(2)` by
++ * SELinux (`EACCES`), so that denial falls back to an `lstat` probe plus
++ * `rename(2)`: an existing target still reports `EEXIST`, while an absent one is
++ * published atomically. The probe leaves a small TOCTOU window that upstream's
++ * `link()` closes; the meow-academy runtime runs one resident DSH process, so
++ * concurrent publishers of one Session path do not occur there.
++ * @module @deepseek-ai/dsh-session-persistence-jsonl/publish
++ */
++
++import { link, lstat, rename } from 'node:fs/promises'
++
++/**
++ * Publish `existingPath` at `newPath`, refusing to replace an existing target.
++ * @param existingPath - staged file to publish; a rename publish consumes it.
++ * @param newPath - target path, which must not already exist.
++ * @throws {NodeJS.ErrnoException} `EEXIST` when the target already exists, so callers mapping that code keep their collision behavior.
++ */
++export async function publishLinkNoReplace(existingPath: string, newPath: string): Promise<void> {
++  try {
++    await link(existingPath, newPath)
++    return
++  } catch (error) {
++    if (!(error instanceof Error && 'code' in error)) throw error
++    if (error.code !== 'EACCES' && error.code !== 'EPERM') throw error
++  }
++  try {
++    await lstat(newPath)
++  } catch (probeError) {
++    if (!(probeError instanceof Error && 'code' in probeError && probeError.code === 'ENOENT')) throw probeError
++    await rename(existingPath, newPath)
++    return
++  }
++  // The target stands: report the collision exactly as a denied link() would.
++  throw Object.assign(new Error(`EEXIST: file already exists, link '${existingPath}' -> '${newPath}'`), {
++    code: 'EEXIST',
++    errno: -17,
++    syscall: 'link',
++  })
++}

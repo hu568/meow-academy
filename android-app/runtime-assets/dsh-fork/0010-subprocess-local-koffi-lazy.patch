@@ -1,0 +1,99 @@
+From 47bc39212039f1f0f3a7acaaac907a51ca3bb524 Mon Sep 17 00:00:00 2001
+From: meow <meow@local>
+Date: Fri, 11 Sep 2026 22:51:22 +0800
+Subject: [PATCH 10/10] =?UTF-8?q?=F0=9F=90=9B=20fix(meow):=20subprocess-lo?=
+ =?UTF-8?q?cal=20=E7=9A=84=20koffi=20=E4=BE=9D=E8=B5=96=E6=83=B0=E6=80=A7?=
+ =?UTF-8?q?=E5=8C=96=EF=BC=88=E5=AE=89=E5=8D=93=E6=8F=92=E4=BB=B6=E6=A0=91?=
+ =?UTF-8?q?=E5=8A=A0=E8=BD=BD=EF=BC=89?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+0.1.5 新增的 `linux-execve.ts`（libc execve）与既有的 `@deepseek-ai/dsh-win32-process`
+ffi 都在模块顶层触达 koffi 原生绑定，而 koffi 无 Android/bionic prebuilt —— 二者被打包
+入口静态 import，真机表现为 `subprocess` 插件加载即崩（"Cannot find the native Koffi
+module"），整个插件树起不来、App 的 RPC socket 永不监听。
+
+- linux-execve.ts：`import koffi` → `createRequire` 首用解析；loadLinuxExecve() 内取
+  局部 const。libc execve 路径只在 Linux containment 模式用，安卓 platform!=='linux'
+  直接走 fallback 分支，永不触达。
+- windows-job.ts：`@deepseek-ai/dsh-win32-process` 取值 import 改 type-only + 首用
+  require 访问器（两处默认实现包一层）。Win32 分支只在 win32 平台走到。
+---
+ .../subprocess-local/src/linux-execve.ts      | 15 ++++++++++++++-
+ .../subprocess-local/src/windows-job.ts       | 19 ++++++++++++++++---
+ 2 files changed, 30 insertions(+), 4 deletions(-)
+
+diff --git a/packages/subprocess/subprocess-local/src/linux-execve.ts b/packages/subprocess/subprocess-local/src/linux-execve.ts
+index a5bed81059..f97b694629 100644
+--- a/packages/subprocess/subprocess-local/src/linux-execve.ts
++++ b/packages/subprocess/subprocess-local/src/linux-execve.ts
+@@ -1,7 +1,19 @@
+ /** Lazy libc execve and descriptor bindings used by the one-shot Linux bootstrap. */
+ 
++import { createRequire } from 'node:module'
+ import { getSystemErrorMessage, getSystemErrorName } from 'node:util'
+-import koffi from 'koffi'
++import type koffi from 'koffi'
++
++let cachedKoffi: typeof koffi | undefined
++/**
++ * 惰性 koffi：模块顶层解析会立刻加载原生绑定，而 koffi 无 Android/bionic prebuilt
++ * （meow fork）。本文件被 subprocess-local 入口静态 import，所以静态 import 会让插件树
++ * 在安卓上加载即崩（"Cannot find the native Koffi module"）；libc execve 路径只在
++ * Linux containment 模式（安卓走 fallback 分支）使用，首用再解析即可。
++ */
++function koffiRef(): typeof koffi {
++  return cachedKoffi ??= createRequire(import.meta.url)('koffi')
++}
+ 
+ /** Replace the current process image while preserving the supplied argv and environment. */
+ export type LinuxExecve = (
+@@ -44,6 +56,7 @@ function systemError(errno: number, syscall: string, path?: string): Error {
+  */
+ export function loadLinuxExecve(): LinuxExecve {
+   if (cachedExecve !== undefined) return cachedExecve
++  const koffi = koffiRef()
+   const libc = koffi.load(null)
+   const nativeExecve = libc.func(
+     'int execve(const char *pathname, const char **argv, const char **envp)',
+diff --git a/packages/subprocess/subprocess-local/src/windows-job.ts b/packages/subprocess/subprocess-local/src/windows-job.ts
+index 56dac99519..7b8cb13a48 100644
+--- a/packages/subprocess/subprocess-local/src/windows-job.ts
++++ b/packages/subprocess/subprocess-local/src/windows-job.ts
+@@ -5,10 +5,23 @@ import { closeSync, openSync } from 'node:fs'
+ import { devNull } from 'node:os'
+ import type { Readable, Writable } from 'node:stream'
+ import type { SubprocessOutcome, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
+-import {
++import { createRequire } from 'node:module'
++import type {
+   loadWin32ProcessBindings,
+   probeCurrentTokenJobSupport,
+ } from '@deepseek-ai/dsh-win32-process'
++
++type Win32ProcessModule = typeof import('@deepseek-ai/dsh-win32-process')
++let cachedWin32Process: Win32ProcessModule | undefined
++/**
++ * 惰性 win32 进程绑定（meow fork）：`@deepseek-ai/dsh-win32-process` 的 ffi 模块顶层就
++ * `koffi.pointer()/struct()`，而 koffi 无 Android prebuilt —— 本文件被打包入口静态 import，
++ * 静态取值会让安卓上的 subprocess 插件加载即崩。Win32 分支只在 win32 平台走到
++ * （安卓 platform !== 'win32' 直接走 fallback），首用再 require 即可。
++ */
++function win32Process(): Win32ProcessModule {
++  return cachedWin32Process ??= createRequire(import.meta.url)('@deepseek-ai/dsh-win32-process') as Win32ProcessModule
++}
+ import type { BoundProcessOwner, ManagedProcessLaunch } from './managed-owner.ts'
+ import {
+   type SerializedRunnerError,
+@@ -58,8 +71,8 @@ export function probeWindowsJob(internals: WindowsJobInternals = {}): boolean {
+     const invocation = internals.runnerInvocation
+       ?? (internals.resolveRunnerInvocation ?? spawnRunnerInvocation)()
+     if (!(internals.runnerAvailable ?? runnerInvocationAvailable)(invocation)) return false
+-    const api = (internals.loadWin32ProcessBindings ?? loadWin32ProcessBindings)()
+-    ;(internals.probeCurrentTokenJobSupport ?? probeCurrentTokenJobSupport)(api)
++    const api = (internals.loadWin32ProcessBindings ?? (() => win32Process().loadWin32ProcessBindings()))()
++    ;(internals.probeCurrentTokenJobSupport ?? (bindings => win32Process().probeCurrentTokenJobSupport(bindings)))(api)
+     return true
+   } catch {
+     return false
