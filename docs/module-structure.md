@@ -70,13 +70,15 @@ app/src/main/java/com/meow/academy/
 | `MessageBubbles.kt` | CSS 组件 | 消息气泡家族：用户/助手气泡、思考卡片、工具调用组与卡片 |
 | `ChatInputBar.kt` | CSS 组件 | 输入栏 + 工具栏（provider/模型/思考强度下拉 + 联网开关 + 上传） |
 | `SessionDrawer.kt` | CSS 组件 | 会话抽屉 + 重命名/删除对话框 |
-| `MarkdownText.kt` | CSS 组件 | Markwon Markdown 渲染（可复用组件；流式走块级半增量渲染；收集 appconfig 渲染配置并随主题/配置重建） |
-| `MarkdownStreaming.kt` | JS 纯函数 | 流式块拆分器：稳定块 + 活动块（splitStreamingBlocks / isTableDelimiter） |
+| `MarkdownText.kt` | CSS 组件 | Markwon Markdown 渲染（可复用组件；流式走 50ms 节流 + 块级 `key(block)` 复用；收集 appconfig 渲染配置并随主题/配置重建） |
+| `MarkdownBlocks.kt` | JS 纯函数 | 块级拆分 `parseMarkdownBlocks` → `MdBlock`（段落/围栏代码/表格/数学块/mermaid/图片，带 `closed` 流式态） |
 | `DollarMath.kt` | JS 纯函数 | 单 `$…$` 行内公式匹配（matchDollarMath，供 DollarMathInlineProcessor 调用） |
-| `StreamingMarkdownRenderer.kt` | JS 渲染缓存 | 稳定块 Spanned LRU 缓存 + 稳定前缀复用 + 活动块重渲染 |
+| `StreamingTable.kt` | JS 纯函数 + CSS 组件 | 流式表格解析 `parseStreamingTable` / 分隔行判定 `isTableDelimiter`（原 MarkdownStreaming.kt 迁入）+ 定宽表格组件 |
 | `MarkdownMarkwon.kt` | CSS 构建器 | Markwon 全插件实例（表格/链接/代码着色 Prism4j/LaTeX 公式）+ 公式块圆角背景配置 + PrismBundle 声明 |
 | `MarkdownConfigPlugin.kt` | CSS 构建器 | 把 MarkdownConfig 应用到 Markwon 主题（· 大小/颜色、引用/链接/标题/分割线）+ 注册圆角代码块 Span 工厂 |
 | `RoundedCodeBlockSpan.kt` | CSS 组件 | 圆角代码块 Span（整块一个圆角，不是每行）+ SpanFactory |
+
+> 🗄️ 2026-09-09：原「半增量渲染」方案 `MarkdownStreaming.kt`（splitStreamingBlocks）+ `StreamingMarkdownRenderer.kt`（Spanned LRU 缓存）已归档至 `docs/reference/archived/streaming-markdown/`（确认无生产引用后移出编译源集）。
 
 ### ui/settings/ — 设置页 + 模型管理页
 

@@ -7,6 +7,12 @@
 | [cherry-studio-rag.md](cherry-studio-rag.md) | 🍒 Cherry Studio 知识库实现：分块/向量化/检索/重排序/痛点 | RAG 管道设计 |
 | [rikkahub-agent.md](rikkahub-agent.md) | 🐈 RikkaHub 移动端 Agent 框架：分层架构/知识库代码/工具系统 | 安卓端架构 |
 
+## 🗄️ 归档
+
+| 目录 | 内容 | 为什么归档 |
+|---|---|---|
+| [archived/streaming-markdown/](archived/streaming-markdown/) | 流式 Markdown「半增量渲染」初版：块拆分器 + Spanned LRU 缓存渲染器 + 单测 | 已被 Compose 块级 `key(block)` 方案取代（`MarkdownBlocks.kt` + `MarkdownText.kt`） |
+
 ## 核心结论速查
 
 - **分块**：段落优先 + 句子边界断句（参考两家的递归分割思路，~300字）

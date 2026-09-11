@@ -1,3 +1,7 @@
+// ⚠️ 已归档（2026-09-09）：本文件已移出编译源集，不再参与构建，仅作历史参考。
+// 现行流式渲染 = MarkdownText.kt（50ms 节流）+ MarkdownBlocks.kt（块级 key 复用）。
+// 注意：原文件里的 isTableDelimiter 仍被活代码引用（MarkdownBlocks.kt / StreamingTable.kt），
+// 已迁至 StreamingTable.kt；本归档副本相应地移除了它（恢复本文件时需从那里取回）。
 package com.meow.academy.ui.chat
 
 /**
@@ -117,14 +121,4 @@ private fun isFenceClose(trimmed: String, fenceChar: Char, fenceLen: Int): Boole
     return if (fenceChar == '$') run == fenceLen else run >= fenceLen
 }
 
-/** 判断一行是否为 GFM 表格分隔行：`| --- | :---: | ---: |` 等 */
-fun isTableDelimiter(line: String): Boolean {
-    val trimmed = line.removeSuffix("\r").trim()
-    if (trimmed.isEmpty()) return false
-    val body = trimmed.removePrefix("|").removeSuffix("|").trim()
-    if (body.isEmpty()) return false
-    return body.split("|").all { cell ->
-        val t = cell.trim()
-        t.isNotEmpty() && t.all { it == '-' || it == ':' || it == ' ' }
-    }
-}
+// 原 isTableDelimiter 已被活代码引用，迁至 StreamingTable.kt（见文件头说明）

@@ -123,6 +123,23 @@ private fun splitTableRow(line: String): List<String> {
 }
 
 /**
+ * 判断一行是否为 GFM 表格分隔行：`| --- | :---: | ---: |` 等。
+ *
+ * 2026-09-09 从已归档的 MarkdownStreaming.kt 迁入（原半增量拆分器退役，
+ * 但本函数仍被 [StreamingTable] 解析与 [parseMarkdownBlocks] 复用）。
+ */
+fun isTableDelimiter(line: String): Boolean {
+    val trimmed = line.removeSuffix("\r").trim()
+    if (trimmed.isEmpty()) return false
+    val body = trimmed.removePrefix("|").removeSuffix("|").trim()
+    if (body.isEmpty()) return false
+    return body.split("|").all { cell ->
+        val t = cell.trim()
+        t.isNotEmpty() && t.all { it == '-' || it == ':' || it == ' ' }
+    }
+}
+
+/**
  * 正在输入的分隔行：形如 `|---`、`| ---`、`---`、`|:---:` 等，
  * 全部由 `- : | 空格` 组成（尚未闭合也算）。
  */

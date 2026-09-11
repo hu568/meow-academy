@@ -1,3 +1,6 @@
+// ⚠️ 已归档（2026-09-09）：本文件已移出编译源集，不再参与构建，仅作历史参考。
+// 现行流式渲染 = MarkdownText.kt（50ms 节流）+ MarkdownBlocks.kt（块级 key 复用），
+// 稳定块复用交给 Compose 的 key(block) 完成，不再需要这里的 Spanned LRU 缓存。
 package com.meow.academy.ui.chat
 
 import android.text.SpannableStringBuilder
