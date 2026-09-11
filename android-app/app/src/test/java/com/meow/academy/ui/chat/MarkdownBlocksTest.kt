@@ -160,6 +160,80 @@ class MarkdownBlocksTest {
     }
 
     @Test
+    fun `CRLF 下的标题与围栏不被退化`() {
+        val blocks = parseMarkdownBlocks("## 标题\r\n\r\n```js\r\nlet x = 1\r\n```\r\n")
+        assertEquals(
+            listOf(MdBlock.Paragraph("## 标题"), MdBlock.FencedCode("js", "let x = 1", true)),
+            blocks,
+        )
+    }
+
+    @Test
+    fun `表格紧跟段落（无空行）不被段落吞掉`() {
+        val blocks = parseMarkdownBlocks("结论如下：\n| A | B |\n| --- | --- |\n| 1 | 2 |")
+        assertEquals(2, blocks.size)
+        assertEquals(MdBlock.Paragraph("结论如下："), blocks[0])
+        assertEquals(
+            MdBlock.Table(
+                header = listOf("A", "B"),
+                aligns = listOf(StreamingCellAlign.START, StreamingCellAlign.START),
+                rows = listOf(listOf("1", "2")),
+                closed = true,
+            ),
+            blocks[1],
+        )
+    }
+
+    @Test
+    fun `代码块后紧跟表格仍能识别`() {
+        val blocks = parseMarkdownBlocks("```\ncode\n```\n| A |\n| --- |\n| 1 |")
+        assertEquals(2, blocks.size)
+        assertEquals(MdBlock.FencedCode(null, "code", true), blocks[0])
+        assertEquals(
+            MdBlock.Table(
+                header = listOf("A"),
+                aligns = listOf(StreamingCellAlign.START),
+                rows = listOf(listOf("1")),
+                closed = true,
+            ),
+            blocks[1],
+        )
+    }
+
+    @Test
+    fun `四反引号围栏不被三反引号提前闭合`() {
+        val blocks = parseMarkdownBlocks("````\ncode\n```\nmore\n````")
+        assertEquals(listOf(MdBlock.FencedCode(null, "code\n```\nmore", true)), blocks)
+        // 未闭合时同样只按 4 反引号收尾（3 个不算闭合）
+        assertEquals(
+            listOf(MdBlock.FencedCode(null, "code\n```", false)),
+            parseMarkdownBlocks("````\ncode\n```"),
+        )
+    }
+
+    @Test
+    fun `围栏内的数学与竖线行不误判`() {
+        assertEquals(
+            listOf(MdBlock.FencedCode(null, "\$\$\nx", true)),
+            parseMarkdownBlocks("```\n\$\$\nx\n```"),
+        )
+    }
+
+    @Test
+    fun `无竖线的分隔行不被吞成表格（A2）`() {
+        // `---` 是 setext 下划线 / 分割线，不是 GFM 分隔行；宽容渲染不可丢内容
+        val blocks = parseMarkdownBlocks("a | b\n---\n后文")
+        assertEquals(listOf(MdBlock.Paragraph("a | b\n---\n后文")), blocks)
+    }
+
+    @Test
+    fun `只有表头行时块解析仍按段落（A3 现状锁定）`() {
+        // parseStreamingTable 的单行表头分支在 App 渲染路径不可达：守卫要求下一非空行存在。
+        // 这里把现状钉死，若将来放宽守卫会先撞到这个用例，提醒同步 StreamingTable 文档与真机抖动检查。
+        assertEquals(listOf(MdBlock.Paragraph("| A | B |")), parseMarkdownBlocks("| A | B |"))
+    }
+
+    @Test
     fun `代码块内的竖线行不会被拆成表格`() {
         val md = "```\n| a | b |\n| --- | --- |\n```"
         val blocks = parseMarkdownBlocks(md)

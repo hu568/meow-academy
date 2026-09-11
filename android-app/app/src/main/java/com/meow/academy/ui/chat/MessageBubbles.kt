@@ -186,8 +186,15 @@ private fun toolIcon(name: String): ImageVector = when {
 
 /**
  * 助手消息主体：组外思考/文本按到达顺序展示（思考是独立折叠卡、文本是气泡，均不并入工具组）；
- * 工具调用序列折叠成一组，组内若存在「运行中」的工具则自动展开（运行输出完自动收起）。
+ * 工具调用序列折叠成一组，组内若存在「运行中」的工具则自动展开（运行输出完延迟自动收起）。
  * 问答工具（ask_user_question / exit_plan_mode）组内分流到 [QuestionCard]（§5.6）。
+ *
+ * **折叠层次是刻意设计（勿改）**：只把「工具调用序列」这一段折叠成组——
+ * - 首个工具调用**之前**的思考与正文（模型的首次思考 / 首次输出）留在组外常驻可见：
+ *   首段思考单独成卡（且 [ThinkingCard] 的 `pinned` 规则让它完成后也不自动收起），
+ *   首段正文是普通气泡、本就没有折叠态；
+ * - 末个工具调用**之后**的思考与正文同样留在组外（干活后的结论不该被折进工具堆里）。
+ * 即「首次思考与首次输出不自动折叠」是既有行为，加动效时不要顺手把它们并进 [ToolGroup]。
  */
 @Composable
 fun AssistantBody(
@@ -199,13 +206,20 @@ fun AssistantBody(
     onCancelQuestion: (String) -> Unit = {},
 ) {
     val toolIndices = segments.indices.filter { segments[it] is Segment.Tool }
+    // 流式回合进行中：只有「当前最后一段」算正在长（用于思考卡的运行中自动展开，§B1）
+    val streaming = status == MessageStatus.STREAMING
 
     Column {
         if (toolIndices.isEmpty()) {
             // 无工具：思考折叠卡 + 文本气泡，按顺序
-            segments.forEach { seg ->
+            segments.forEachIndexed { index, seg ->
                 when (seg) {
-                    is Segment.Reasoning -> ThinkingCard(seg.text)
+                    is Segment.Reasoning -> ThinkingCard(
+                        thinking = seg.text,
+                        running = streaming && index == segments.lastIndex,
+                        // 首次思考（消息首段）刻意保留展开、不自动收起（§B1/C 组约定）
+                        pinned = index == 0,
+                    )
                     is Segment.Text -> TextBubble(seg.text, status)
                     is Segment.Tool -> Unit
                 }
@@ -216,7 +230,11 @@ fun AssistantBody(
             // 工具组前（对提问的思考 / 干活前的回复，均不并入工具组）
             for (i in 0 until firstTool) {
                 when (val seg = segments[i]) {
-                    is Segment.Reasoning -> ThinkingCard(seg.text)
+                    is Segment.Reasoning -> ThinkingCard(
+                        thinking = seg.text,
+                        running = streaming && i == segments.lastIndex,
+                        pinned = i == 0,
+                    )
                     is Segment.Text -> TextBubble(seg.text, status)
                     is Segment.Tool -> Unit
                 }
@@ -224,6 +242,9 @@ fun AssistantBody(
             // 工具调用序列折叠成一组
             ToolGroup(
                 segments = segments.subList(firstTool, lastTool + 1),
+                // 组内思考卡要判断「是否正在长」：用消息内的绝对下标（组子列表的下标会丢基准）
+                baseIndex = firstTool,
+                runningSegmentIndex = if (streaming) segments.lastIndex else -1,
                 status = status,
                 pendingQuestion = pendingQuestion,
                 interactiveQuestionCallId = interactiveQuestionCallId,
@@ -233,7 +254,10 @@ fun AssistantBody(
             // 工具组后（干活完成后的思考 / 最终回复）
             for (i in lastTool + 1 until segments.size) {
                 when (val seg = segments[i]) {
-                    is Segment.Reasoning -> ThinkingCard(seg.text)
+                    is Segment.Reasoning -> ThinkingCard(
+                        thinking = seg.text,
+                        running = streaming && i == segments.lastIndex,
+                    )
                     is Segment.Text -> TextBubble(seg.text, status)
                     is Segment.Tool -> Unit
                 }
@@ -272,46 +296,18 @@ fun TextBubble(text: String, status: MessageStatus) {
     }
 }
 
-/** 思考段（工具组内）：组展开后直接展示，不单独折叠 */
-@Composable
-fun ThinkingBlock(thinking: String) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                Icons.Outlined.Science,
-                contentDescription = "思考",
-                modifier = Modifier.size(16.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.width(4.dp))
-            Text(
-                "思考",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        SelectionContainer {
-            Text(
-                text = thinking,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-        }
-    }
-}
-
-/** 工具调用折叠组：收起时显示「工具箱图标 + 工具调用 xN」；有运行中的工具时自动展开，运行完自动收起。
- * 问答工具分流到 QuestionCard（默认展开、配色区分，§5.6），其余走通用 ToolCard。 */
+/** 工具调用折叠组：收起时显示「工具箱图标 + 工具调用 xN」；有运行中的工具时自动展开，
+ * 全部完成后再停顿 [AUTO_COLLAPSE_DELAY_MS] 才收起（不再是「一 done 就塌」，§B2）；
+ * 用户点过则全手动、不再自动收起。问答工具分流到 QuestionCard（默认展开、配色区分，§5.6），
+ * 其余走通用 ToolCard。
+ *
+ * 组内的思考段同样是**可折叠**的思考卡（2026-09-11 主人反馈：工具调用之间的思考原先只能整块显示、
+ * 没法收起来）——用 [ThinkingCard] 而非死板的 ThinkingBlock，默认收起、可逐个点开，
+ * 「正在长的那段」仍会自动展开。
+ *
+ * @param baseIndex 本组首段在整条消息里的绝对下标（算 [runningSegmentIndex] 用）
+ * @param runningSegmentIndex 正流式生长的段下标（-1 = 无）
+ */
 @Composable
 fun ToolGroup(
     segments: List<Segment>,
@@ -320,13 +316,15 @@ fun ToolGroup(
     interactiveQuestionCallId: String? = null,
     onAnswerQuestion: (String, List<DshParams.QuestionAnswer>) -> Unit = { _, _ -> },
     onCancelQuestion: (String) -> Unit = {},
+    baseIndex: Int = 0,
+    runningSegmentIndex: Int = -1,
 ) {
     val toolCount = segments.count { it is Segment.Tool }
     val hasRunning = segments.any {
         it is Segment.Tool && it.call.result.isBlank() && !it.call.isError
     }
-    var userExpanded by remember { mutableStateOf(false) }
-    val expanded = hasRunning || userExpanded
+    val collapse = rememberAutoCollapse(running = hasRunning)
+    val anchor = rememberCollapseAnchor()
 
     val extras = LocalThemeExtras.current
 
@@ -337,7 +335,10 @@ fun ToolGroup(
                 .padding(vertical = 2.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(extras.toolGroupBackground ?: MaterialTheme.colorScheme.secondaryContainer)
-                .clickable { userExpanded = !userExpanded }
+                .clickable {
+                    collapse.toggle()
+                    anchor.beginManualWindow()
+                }
                 .padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -355,29 +356,37 @@ fun ToolGroup(
             )
             Spacer(Modifier.weight(1f))
             Text(
-                if (expanded) "▾ 收起" else "▸ 展开",
+                if (collapse.expanded) "收起" else "展开",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Spacer(Modifier.width(2.dp))
+            CollapseChevron(collapse.expanded)
         }
-        if (expanded) {
-            segments.forEach { seg ->
-                when (seg) {
-                    is Segment.Reasoning -> ThinkingBlock(seg.text)
-                    is Segment.Text -> TextBubble(seg.text, status)
-                    is Segment.Tool ->
-                        if (seg.call.name in QuestionToolNames) {
-                            // 问答卡：需要用户操作的提问/计划审阅（§5.6）
-                            QuestionCard(
-                                call = seg.call,
-                                pendingQuestion = pendingQuestion,
-                                interactive = interactiveQuestionCallId == seg.call.id,
-                                onAnswer = onAnswerQuestion,
-                                onCancel = onCancelQuestion,
-                            )
-                        } else {
-                            ToolCard(seg.call)
-                        }
+        // 组正文整体参与折叠动画；收起过程中子卡片仍在组合里（ToolCard 的展开态保留，回来还是原来的样子）
+        CollapseBody(visible = collapse.expanded, anchor = anchor) {
+            Column {
+                segments.forEachIndexed { index, seg ->
+                    when (seg) {
+                        is Segment.Reasoning -> ThinkingCard(
+                            thinking = seg.text,
+                            running = baseIndex + index == runningSegmentIndex,
+                        )
+                        is Segment.Text -> TextBubble(seg.text, status)
+                        is Segment.Tool ->
+                            if (seg.call.name in QuestionToolNames) {
+                                // 问答卡：需要用户操作的提问/计划审阅（§5.6）
+                                QuestionCard(
+                                    call = seg.call,
+                                    pendingQuestion = pendingQuestion,
+                                    interactive = interactiveQuestionCallId == seg.call.id,
+                                    onAnswer = onAnswerQuestion,
+                                    onCancel = onCancelQuestion,
+                                )
+                            } else {
+                                ToolCard(seg.call)
+                            }
+                    }
                 }
             }
         }
@@ -447,10 +456,17 @@ fun AssistantBubble(content: String, status: MessageStatus) {
     }
 }
 
-/** thinking 折叠胶囊（默认收起一行，点击展开） */
+/**
+ * thinking 折叠胶囊：默认收起一行、点击展开。
+ *
+ * @param running 该思考段是否正在生长（流式回合的最后一段）：运行中自动展开，完成后再停顿一拍收起
+ * @param pinned 是否「模型首次思考」（消息首段）：默认展开且**永不自动收起**（§B1/C 组约定，
+ *   首段思考是用户最先要读的内容；用户手动收起后仍以用户为准）
+ */
 @Composable
-fun ThinkingCard(thinking: String) {
-    var expanded by remember { mutableStateOf(false) }
+fun ThinkingCard(thinking: String, running: Boolean = false, pinned: Boolean = false) {
+    val collapse = rememberAutoCollapse(running = running, pinned = pinned)
+    val anchor = rememberCollapseAnchor()
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -462,7 +478,10 @@ fun ThinkingCard(thinking: String) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { expanded = !expanded },
+                .clickable {
+                    collapse.toggle()
+                    anchor.beginManualWindow()
+                },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
@@ -478,9 +497,18 @@ fun ThinkingCard(thinking: String) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
-            Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (running) {
+                // 思考在长：给一个进度点，和「已完成」的静默形成区分
+                CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 1.5.dp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(4.dp))
+            }
+            CollapseChevron(collapse.expanded)
         }
-        if (expanded) {
+        CollapseBody(visible = collapse.expanded, anchor = anchor) {
             SelectionContainer {
                 Text(
                     text = thinking,
@@ -493,10 +521,11 @@ fun ThinkingCard(thinking: String) {
     }
 }
 
-/** 工具调用胶囊：默认折叠成一行（图标 + 工具名 + 状态 + 箭头），点击展开参数/结果 */
+/** 工具调用胶囊：默认折叠成一行（图标 + 工具名 + 状态 + 箭头），点击展开参数/结果（展开/收起带动画，§B3） */
 @Composable
 fun ToolCard(tool: ToolCallInfo) {
     var expanded by remember(tool.id) { mutableStateOf(false) }
+    val anchor = rememberCollapseAnchor()
     val extras = LocalThemeExtras.current
     val statusMark = when {
         tool.isError -> "✗"
@@ -521,7 +550,10 @@ fun ToolCard(tool: ToolCallInfo) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { expanded = !expanded },
+                .clickable {
+                    expanded = !expanded
+                    anchor.beginManualWindow()
+                },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
@@ -539,9 +571,9 @@ fun ToolCard(tool: ToolCallInfo) {
             Spacer(Modifier.weight(1f))
             Text(statusMark, color = statusColor, fontWeight = FontWeight.Bold)
             Spacer(Modifier.width(4.dp))
-            Text(if (expanded) "▾" else "▸", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            CollapseChevron(expanded)
         }
-        if (expanded) {
+        CollapseBody(visible = expanded, anchor = anchor) {
             Column(modifier = Modifier.padding(top = 4.dp)) {
                 if (tool.arguments.isNotBlank()) {
                     SelectionContainer {

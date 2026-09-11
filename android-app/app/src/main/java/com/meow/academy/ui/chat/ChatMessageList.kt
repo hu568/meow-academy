@@ -24,6 +24,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -70,6 +71,8 @@ fun ChatMessageList(
     // reverseLayout 下 index 0 = 屏幕底部。贴底时列表天然跟随新内容（流式增长/新消息），
     // 不需要也不应该每 token 调 scrollToItem（否则高频抽搐/文字重叠）；
     // 用户上滑离开底部即脱离跟随，滑回底部即恢复跟随。
+    // 该值同时经 LocalChatAtBottom 下发给卡片：**只有贴底跟随时才做自动收起动画**
+    // （上滑看历史时卡片高度变化会把历史顶走，§B5）。
     val isAtBottom by remember(listState) {
         derivedStateOf {
             listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
@@ -134,37 +137,48 @@ fun ChatMessageList(
                     )
                 }
             } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    reverseLayout = true,
+                // 折叠动效契约：卡片只在贴底时自动收起（§B5）；
+                // LocalChatListState 供 CollapseAnchor 做「原地锚定」滚动补偿（§B7：
+                // reverseLayout 下卡片长高会让头部上滑，补偿滚动才能还原 demo 的向下展开观感）；
+                // 但贴底 + 正在流式时关掉补偿，否则会把正在生成的新内容顶出视口（§B7.2）。
+                // 必须包在 LazyColumn 外层——流式 item 与历史 item 都在这个 provider 里面组合。
+                CompositionLocalProvider(
+                    LocalChatAtBottom provides isAtBottom,
+                    LocalChatListState provides listState,
+                    LocalChatCollapseCompensation provides !(isAtBottom && streaming != null),
                 ) {
-                    // 过滤掉正在流式的 DB 行（节流落库会产生部分内容），避免与实时气泡同屏重复渲染
-                    val visible = messages.filterNot { it.id == streaming?.messageId }
-                    // reverseLayout 下 index 0 在屏幕底部：
-                    // 先放实时流式气泡（新内容），再放历史消息的倒序（越旧越往上）。
-                    streaming?.let { s ->
-                        item(key = "streaming-${s.messageId}") {
-                            AssistantBody(
-                                segments = displayedStreamingSegments ?: s.segments,
-                                status = MessageStatus.STREAMING,
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        reverseLayout = true,
+                    ) {
+                        // 过滤掉正在流式的 DB 行（节流落库会产生部分内容），避免与实时气泡同屏重复渲染
+                        val visible = messages.filterNot { it.id == streaming?.messageId }
+                        // reverseLayout 下 index 0 在屏幕底部：
+                        // 先放实时流式气泡（新内容），再放历史消息的倒序（越旧越往上）。
+                        streaming?.let { s ->
+                            item(key = "streaming-${s.messageId}") {
+                                AssistantBody(
+                                    segments = displayedStreamingSegments ?: s.segments,
+                                    status = MessageStatus.STREAMING,
+                                    pendingQuestion = pendingQuestionForSession,
+                                    interactiveQuestionCallId = latestQuestionCallId,
+                                    onAnswerQuestion = onAnswerQuestion,
+                                    onCancelQuestion = onCancelQuestion,
+                                )
+                            }
+                        }
+                        items(visible.asReversed(), key = { it.id }) { msg ->
+                            MessageRow(
+                                msg = msg,
                                 pendingQuestion = pendingQuestionForSession,
                                 interactiveQuestionCallId = latestQuestionCallId,
                                 onAnswerQuestion = onAnswerQuestion,
                                 onCancelQuestion = onCancelQuestion,
                             )
                         }
-                    }
-                    items(visible.asReversed(), key = { it.id }) { msg ->
-                        MessageRow(
-                            msg = msg,
-                            pendingQuestion = pendingQuestionForSession,
-                            interactiveQuestionCallId = latestQuestionCallId,
-                            onAnswerQuestion = onAnswerQuestion,
-                            onCancelQuestion = onCancelQuestion,
-                        )
                     }
                 }
             }

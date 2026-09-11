@@ -45,12 +45,19 @@ data class StreamingTable(
  * 把当前活动块解析为流式表格；不是表格返回 null。
  *
  * 支持三种流式中间态：
- * - 只有表头行（`| A | B |`）→ 按单行表头表格渲染，避免分隔行到达时从段落跳成表格；
+ * - 只有表头行（`| A | B |`）→ 按单行表头表格渲染；
  * - 表头 + 未写完的分隔行（`| A | B |\n|---`）→ 仍按单行表头渲染，未写完的分隔行不显示；
  * - 表头 + 分隔行 + 若干数据行 → 正常表格。
  *
  * 判定为表格的条件：首行含 `|`，且下一非空行是分隔行 / 正在输入的分隔行 / 不存在。
  * 首行含 `|` 但下一行是普通文本时，按普通段落处理（避免误吞含竖线的段落）。
+ *
+ * ⚠️ 「只有表头行」分支**在 App 渲染路径上不可达**：`parseMarkdownBlocks` 的表格守卫要求
+ * 「下一非空行存在、且像分隔行」，所以表头刚写完那一帧仍按段落渲染，等分隔行第一个字符
+ * 到达才变表格（实测 `| A | B |` → Paragraph，追加 `\n|--` 后才 → Table）。
+ * 该分支只对 `parseStreamingTable` 的直接单测可见（见 StreamingTableTest）。
+ * 2026-09-11 审计结论：**不放宽守卫** —— 放宽会让「末尾一行含竖线的普通段落」先闪成表格
+ * 再退回段落（反向抖动更糟），而现状抖动只有一帧量级（20fps 下 ≤50ms）。
  */
 fun parseStreamingTable(markdown: String): StreamingTable? {
     val lines = markdown.split("\n").map { it.removeSuffix("\r") }
@@ -125,12 +132,21 @@ private fun splitTableRow(line: String): List<String> {
 /**
  * 判断一行是否为 GFM 表格分隔行：`| --- | :---: | ---: |` 等。
  *
+ * **必须含竖线**：GFM 的分隔行按「格」定义，`---`（单格、无竖线）不是分隔行——它是
+ * setext 标题下划线或水平分割线。少了这一条，`a | b\n---\n后文` 会把 `---` 吞进表格
+ * 并丢掉它（2026-09-11 实测的 A2 bug）。
+ *
+ * 刻意**不做格数校验**：模型写畸形表（3 列表头 + 1 格分隔行）时，格数校验会让
+ * [parseStreamingTable] 走「单行表头」分支、`parseMarkdownBlocks` 又把 `i` 推到表尾，
+ * 数据行会被整段吞掉；宽容渲染整表比严格更安全。
+ *
  * 2026-09-09 从已归档的 MarkdownStreaming.kt 迁入（原半增量拆分器退役，
  * 但本函数仍被 [StreamingTable] 解析与 [parseMarkdownBlocks] 复用）。
  */
 fun isTableDelimiter(line: String): Boolean {
     val trimmed = line.removeSuffix("\r").trim()
     if (trimmed.isEmpty()) return false
+    if (!trimmed.contains('|')) return false
     val body = trimmed.removePrefix("|").removeSuffix("|").trim()
     if (body.isEmpty()) return false
     return body.split("|").all { cell ->
@@ -140,12 +156,17 @@ fun isTableDelimiter(line: String): Boolean {
 }
 
 /**
- * 正在输入的分隔行：形如 `|---`、`| ---`、`---`、`|:---:` 等，
- * 全部由 `- : | 空格` 组成（尚未闭合也算）。
+ * 正在输入的分隔行：形如 `|---`、`| ---`、`|:---:` 等，
+ * 全部由 `- : | 空格` 组成（尚未闭合也算，允许空格子）。
+ *
+ * 与 [isTableDelimiter] 同款红线：**必须含竖线**，否则纯 `---` / 单个 `-` 会被当成
+ * 「正在输入的分隔行」，让含竖线的段落闪成表格（A2）。
+ * 含竖线的半截行（如 `|---|`）仍返回 true，保持流式宽容、不抖动。
  */
-private fun isPotentialDelimiterLine(line: String): Boolean {
+internal fun isPotentialDelimiterLine(line: String): Boolean {
     val t = line.trim()
     if (t.isEmpty()) return false
+    if (!t.contains('|')) return false
     val body = t.removePrefix("|").removeSuffix("|")
     if (body.isBlank()) return false
     return body.split("|").all { cell ->

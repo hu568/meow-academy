@@ -9,6 +9,7 @@ import com.meow.academy.data.settings.themeSeedFromHex
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
 import io.noties.markwon.MarkwonPlugin
+import io.noties.markwon.MarkwonVisitor
 import io.noties.markwon.ext.latex.JLatexMathNode
 import io.noties.markwon.ext.latex.JLatexMathPlugin
 import io.noties.markwon.ext.latex.JLatexMathTheme
@@ -25,6 +26,7 @@ import io.noties.markwon.syntax.SyntaxHighlightPlugin
 import io.noties.prism4j.Prism4j
 import io.noties.prism4j.annotations.PrismBundle
 import org.commonmark.node.Node
+import org.commonmark.node.SoftLineBreak
 
 /**
  * Markwon 实例构建（流式与最终渲染共用同一套全插件配置）。
@@ -35,6 +37,7 @@ import org.commonmark.node.Node
  * - SyntaxHighlightPlugin + Prism4j：代码围栏语法着色；
  * - MarkwonInlineParserPlugin：行内解析（行内 LaTeX 必需）；
  * - JLatexMathPlugin：`$$…$$` 块公式 + `$$…$$` 行内公式（jlatexmath-android 渲染成图）；
+ * - SoftBreakNewLinePlugin：段落内软换行（单换行）按「真换行」渲染（见该类注释）；
  * - DollarMathInlinePlugin：额外支持 LLM 常见输出 `$…$` 单美元行内公式。
  */
 
@@ -91,6 +94,9 @@ fun buildMarkwon(
         // 这里补一个行内处理器，复用 JLatexMathNode（渲染侧已注册 visitor）。
         // 必须注册在 JLatexMathPlugin 之后：内建 $$ 处理器优先匹配，避免误拆 $$…$$。
         .usePlugin(DollarMathInlinePlugin())
+        // 软换行渲染成换行：必须最后注册（MarkwonVisitor.Builder 内部是 HashMap.put，
+        // 后注册的 visitor 覆盖先注册的 CorePlugin 默认「软换行 → 空格」）。
+        .usePlugin(SoftBreakNewLinePlugin())
         .build()
 }
 
@@ -176,5 +182,28 @@ private class DollarMathInlinePlugin : AbstractMarkwonPlugin() {
         registry.require(MarkwonInlineParserPlugin::class.java)
             .factoryBuilder()
             .addInlineProcessor(DollarMathInlineProcessor())
+    }
+}
+
+/**
+ * 软换行（段落内单换行）渲染成真正换行。
+ *
+ * CommonMark 语义里 SoftLineBreak 是「可折叠空白」，Markwon 的 CorePlugin 默认渲染成
+ * 一个空格（字节码确认 `SpannableBuilder.append(' ')`）；但 LLM 输出（尤其中文）大量
+ * 靠单换行分行，按空格渲染会把「要点 / 说明」两行挤成一行，中间还多一个空格。
+ * 这里覆盖成与 [org.commonmark.node.HardLineBreak] 同款的 `ensureNewLine()`，
+ * 与主流聊天 UI / 参考 demo 的观感一致。
+ *
+ * ⚠️ 这是**全局**渲染变化：用户消息、文件预览、问答卡里所有 [MarkdownText] 一起生效。
+ * 若要恢复 CommonMark 严格语义，摘掉 [buildMarkwon] 里的 `usePlugin(SoftBreakNewLinePlugin())`
+ * 即可（本插件无其他依赖）。
+ */
+private class SoftBreakNewLinePlugin : AbstractMarkwonPlugin() {
+
+    override fun configureVisitor(builder: MarkwonVisitor.Builder) {
+        builder.on(
+            SoftLineBreak::class.java,
+            MarkwonVisitor.NodeVisitor<SoftLineBreak> { visitor, _ -> visitor.ensureNewLine() },
+        )
     }
 }

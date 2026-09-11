@@ -12,6 +12,9 @@ package com.meow.academy.ui.chat
  *
  * [closed] 语义：false 表示流式中该块尚未闭合（围栏没有收尾、正在增长），
  * 用于流式 UI 差异（如未闭合 mermaid 显示代码块样式而不是 WebView）。
+ *
+ * ⚠️ [Table] / [Image] 的 `closed` **恒为 true**（解析器只在收齐后成块）：保留该字段
+ * 只为与围栏块结构一致，不要用它做流式分支。
  */
 sealed interface MdBlock {
     data class Paragraph(val text: String) : MdBlock
@@ -26,6 +29,7 @@ sealed interface MdBlock {
         val header: List<String>,
         val aligns: List<StreamingCellAlign>,
         val rows: List<List<String>>,
+        /** 恒 true（见接口注释） */
         val closed: Boolean,
     ) : MdBlock
 
@@ -39,7 +43,7 @@ sealed interface MdBlock {
         val closed: Boolean,
     ) : MdBlock
 
-    /** 独立成段的图片：`![alt](src)`，由 [parseStandaloneImage] 识别 */
+    /** 独立成段的图片：`![alt](src)`，由 [parseStandaloneImage] 识别（closed 恒 true） */
     data class Image(
         val alt: String,
         val src: String,
@@ -54,7 +58,8 @@ sealed interface MdBlock {
  * - 空行跳过；
  * - ``` / ~~~（含 info 串）与 `$$`（整行纯 $）按围栏块处理，未闭合标记 closed=false；
  * - mermaid 围栏（语言 == "mermaid"，忽略大小写）拆成 [MdBlock.Mermaid]；
- * - 首行含 `|` 且下一非空行是（或正在输入）分隔行 → 表格块，收集到空行/非 `|` 行结束；
+ * - 首行含 `|` 且下一非空行是（或正在输入）**含竖线的**分隔行 → 表格块，收集到空行/非 `|` 行结束
+ *   （分隔行判定见 [isTableDelimiter]：`---` 这类无竖线的行不是分隔行，免得被表格吞掉）；
  * - 其余连续非空行合并为一个段落块。
  *
  * 行内 `$$x$$`、`$x$` 不会被误判为块围栏（开栏行必须整行只有 $）。
@@ -99,6 +104,8 @@ fun parseMarkdownBlocks(markdown: String): List<MdBlock> {
         }
 
         // ② 表格检测：本行含 |，且下一非空行是分隔行 / 正在输入的分隔行
+        //    守卫要求「下一非空行存在且像分隔行」，所以只有表头的那一帧不成表格、继续按段落渲染；
+        //    这是刻意保留的（A3：放宽守卫会让末尾含竖线的普通段落先闪表格再退回段落，反向抖动更糟）
         if (line.contains("|")) {
             var j = i + 1
             while (j < lines.size && lines[j].trim().isEmpty()) j++
@@ -184,17 +191,8 @@ private fun isBlockFenceClose(trimmed: String, fenceChar: Char, fenceLen: Int): 
     return if (fenceChar == '$') run == fenceLen else run >= fenceLen
 }
 
-/** 正在输入的分隔行：形如 `|---`、`| ---`、`---`、`|:---:` 等，全部由 `- : | 空格` 组成 */
-private fun isPotentialDelimiterLine(line: String): Boolean {
-    val t = line.trim()
-    if (t.isEmpty()) return false
-    val body = t.removePrefix("|").removeSuffix("|")
-    if (body.isBlank()) return false
-    return body.split("|").all { cell ->
-        val c = cell.trim()
-        c.isEmpty() || c.all { it == '-' || it == ':' || it == ' ' }
-    }
-}
+// 「正在输入的分隔行」判定统一在 StreamingTable.kt 的 isPotentialDelimiterLine（与 isTableDelimiter 同源），
+// 这里不再另存私有副本——两份逻辑曾同时存在，收紧判定时必须一起改，容易漏。
 
 /**
  * 判断一行是否为独立的 Markdown 水平分割线（thematic break）。

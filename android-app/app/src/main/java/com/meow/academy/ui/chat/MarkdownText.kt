@@ -8,7 +8,8 @@ package com.meow.academy.ui.chat
  * - [parseMarkdownBlocks] 把整篇文本拆成 [MdBlock]（段落 / 围栏代码 / 表格 / 数学块 / mermaid）；
  * - 普通段落由 [ParagraphBlock] 走 Markwon → TextView（保留 Spanned 缓存）；
  * - 表格 / 代码块 / 数学块 / mermaid 分别走 Compose 组件（圆角、复制按钮、横向滚动、WebView 渲染）；
- * - 流式时每个块用 `key(block)` 缓存，稳定块不重建，只有活动块随 token 刷新。
+ * - 流式时块列表每 tick 全量重解析（成本 ~0.7ms/2 万字，见 plan-chat-streaming-render §〇），
+ *   渲染侧靠「未变块不重组」+ LazyColumn 位置复用避免重排；
  *
  * 公式与代码着色由 [buildMarkwon] 统一提供（LaTeX `$$…$$` 块、`$…$`/`$$…$$` 行内 + Prism4j 语法高亮），
  * TODO 列表（- [ ]）与删除线（~~text~~）由 Markwon 插件渲染。
@@ -108,7 +109,12 @@ fun MarkdownText(
 
     Column(modifier = modifier) {
         blocks.forEach { block ->
-            // data class equals：内容不变则 key 不变，稳定块不重组、不重建
+            // key(block)：只是「声明式地说明这个块的身份」，别指望它在中途插块/过滤时保住身份——
+            // Compose 的位置匹配才是身份来源（位置变了状态就重建）。而且 Compose 1.7 的
+            // `key(vararg keys)` 实现就是 `block()`（keys 参数 UNUSED_PARAMETER，反编译
+            // runtime-release.aar 确认调用点被内联成纯 block()）。
+            // 稳定块能跳过重组，真正靠的是编译器为 lambda 捕获值生成的 changedInstance 守卫：
+            // 内容不变的 data class MdBlock 传参不变 → 跳过该块的重组。
             key(block) {
                 when (block) {
                     is MdBlock.Paragraph -> ParagraphBlock(
