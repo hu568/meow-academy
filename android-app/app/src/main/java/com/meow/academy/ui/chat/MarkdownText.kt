@@ -218,9 +218,11 @@ private fun ParagraphBlock(
         factory = { ctx ->
             MarkdownTextView(ctx).apply {
                 textSize = 15f
-                movementMethod = BrowserLinkMovementMethod(ctx)
-                // 长按可选择/复制文本（先设 movementMethod 再设 isTextSelectable，链接仍可点击）
+                // ⚠️ 顺序不可颠倒：setTextIsSelectable(true) 内部会
+                // setMovementMethod(ArrowKeyMovementMethod.getInstance())，先装链接点击会被覆盖
+                // → 链接显示成可点但实际点不动（M5 起的回归 bug）。
                 setTextIsSelectable(true)
+                movementMethod = BrowserLinkMovementMethod()
             }
         },
         update = { view ->
