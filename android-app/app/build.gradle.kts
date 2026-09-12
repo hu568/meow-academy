@@ -37,7 +37,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 13
-        versionName = "0.4.0"
+        versionName = "0.3.1"
 
         // Room 导出 schema 到本地（用于后续迁移）
         ksp {

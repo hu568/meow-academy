@@ -1,4 +1,4 @@
-# 喵仓 0.4.0（versionCode 13）发行说明
+# 喵仓 0.3.1（versionCode 13）发行说明
 
 > 主题：**DSH 基线升级到 0.1.5-rc.2**（`dsh-v0.1.1-rc.2` → `dsh-v0.1.5-rc.2`，3225 commits / 20 天）
 > 这是自 0.2.x 以来最大的一次底层换代：**会话存储从 SQLite 换成 JSONL（V3）+ zstd**，
@@ -49,6 +49,29 @@
   `spill-local` 的 `mkdtemp`、subprocess runner 临时目录会 EACCES）；
 - `build-dsh-closure.sh` 路径归一化（相对路径调用时 yaml 自愈步骤会静默失配）。
 
+### 五、聊天页两处致命回归修复（0.1.5 事件配方适配）
+
+基线换代后聊天页连续暴露两个问题，均在 0.3.1 内修复并真机验收：
+
+1. **助手气泡全是「（空回复）」**（`plan/plan-dsh-upgrade-0.1.5.md` §11）：0.1.5 的 agent loop
+   **不再逐 delta 发 `assistant/chunk` 通知**（真机实测每回合 chunk 计数 = 0），只在该 step 结束时发一条
+   带完整 `message.content` 的 `assistant/message`；App 侧 `ChatStreamingController` 只认 chunk → 正文永不入 `segments`。
+   修复：`DshEvent.assistantMessageBlocks` 访问器 + `ChatSegmentJson.assistantMessageSegments()/mergeAssistantMessage()`
+   （幂等 upsert：文本以前缀原地补全、工具段按 id 对齐并保留已回填的 `result`/`isError`）+ 控制器
+   `ASSISTANT_MESSAGE` 分支与每回合事件配方诊断日志。chunk 分支保留（上游若恢复 delta，流式观感自动回来）。
+2. **工具卡错位 + 调用数翻倍**（§12）：0.1.5 的事件是**逐 step 分组**下发的
+   （`assistant/message(stepN) → tool/call×N → tool/result×N → 下一步…`），而 §11 的实现把每个事件平铺进同一条
+   `segments` → 后一 step 的块无前缀可对齐就被插到最前，`tool/call` 又与权威 message 里已登记的 tool-call 块重复
+   （真机实测 2 次调用渲染成「工具调用 x4」）。修复：新增 `ui/chat/TurnSegmentBuilder.kt` **按 (turn, step) 分桶**累积
+   （展开 = 真实键升序 + 缺号桶按到达顺序追加末尾）、`tool/call` 按 callId 幂等 upsert、`tool/result` 按 callId 回填
+   （结果先到先记账 `pendingResults`）。
+
+验证：新增 `AssistantMessageSegmentsTest` 9 例 + `TurnSegmentBuilderTest` 8 例，全套 **107 tests PASS**；
+真机落库核对 `segmentsJson`：纯文本回合 `segments=1`、工具回合 `[tool, reasoning, text]`、
+双工具跨 step 回合 `[tool(bash), tool(read), text]`（工具卡在正文上方、不翻倍）。
+
+⚠️ **修复前落库的历史助手消息不自动重排**（step 维度信息不可恢复）；§11 修复前产生的空气泡正文无法回填。
+
 ## 真机验收（RPC 探针）
 
 核心链路 **10/11 ✅**：启动/initialize、四预设挂载、持久 PTY（跨回合 `export` → 读回）、
@@ -60,7 +83,8 @@ PTC `run_code`、杀进程 resume（`session.v3.jsonl.zstd` 落盘 + 新实例�
   需要专门方案（见计划 §10.5）。
 - ⚠️ **旧会话上下文断代**：旧 `chat.db`（SCHEMA_VERSION 17）新版不读。App 里历史气泡照常显示（Room 是另一套存储），
   但旧会话在 DSH 侧 resume 会从空上下文开始；§6 的导出器未落地。
-- UI 层（聊天渲染/抽屉/看板）未在本次自动化里验收（真机处于密码锁屏），建议解锁后自查一轮。
+- UI 层：**已解锁补做**——聊天页文本 / 工具回合 / 流式渲染真机验收通过（并因此抓出上面 §五 的两个回归）；
+  会话抽屉 / 右侧看板未逐项回归。
 
 ## 体积
 
