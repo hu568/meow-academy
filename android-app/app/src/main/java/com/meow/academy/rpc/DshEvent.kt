@@ -45,6 +45,16 @@ class DshEvent private constructor(
     val chunk: JsonObject? get() = data?.get("chunk") as? JsonObject
 
     /**
+     * event.data.turn：回合号（0.1.5 的 assistant/message、assistant/chunk、tool/call、
+     * tool/result 都带）。App 侧分段归位（`ui/chat/TurnSegmentBuilder`）靠它 + [step]
+     * 把「逐 step 到达」的事件还原成有序 segments。
+     */
+    val turn: Int? get() = data?.int("turn")
+
+    /** event.data.step：同一回合内的 step 号（从 1 递增；一个 step = 一次 LLM 调用 + 它的工具执行） */
+    val step: Int? get() = data?.int("step")
+
+    /**
      * assistant/message 的 message.content 块数组（回合**权威**内容）。
      *
      * 0.1.5-rc.2 起上游 agent loop 不再逐 delta 发 `assistant/chunk` 通知，只在该 step

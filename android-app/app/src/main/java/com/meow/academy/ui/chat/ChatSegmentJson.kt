@@ -114,6 +114,10 @@ fun assistantMessageSegments(blocks: JsonArray?): List<Segment> {
  *    与上游 surface 层「已落地的替换不该抹掉人类已读内容」同款立场。
  *
  * 顺序不变式：插入只发生在游标处（前缀对齐点），故不会打乱已有工具段的相对次序。
+ *
+ * ⚠️ **调用纪律（2026-09-12 真机回归的根因）**：游标每次调用都从 0 开始，所以本函数只对
+ * **同一个 step** 的段列表成立——跨 step 复用会把后一步的正文插到最前面（表现为「工具调用卡
+ * 被挤到当前轮最下面」）。回合级累积必须走 [TurnSegmentBuilder]（按 (turn, step) 分桶后再展开）。
  */
 fun mergeAssistantMessage(existing: List<Segment>, incoming: List<Segment>): List<Segment> {
     if (incoming.isEmpty()) return existing

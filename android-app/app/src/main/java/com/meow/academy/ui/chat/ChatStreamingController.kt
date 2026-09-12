@@ -5,7 +5,6 @@ import com.meow.academy.data.chat.ChatDao
 import com.meow.academy.data.chat.MessageEntity
 import com.meow.academy.data.chat.MessageRole
 import com.meow.academy.data.chat.MessageStatus
-import com.meow.academy.rpc.DshChunkTypes
 import com.meow.academy.rpc.DshConnectionState
 import com.meow.academy.rpc.DshEventTypes
 import com.meow.academy.rpc.DshNotifMethods
@@ -34,7 +33,8 @@ import kotlinx.serialization.json.JsonArray
  * 状态所有权：streaming / isGenerating / pendingCount / pendingQueue / streamingDshSessionId。
  *
  * 回合边界在本控制器：runStream 内部 per-session 收集器（filter sessionId + takeWhile turn/end）
- * **保留**，但 when(ev.type) 只留流式三分支（ASSISTANT_CHUNK/TOOL_CALL/TOOL_RESULT）——
+ * **保留**，但 when(ev.type) 只留内容事件四分支（ASSISTANT_CHUNK / TOOL_CALL / TOOL_RESULT /
+ * ASSISTANT_MESSAGE，全部经 [TurnSegmentBuilder] 按 (turn, step) 归位）——
  * TODO/PLAN/GOAL 已移 ChatEventRouter → CapabilityController 全局单点，这里不再重复处理。
  */
 class ChatStreamingController(
@@ -188,6 +188,11 @@ class ChatStreamingController(
         var state = StreamingState(messageId = assistantId)
         _streaming.value = state
         streamingDshSessionId = dshSessionId
+        // 分段累积器：0.1.5 的事件是**逐 step 分组**到达的（message(step N) → tool/call×N → tool/result×N
+        // → message(step N+1)…），必须按 (turn, step) 归位后再展开成有序 segments，否则后一步的正文会
+        // 被插到最前面、工具卡被挤到当前轮最下面，且 tool/call 会与权威 message 已登记的 tool-call 块
+        // 重复（真机回归 + PC 冒烟实测，见 TurnSegmentBuilder 文件头与 plan-dsh-upgrade §12）。
+        val builder = TurnSegmentBuilder()
         var lastPersist = 0L
         // 每回合事件类型计数：诊断用（0.1.5 上游只发 assistant/message 不发 chunk，
         // 这条日志能一眼看出事件配方是否又变了；logcat tag = ChatStreamingController）
@@ -221,53 +226,47 @@ class ChatStreamingController(
                                 when (ev.type) {
                                     DshEventTypes.ASSISTANT_CHUNK -> {
                                         val chunk = ev.chunk ?: return@runCatching
-                                        when (chunk.str("type")) {
-                                            DshChunkTypes.REASONING_DELTA ->
-                                                state = state.copy(segments = appendReasoning(state.segments, chunk.str("text") ?: ""))
-                                            DshChunkTypes.TEXT_DELTA ->
-                                                state = state.copy(segments = appendText(state.segments, chunk.str("text") ?: ""))
-                                        }
-                                        _streaming.value = state
-                                        val now = System.currentTimeMillis()
-                                        if (now - lastPersist > 250) {
-                                            persist(state, MessageStatus.STREAMING)
-                                            lastPersist = now
+                                        val next = builder.onChunkDelta(
+                                            ev.turn, ev.step,
+                                            chunk.str("type"), chunk.str("text"),
+                                        )
+                                        if (next != state.segments) {
+                                            state = state.copy(segments = next)
+                                            _streaming.value = state
+                                            val now = System.currentTimeMillis()
+                                            if (now - lastPersist > 250) {
+                                                persist(state, MessageStatus.STREAMING)
+                                                lastPersist = now
+                                            }
                                         }
                                     }
                                     DshEventTypes.TOOL_CALL -> {
-                                        val id = ev.toolCallId ?: "tool-" + System.currentTimeMillis()
-                                        val name = ev.toolName ?: "unknown"
-                                        val args = ev.toolArguments ?: ""
-                                        val call = ToolCallInfo(id = id, name = name, arguments = args)
-                                        state = state.copy(segments = state.segments + Segment.Tool(call))
+                                        val call = ToolCallInfo(
+                                            id = ev.toolCallId ?: "tool-" + System.currentTimeMillis(),
+                                            name = ev.toolName ?: "unknown",
+                                            arguments = ev.toolArguments ?: "",
+                                        )
+                                        // 幂等：权威 assistant/message 通常已经登记过这次调用（真机顺序
+                                        // message 在前、tool/call 在后），按 callId 归位而非盲目追加。
+                                        state = state.copy(segments = builder.onToolCall(ev.turn, ev.step, call))
                                         _streaming.value = state
                                     }
                                     DshEventTypes.TOOL_RESULT -> {
-                                        val id = ev.toolResultCallId
-                                        if (id == null) return@runCatching
-                                        state = state.copy(segments = state.segments.map { seg ->
-                                            if (seg is Segment.Tool && seg.call.id == id) {
-                                                seg.copy(call = seg.call.copy(
-                                                    result = ev.toolResultText ?: seg.call.result,
-                                                    isError = ev.toolResultIsError,
-                                                ))
-                                            } else {
-                                                seg
-                                            }
-                                        })
-                                        _streaming.value = state
+                                        val id = ev.toolResultCallId ?: return@runCatching
+                                        val next = builder.onToolResult(id, ev.toolResultText, ev.toolResultIsError)
+                                        if (next != state.segments) {
+                                            state = state.copy(segments = next)
+                                            _streaming.value = state
+                                        }
                                     }
                                     DshEventTypes.ASSISTANT_MESSAGE -> {
                                         // 0.1.5 起正文的**权威**来源：上游 agent loop 自驱动流，
                                         // 不再逐 delta 发 assistant/chunk 通知，只在 step 结束时发这条
                                         // 带完整 content 的 message（真机实测 chunk=0 → 此前每条回复都
                                         // 渲染成「（空回复）」，聊天页无法对话，见 plan §11）。
-                                        // 流式段（若上游某天又发 delta）作底，这里幂等补齐/纠正。
+                                        // 流式段（若上游某天又发 delta）作底，这里按 (turn, step) 幂等补齐/纠正。
                                         val blocks = ev.assistantMessageBlocks ?: return@runCatching
-                                        val merged = mergeAssistantMessage(
-                                            state.segments,
-                                            assistantMessageSegments(blocks),
-                                        )
+                                        val merged = builder.onAssistantMessage(ev.turn, ev.step, blocks)
                                         if (merged != state.segments) {
                                             state = state.copy(segments = merged)
                                             _streaming.value = state
