@@ -44,6 +44,16 @@ class DshEvent private constructor(
     /** assistant/chunk 的 chunk 对象 */
     val chunk: JsonObject? get() = data?.get("chunk") as? JsonObject
 
+    /**
+     * assistant/message 的 message.content 块数组（回合**权威**内容）。
+     *
+     * 0.1.5-rc.2 起上游 agent loop 不再逐 delta 发 `assistant/chunk` 通知，只在该 step
+     * 结束时发一条带完整 content 的 `assistant/message`（真机实测 chunk 事件数为 0，
+     * 见 plan-dsh-upgrade-0.1.5 §11）——正文渲染必须走这里。
+     */
+    val assistantMessageBlocks: JsonArray?
+        get() = (data?.get("message") as? JsonObject)?.get("content") as? JsonArray
+
     /** tool/call 的 callId */
     val toolCallId: String? get() = data?.str("callId")
 

@@ -189,6 +189,9 @@ class ChatStreamingController(
         _streaming.value = state
         streamingDshSessionId = dshSessionId
         var lastPersist = 0L
+        // 每回合事件类型计数：诊断用（0.1.5 上游只发 assistant/message 不发 chunk，
+        // 这条日志能一眼看出事件配方是否又变了；logcat tag = ChatStreamingController）
+        val evTypes = LinkedHashSet<String>()
 
         val persist: suspend (StreamingState, MessageStatus) -> Unit = { s, status ->
             dao.updateMessageContent(assistantId, "", status)
@@ -212,6 +215,7 @@ class ChatStreamingController(
                             !isTurnEnd && !isIdle
                         }
                         .collect { ev ->
+                            evTypes.add(ev.type)
                             // 单事件处理异常不中断整个收集（解析失败只丢该事件）
                             runCatching {
                                 when (ev.type) {
@@ -252,6 +256,24 @@ class ChatStreamingController(
                                             }
                                         })
                                         _streaming.value = state
+                                    }
+                                    DshEventTypes.ASSISTANT_MESSAGE -> {
+                                        // 0.1.5 起正文的**权威**来源：上游 agent loop 自驱动流，
+                                        // 不再逐 delta 发 assistant/chunk 通知，只在 step 结束时发这条
+                                        // 带完整 content 的 message（真机实测 chunk=0 → 此前每条回复都
+                                        // 渲染成「（空回复）」，聊天页无法对话，见 plan §11）。
+                                        // 流式段（若上游某天又发 delta）作底，这里幂等补齐/纠正。
+                                        val blocks = ev.assistantMessageBlocks ?: return@runCatching
+                                        val merged = mergeAssistantMessage(
+                                            state.segments,
+                                            assistantMessageSegments(blocks),
+                                        )
+                                        if (merged != state.segments) {
+                                            state = state.copy(segments = merged)
+                                            _streaming.value = state
+                                            persist(state, MessageStatus.STREAMING)
+                                            lastPersist = System.currentTimeMillis()
+                                        }
                                     }
                                     // TODO_WRITE/PLAN_MODE/GOAL_CHANGE 已移到 ChatEventRouter 全局单点
                                 }
@@ -323,6 +345,11 @@ class ChatStreamingController(
             errorMsg = errorMsg ?: e.message
         }
         streamingDshSessionId = null
+        Log.i(
+            "ChatStreamingController",
+            "turn events: " + evTypes.joinToString(",") + " | segments=" + state.segments.size +
+                " | end=" + (endKind ?: if (errorMsg != null) "error" else "completed"),
+        )
 
         // turn/end 的结束原因 → 最终状态
         when {
